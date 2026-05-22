@@ -182,6 +182,13 @@ struct CanvasView: View {
                         renderElement(element)
                     }
                 }
+                // When the draw overlay is open, subtly dim the canvas elements
+                // and block all element-level interactions. Pan/zoom still works
+                // because those gestures live on CanvasGridView (behind this ZStack)
+                // and on the .simultaneousGesture below — neither is affected by
+                // the .allowsHitTesting on the element children.
+                .opacity(vm.showCanvasDrawingOverlay ? 0.82 : 1.0)
+                .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
                 .offset(vm.offset)
                 .simultaneousGesture(
@@ -269,22 +276,42 @@ struct CanvasView: View {
                 if vm.showCanvasDrawingOverlay {
                     CanvasDrawingOverlay(
                         isActive:     $vm.showCanvasDrawingOverlay,
-                        canvasScale:  drawingStartScale,
-                        canvasOffset: drawingStartOffset
-                    ) { pkDrawing in
+                        startScale:   drawingStartScale,
+                        startOffset:  drawingStartOffset,
+                        liveScale:    $vm.scale,
+                        liveOffset:   $vm.offset
+                    ) { pkDrawing, effectiveScale, effectiveOffset in
                         let strokeBounds = pkDrawing.bounds
                         guard !pkDrawing.strokes.isEmpty,
                               strokeBounds.width > 0, strokeBounds.height > 0 else { return }
                         let padding: CGFloat = 20
                         let paddedBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
-                        let canvasX = (paddedBounds.midX - drawingStartOffset.width) / drawingStartScale
-                        let canvasY = (paddedBounds.midY - drawingStartOffset.height) / drawingStartScale
-                        let transform = CGAffineTransform(translationX: -paddedBounds.minX + padding,
-                                                         y: -paddedBounds.minY + padding)
+
+                        // Convert the drawing's centre from screen-space to canvas-space.
+                        let canvasX = (paddedBounds.midX - effectiveOffset.width) / effectiveScale
+                        let canvasY = (paddedBounds.midY - effectiveOffset.height) / effectiveScale
+
+                        // Element dimensions in canvas units.
+                        let elemW = paddedBounds.width  / effectiveScale
+                        let elemH = paddedBounds.height / effectiveScale
+
+                        // The strokes are currently at screen-pixel scale.
+                        // We need to:
+                        //   1. Shift strokes so paddedBounds.origin → (0, 0)
+                        //   2. Scale them down by 1/effectiveScale so they fit
+                        //      inside the canvas-unit frame (elemW × elemH).
+                        // Combined affine: translate first, then scale around origin.
+                        //   x' = (x - paddedBounds.minX + padding) / effectiveScale
+                        //   y' = (y - paddedBounds.minY + padding) / effectiveScale
+                        let s = 1.0 / effectiveScale
+                        let tx = (-paddedBounds.minX + padding) * s
+                        let ty = (-paddedBounds.minY + padding) * s
+                        let transform = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tx, ty: ty)
+
                         let element = DrawingElementModel(
                             canvasID: canvas.id, x: canvasX, y: canvasY,
-                            width: Double(paddedBounds.width / drawingStartScale),
-                            height: Double(paddedBounds.height / drawingStartScale),
+                            width: Double(elemW),
+                            height: Double(elemH),
                             isCanvasDrawing: true
                         )
                         element.pkDrawing = pkDrawing.transformed(using: transform)
@@ -705,11 +732,18 @@ struct CanvasView: View {
                 DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
-                                   onExternalTap: { dismissEverything() })
+                                   onExternalTap: { dismissEverything() },
+                                   // Forward drag on an unselected canvas drawing to the
+                                   // canvas pan handler — identical to dragging empty space.
+                                   onPanChanged: { vm.handleDragChange($0) },
+                                   onPanEnded:   { vm.handleDragEnd() })
             }
         }
         .opacity(layersVM.highlightedID == element.id ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
+        // Lock all element interactions while the full-canvas draw overlay is
+        // active. Touches fall through to CanvasGridView so pan/zoom still works.
+        .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
             multiSelect ? TapGesture().onEnded { selection.toggle(element.id) } : nil
         )

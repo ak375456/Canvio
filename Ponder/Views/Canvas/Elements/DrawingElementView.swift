@@ -17,6 +17,10 @@ struct DrawingElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    /// Called during a drag on an unselected canvas drawing so the parent
+    /// can pan the canvas instead of swallowing the gesture silently.
+    var onPanChanged: ((DragGesture.Value) -> Void)? = nil
+    var onPanEnded:   (() -> Void)?                  = nil
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeStartWidth: Double = 0
@@ -28,6 +32,7 @@ struct DrawingElementView: View {
     private var isEditing: Bool { isSelected && vm.isDrawingModeActive }
     private let handleVisualSize: CGFloat = 28
     private let handleHitSize: CGFloat = 54
+
 
     private var cardBackground: Color {
         if element.isCanvasDrawing { return .clear }
@@ -67,7 +72,11 @@ struct DrawingElementView: View {
         .frame(width: CGFloat(element.width), height: CGFloat(element.height))
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
-        .gesture(isEditing || isMultiSelectMode ? nil : moveDragGesture)
+        // For unselected canvas drawings the drag is forwarded to the canvas
+        // pan handler so the user can roam freely. For all other states the
+        // element-move gesture runs as normal. Passing nil when in editing or
+        // multi-select mode disables movement entirely.
+        .gesture(isEditing || isMultiSelectMode ? nil : unifiedDragGesture)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
         }
@@ -244,13 +253,27 @@ struct DrawingElementView: View {
     }
     #endif
 
-    private var moveDragGesture: some Gesture {
-        DragGesture()
-            .onChanged { dragOffset = $0.translation }
+    /// Single drag gesture that covers all three cases:
+    ///  - Editing / multi-select   → gesture is suppressed at call site (nil)
+    ///  - Unselected canvas drawing → pans the canvas via callbacks
+    ///  - Everything else           → moves the element
+    private var unifiedDragGesture: some Gesture {
+        DragGesture(minimumDistance: element.isCanvasDrawing && !isSelected ? 5 : 0)
+            .onChanged { value in
+                if element.isCanvasDrawing && !isSelected {
+                    onPanChanged?(value)
+                } else {
+                    dragOffset = value.translation
+                }
+            }
             .onEnded { value in
-                let t = value.translation; dragOffset = .zero
-                vm.updatePosition(element: element, translation: t,
-                                  scale: canvasScale, boundary: canvasBoundary, context: context)
+                if element.isCanvasDrawing && !isSelected {
+                    onPanEnded?()
+                } else {
+                    let t = value.translation; dragOffset = .zero
+                    vm.updatePosition(element: element, translation: t,
+                                      scale: canvasScale, boundary: canvasBoundary, context: context)
+                }
             }
     }
 
