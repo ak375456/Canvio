@@ -115,7 +115,9 @@ final class MediaSyncService {
 
     func uploadImage(fileName: String) async {
         let localURL = ImageStorageService.url(for: fileName)
-        await uploadFile(localURL: localURL, storagePath: imagePath(for: fileName), contentType: "image/jpeg")
+        await uploadFile(localURL: localURL,
+                         storagePath: imagePath(for: fileName),
+                         contentType: ImageStorageService.contentType(for: fileName))
     }
 
     func downloadImageIfNeeded(fileName: String) async {

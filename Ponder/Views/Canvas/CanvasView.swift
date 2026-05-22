@@ -137,31 +137,8 @@ struct CanvasView: View {
                     }
                     .gesture(
                         SimultaneousGesture(
-                            DragGesture(minimumDistance: 5)
-                                .onChanged { value in
-                                    vm.lastDoubleTapLocation = value.startLocation
-                                    vm.handleDragChange(value)
-                                }
-                                .onEnded { _ in
-                                    vm.handleDragEnd()
-                                    if !canvas.isInfinite {
-                                        vm.clampOffset(to: canvas.boundarySize,
-                                                       viewportSize: geo.size, scale: vm.scale)
-                                    }
-                                },
-                            MagnifyGesture()
-                                .onChanged { value in
-                                    let focal = CGPoint(x: value.startAnchor.x * geo.size.width,
-                                                       y: value.startAnchor.y * geo.size.height)
-                                    vm.handleMagnification(value.magnification, focalPoint: focal)
-                                }
-                                .onEnded { _ in
-                                    vm.handleMagnificationEnd()
-                                    if !canvas.isInfinite {
-                                        vm.clampOffset(to: canvas.boundarySize,
-                                                       viewportSize: geo.size, scale: vm.scale)
-                                    }
-                                }
+                            canvasPanGesture(geo: geo),
+                            canvasMagnifyGesture(geo: geo)
                         )
                     )
 
@@ -191,21 +168,8 @@ struct CanvasView: View {
                 .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
                 .offset(vm.offset)
-                .simultaneousGesture(
-                    MagnifyGesture()
-                        .onChanged { value in
-                            let focal = CGPoint(x: value.startAnchor.x * geo.size.width,
-                                               y: value.startAnchor.y * geo.size.height)
-                            vm.handleMagnification(value.magnification, focalPoint: focal)
-                        }
-                        .onEnded { _ in
-                            vm.handleMagnificationEnd()
-                            if !canvas.isInfinite {
-                                vm.clampOffset(to: canvas.boundarySize,
-                                               viewportSize: geo.size, scale: vm.scale)
-                            }
-                        }
-                )
+                .gesture(canvasPanGesture(geo: geo))
+                .simultaneousGesture(canvasMagnifyGesture(geo: geo))
 
                 if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive {
                     toolbarLayer(geo: geo)
@@ -297,15 +261,15 @@ struct CanvasView: View {
 
                         // The strokes are currently at screen-pixel scale.
                         // We need to:
-                        //   1. Shift strokes so paddedBounds.origin → (0, 0)
+                        //   1. Shift strokes so paddedBounds.origin -> (0, 0)
                         //   2. Scale them down by 1/effectiveScale so they fit
-                        //      inside the canvas-unit frame (elemW × elemH).
+                        //      inside the canvas-unit frame (elemW x elemH).
                         // Combined affine: translate first, then scale around origin.
-                        //   x' = (x - paddedBounds.minX + padding) / effectiveScale
-                        //   y' = (y - paddedBounds.minY + padding) / effectiveScale
+                        //   x' = (x - paddedBounds.minX) / effectiveScale
+                        //   y' = (y - paddedBounds.minY) / effectiveScale
                         let s = 1.0 / effectiveScale
-                        let tx = (-paddedBounds.minX + padding) * s
-                        let ty = (-paddedBounds.minY + padding) * s
+                        let tx = -paddedBounds.minX * s
+                        let ty = -paddedBounds.minY * s
                         let transform = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tx, ty: ty)
 
                         let element = DrawingElementModel(
@@ -580,6 +544,37 @@ struct CanvasView: View {
 
     // MARK: - Start canvas drawing
 
+    private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 5)
+            .onChanged { value in
+                vm.lastDoubleTapLocation = value.startLocation
+                vm.handleDragChange(value)
+            }
+            .onEnded { _ in
+                vm.handleDragEnd()
+                if !canvas.isInfinite {
+                    vm.clampOffset(to: canvas.boundarySize,
+                                   viewportSize: geo.size, scale: vm.scale)
+                }
+            }
+    }
+
+    private func canvasMagnifyGesture(geo: GeometryProxy) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                let focal = CGPoint(x: value.startAnchor.x * geo.size.width,
+                                    y: value.startAnchor.y * geo.size.height)
+                vm.handleMagnification(value.magnification, focalPoint: focal)
+            }
+            .onEnded { _ in
+                vm.handleMagnificationEnd()
+                if !canvas.isInfinite {
+                    vm.clampOffset(to: canvas.boundarySize,
+                                   viewportSize: geo.size, scale: vm.scale)
+                }
+            }
+    }
+
     private func startCanvasDrawing() {
         dismissEverything()
         drawingStartScale  = vm.scale
@@ -732,11 +727,7 @@ struct CanvasView: View {
                 DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
-                                   onExternalTap: { dismissEverything() },
-                                   // Forward drag on an unselected canvas drawing to the
-                                   // canvas pan handler — identical to dragging empty space.
-                                   onPanChanged: { vm.handleDragChange($0) },
-                                   onPanEnded:   { vm.handleDragEnd() })
+                                   onExternalTap: { dismissEverything() })
             }
         }
         .opacity(layersVM.highlightedID == element.id ? 0.5 : 1)

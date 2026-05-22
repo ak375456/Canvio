@@ -40,7 +40,7 @@ class ImageElementModel: LayerableElement {
         self.width = width
         self.height = height
         self.rotation = 0
-        self.cornerRadius = 8
+        self.cornerRadius = 0
         self.opacity = 1.0
         self.zIndex = 0
         self.createdAt = Date()

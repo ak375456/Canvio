@@ -72,12 +72,20 @@ struct ImageElementView: View {
     }
 
     private var imageLayer: some View {
-        Group {
+        let hasTransparency = ImageStorageService.hasTransparency(fileName: element.imageFileName)
+
+        return Group {
             if let img = ImageStorageService.load(fileName: element.imageFileName) {
                 #if canImport(UIKit)
-                Image(uiImage: img).resizable().scaledToFill()
+                Image(uiImage: img)
+                    .resizable()
+                    .interpolation(.medium)
+                    .scaledToFill()
                 #else
-                Image(nsImage: img).resizable().scaledToFill()
+                Image(nsImage: img)
+                    .resizable()
+                    .interpolation(.medium)
+                    .scaledToFill()
                 #endif
             } else {
                 ZStack {
@@ -87,11 +95,12 @@ struct ImageElementView: View {
             }
         }
         .frame(width: currentWidth, height: currentHeight)
-        .clipShape(RoundedRectangle(cornerRadius: element.cornerRadius))
+        .modifier(ImageElementClipModifier(cornerRadius: element.cornerRadius))
         .opacity(element.opacity)
         .overlay(RoundedRectangle(cornerRadius: element.cornerRadius)
             .strokeBorder(isSelected && !isMultiSelectMode ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 2))
-        .shadow(color: .black.opacity(isSelected ? 0.18 : 0.08), radius: 6, x: 0, y: 3)
+        .shadow(color: .black.opacity(hasTransparency ? 0 : (isSelected ? 0.18 : 0.08)),
+                radius: hasTransparency ? 0 : 6, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if !isMultiSelectMode { onExternalTap?(); vm.editingID = isSelected ? nil : element.id }
@@ -172,6 +181,18 @@ struct ImageElementView: View {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+        }
+    }
+}
+
+private struct ImageElementClipModifier: ViewModifier {
+    let cornerRadius: Double
+
+    func body(content: Content) -> some View {
+        if cornerRadius > 0 {
+            content.clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        } else {
+            content.clipped()
         }
     }
 }
