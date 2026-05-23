@@ -42,14 +42,30 @@ struct AddTextSheet: View {
 
     // MARK: - Header
     private var header: some View {
-        HStack {
-            Text("Add Text").font(.title3.weight(.bold))
-            Spacer()
-            Button { isPresented = false } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2).foregroundStyle(.secondary).symbolRenderingMode(.hierarchical)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Add Text").font(.title3.weight(.bold))
+                Spacer()
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2).foregroundStyle(.secondary).symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            // Quick-tip banner
+            HStack(spacing: 8) {
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("Tip: **Double-tap anywhere on the canvas** to add text instantly")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         }
         .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20)
     }

@@ -60,12 +60,14 @@ final class ImageSyncService {
 
     // MARK: - Upsert (metadata + upload file)
 
-    func upsert(_ element: ImageElementModel) async {
+    func upsert(_ element: ImageElementModel, uploadFile: Bool = false) async {
         guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
         let row = makeRow(element: element, userID: userID)
 
-        // Upload file to Storage first (non-blocking — best effort)
-        Task { await media.uploadImage(fileName: element.imageFileName) }
+        if uploadFile {
+            let fileName = element.imageFileName
+            Task(priority: .utility) { await media.uploadImage(fileName: fileName) }
+        }
 
         guard network.isConnected else {
             if let data = try? JSONEncoder().encode(row) {

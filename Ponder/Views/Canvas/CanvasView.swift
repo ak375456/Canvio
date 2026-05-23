@@ -42,6 +42,10 @@ struct CanvasView: View {
     @State private var showPDFImporter = false
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
+    #if os(iOS)
+    /// Amount we panned the canvas up to avoid the keyboard. Restored on keyboard hide.
+    @State private var keyboardAvoidanceOffset: CGFloat = 0
+    #endif
 
     @Environment(\.dismiss) private var dismiss
 
@@ -111,23 +115,27 @@ struct CanvasView: View {
                             dismissEverything()
                         }
                     }
-                    .onTapGesture(count: 2) {
-                        guard !selection.isMultiSelectActive,
-                              !vm.showCanvasDrawingOverlay,
-                              !vm.connectorVM.isConnectModeActive else { return }
-                        dismissEverything()
-                        let screenPoint = vm.lastDoubleTapLocation
-                            ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
-                        let canvasX = (screenPoint.x - vm.offset.width)  / vm.scale
-                        let canvasY = (screenPoint.y - vm.offset.height) / vm.scale
-                        let _ = vm.textVM.addInlineText(
-                            canvasID: canvas.id,
-                            canvasPoint: CGPoint(x: canvasX, y: canvasY),
-                            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
-                            context: context,
-                            undoManager: vm.undoManager
-                        )
-                    }
+                    .simultaneousGesture(
+                        SpatialTapGesture(count: 2)
+                            .onEnded { tap in
+                                guard !selection.isMultiSelectActive,
+                                      !vm.showCanvasDrawingOverlay,
+                                      !vm.connectorVM.isConnectModeActive else { return }
+                                dismissEverything()
+                                // tap.location is in the view's local coordinate space
+                                // — exactly where the user tapped.
+                                let pt = tap.location
+                                let canvasX = (pt.x - vm.offset.width)  / vm.scale
+                                let canvasY = (pt.y - vm.offset.height) / vm.scale
+                                let _ = vm.textVM.addInlineText(
+                                    canvasID: canvas.id,
+                                    canvasPoint: CGPoint(x: canvasX, y: canvasY),
+                                    zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                                    context: context,
+                                    undoManager: vm.undoManager
+                                )
+                            }
+                    )
                     .onLongPressGesture(minimumDuration: 0.5) {
                         guard !vm.connectorVM.isConnectModeActive else { return }
                         if !selection.isMultiSelectActive {
@@ -288,6 +296,50 @@ struct CanvasView: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
+            #if os(macOS)
+            .overlay(
+                MacScrollInterceptor { deltaX, deltaY, phase, isZoom in
+                    if isZoom {
+                        // Zoom around the current mouse cursor position.
+                        // NSEvent.mouseLocation is in screen coords; convert to window then view.
+                        let screenPt = NSEvent.mouseLocation
+                        let windowPt = NSApp.keyWindow?.convertPoint(fromScreen: screenPt)
+                        let focal: CGPoint
+                        if let wp = windowPt {
+                            // Flip Y: NSWindow origin is bottom-left, SwiftUI is top-left.
+                            let windowH = NSApp.keyWindow?.frame.height ?? geo.size.height
+                            focal = CGPoint(x: wp.x, y: windowH - wp.y)
+                        } else {
+                            focal = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+                        }
+                        let zoomSensitivity: CGFloat = 0.008
+                        let delta    = -deltaY * zoomSensitivity
+                        let newScale = max(0.15, min(vm.scale * (1.0 + delta), 8.0))
+                        let scaleDelta = newScale / vm.scale
+                        vm.offset = CGSize(
+                            width:  focal.x - (focal.x - vm.offset.width)  * scaleDelta,
+                            height: focal.y - (focal.y - vm.offset.height) * scaleDelta
+                        )
+                        vm.scale     = newScale
+                        vm.lastScale = newScale
+                        vm.lastOffset = vm.offset
+                        if !canvas.isInfinite {
+                            vm.clampOffset(to: canvas.boundarySize,
+                                           viewportSize: geo.size, scale: vm.scale)
+                        }
+                    } else {
+                        // Two-finger scroll → pan.
+                        vm.offset = CGSize(width: vm.offset.width  + deltaX,
+                                           height: vm.offset.height + deltaY)
+                        vm.lastOffset = vm.offset
+                        if !canvas.isInfinite {
+                            vm.clampOffset(to: canvas.boundarySize,
+                                           viewportSize: geo.size, scale: vm.scale)
+                        }
+                    }
+                }
+            )
+            #endif
             .onAppear {
                 if !canvas.isInfinite {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -295,8 +347,59 @@ struct CanvasView: View {
                     }
                 }
                 pullFromCloud()
+                // Clean up any ghost empty-text elements left from previous sessions
+                // (e.g. from double-tapping without typing then force-quitting the app).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    let ghosts = textElements.filter {
+                        $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    }
+                    for el in ghosts {
+                        Task { await TextSyncService.shared.delete(el) }
+                        context.delete(el)
+                    }
+                    if !ghosts.isEmpty { try? context.save() }
+                }
             }
             .onDisappear { generateThumbnail() }
+            #if os(iOS)
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillShowNotification)) { notif in
+                guard vm.textVM.inlineEditingID != nil else { return }
+                guard let kbFrame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+                      let duration = notif.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
+                else { return }
+
+                // Keyboard height in the canvas view's coordinate space.
+                let kbHeight = kbFrame.height
+                let safeBottom = geo.safeAreaInsets.bottom
+                let availableHeight = geo.size.height - kbHeight + safeBottom
+
+                // Find the editing element and its screen-space Y.
+                if let editID = vm.textVM.inlineEditingID,
+                   let el = textElements.first(where: { $0.id == editID }) {
+                    let elementScreenY = CGFloat(el.y) * vm.scale + vm.offset.height
+                    let targetY = availableHeight - 80   // 80pt breathing room above keyboard
+                    if elementScreenY > targetY {
+                        let delta = elementScreenY - targetY
+                        keyboardAvoidanceOffset = delta
+                        withAnimation(.easeOut(duration: duration)) {
+                            vm.offset.height -= delta
+                            vm.lastOffset = vm.offset
+                        }
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIResponder.keyboardWillHideNotification)) { notif in
+                guard keyboardAvoidanceOffset != 0 else { return }
+                let duration = (notif.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+                withAnimation(.easeOut(duration: duration)) {
+                    vm.offset.height += keyboardAvoidanceOffset
+                    vm.lastOffset = vm.offset
+                }
+                keyboardAvoidanceOffset = 0
+            }
+            #endif
             .overlay(alignment: .topTrailing) {
                 if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive
                     && !vm.connectorVM.isConnectModeActive {
@@ -547,7 +650,6 @@ struct CanvasView: View {
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 5)
             .onChanged { value in
-                vm.lastDoubleTapLocation = value.startLocation
                 vm.handleDragChange(value)
             }
             .onEnded { _ in
@@ -574,6 +676,7 @@ struct CanvasView: View {
                 }
             }
     }
+
 
     private func startCanvasDrawing() {
         dismissEverything()
@@ -814,7 +917,19 @@ struct CanvasView: View {
     }
 
     private func dismissEverything() {
-        vm.textVM.stopEditing(); vm.stickyVM.stopEditing(); vm.todoVM.stopEditing()
+        // ── Silently delete any empty inline text being created ──────────
+        // This covers: tapping canvas background, entering connector mode,
+        // long-press multi-select, or any other dismissal that bypasses the
+        // Done button. The element was inserted but never had content → no
+        // undo entry and no Supabase call are needed.
+        if let inlineID = vm.textVM.inlineEditingID,
+           let el = textElements.first(where: { $0.id == inlineID }),
+           el.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            context.delete(el)
+            try? context.save()
+        }
+        vm.textVM.stopEditing()
+        vm.stickyVM.stopEditing(); vm.todoVM.stopEditing()
         vm.shapeVM.stopEditing(); vm.imageVM.stopEditing(); vm.pdfVM.stopEditing()
         vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.drawingVM.stopEditing()
         vm.connectorVM.stopEditing()

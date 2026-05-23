@@ -31,7 +31,7 @@ class ImageElementViewModel: ObservableObject {
             context.insert(element); try? context.save()
             editingID = element.id
 
-            Task { await ImageSyncService.shared.upsert(element) }
+            Task { await ImageSyncService.shared.upsert(element, uploadFile: true) }
 
             let id = element.id
             undoManager?.push(CanvasAction(
@@ -46,7 +46,7 @@ class ImageElementViewModel: ObservableObject {
                                                x: canvasX, y: canvasY, width: width, height: height)
                     el.id = id; el.zIndex = zIndex
                     context.insert(el); try? context.save()
-                    Task { await ImageSyncService.shared.upsert(el) }
+                    Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
                 }
             ))
         } catch { print("⚠️ Failed to save image: \(error)") }
@@ -101,7 +101,7 @@ class ImageElementViewModel: ObservableObject {
         copy.cornerRadius = element.cornerRadius; copy.opacity = element.opacity
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
-        Task { await ImageSyncService.shared.upsert(copy) }
+        Task { await ImageSyncService.shared.upsert(copy, uploadFile: true) }
 
         let id = copy.id
         undoManager?.push(CanvasAction(
@@ -118,7 +118,7 @@ class ImageElementViewModel: ObservableObject {
                                            width: element.width, height: element.height)
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
-                Task { await ImageSyncService.shared.upsert(el) }
+                Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             }
         ))
     }
@@ -164,7 +164,7 @@ class ImageElementViewModel: ObservableObject {
                                            x: snap.x, y: snap.y, width: snap.width, height: snap.height)
                 el.id = snap.id; el.zIndex = snap.zIndex
                 context.insert(el); try? context.save()
-                Task { await ImageSyncService.shared.upsert(el) }
+                Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == snap.id }) {

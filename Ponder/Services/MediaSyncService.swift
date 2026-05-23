@@ -52,10 +52,17 @@ final class MediaSyncService {
     /// Upload a local file to Supabase Storage. Skips if not connected.
     func uploadFile(localURL: URL, storagePath: String, contentType: String) async {
         guard network.isConnected else { return }
-        guard let data = try? Data(contentsOf: localURL) else {
+
+        let data: Data
+        do {
+            data = try await Task.detached(priority: .utility) {
+                try Data(contentsOf: localURL)
+            }.value
+        } catch {
             print("⚠️ MediaSync: cannot read local file \(localURL.lastPathComponent)")
             return
         }
+
         do {
             try await supabase.storage
                 .from(bucket)

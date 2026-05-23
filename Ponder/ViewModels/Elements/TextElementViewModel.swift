@@ -11,6 +11,9 @@ import Combine
 class TextElementViewModel: ObservableObject {
     @Published var editingID: UUID?       = nil
     @Published var inlineEditingID: UUID? = nil
+    /// `true` while editing a brand-new element that hasn't been saved yet.
+    /// When the user dismisses with empty text we silently delete with no undo entry.
+    private var inlineElementIsNew: Bool  = false
 
     // MARK: - Add (from sheet)
 
@@ -68,27 +71,64 @@ class TextElementViewModel: ObservableObject {
         element.updatedAt = Date()
         context.insert(element)
         try? context.save()
-        inlineEditingID = element.id
-        editingID       = element.id
-
-        let id = element.id
-        undoManager?.push(CanvasAction(
-            undo: {
-                if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
-                    .first(where: { $0.id == id }) {
-                    context.delete(el); try? context.save()
-                    Task { await TextSyncService.shared.delete(el) }
-                }
-            },
-            redo: {
-                let el = TextElementModel(canvasID: canvasID, text: "",
-                                          x: canvasPoint.x, y: canvasPoint.y)
-                el.id = id; el.zIndex = zIndex; el.updatedAt = Date()
-                context.insert(el); try? context.save()
-                Task { await TextSyncService.shared.upsert(el) }
-            }
-        ))
+        inlineEditingID   = element.id
+        editingID         = element.id
+        inlineElementIsNew = true   // mark as unsaved — no sync yet
         return element
+    }
+
+    /// Called by the view when the user finishes editing (Done / focus-loss / Escape).
+    /// - If text is non-empty: saves, syncs, and pushes an undo entry.
+    /// - If text is empty AND the element was just created: silently deletes it
+    ///   with no undo entry and no Supabase call, leaving zero trace.
+    func commitInlineText(element: TextElementModel, text: String,
+                          context: ModelContext,
+                          undoManager: CanvasUndoManager? = nil) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wasNew  = inlineElementIsNew
+        inlineElementIsNew = false
+        inlineEditingID    = nil
+
+        if trimmed.isEmpty {
+            // Silently remove — no undo, no sync.
+            if editingID == element.id { editingID = nil }
+            context.delete(element)
+            try? context.save()
+            return
+        }
+
+        // Persist the text
+        element.text      = trimmed
+        element.updatedAt = Date()
+        try? context.save()
+        Task { await TextSyncService.shared.upsert(element) }
+
+        if wasNew {
+            // Push undo only now — after we know there’s real content.
+            let id        = element.id
+            let canvasID  = element.canvasID
+            let x         = element.x
+            let y         = element.y
+            let zIndex    = element.zIndex
+            let fontSize  = element.fontSize
+            undoManager?.push(CanvasAction(
+                undo: {
+                    if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
+                        .first(where: { $0.id == id }) {
+                        context.delete(el); try? context.save()
+                        Task { await TextSyncService.shared.delete(el) }
+                    }
+                },
+                redo: {
+                    let el = TextElementModel(canvasID: canvasID, text: trimmed,
+                                              x: x, y: y)
+                    el.id = id; el.zIndex = zIndex; el.fontSize = fontSize
+                    el.updatedAt = Date()
+                    context.insert(el); try? context.save()
+                    Task { await TextSyncService.shared.upsert(el) }
+                }
+            ))
+        }
     }
 
     // MARK: - Position
@@ -248,8 +288,9 @@ class TextElementViewModel: ObservableObject {
     }
 
     func stopEditing() {
-        editingID       = nil
-        inlineEditingID = nil
+        editingID          = nil
+        inlineEditingID    = nil
+        inlineElementIsNew = false
     }
 
     func colorFromName(_ name: String) -> Color {

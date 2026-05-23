@@ -20,6 +20,9 @@ struct ImageElementView: View {
     @State private var resizeDelta: CGSize = .zero
     @State private var rotationAngle: Double = 0
     @State private var hasLoadedRotation = false
+    /// Downsampled display image, generated once on a background thread.
+    @State private var displayImage: PlatformImage? = nil
+    @State private var lastLoadedFileName: String = ""
 
     private var isSelected: Bool { vm.editingID == element.id }
     private var currentWidth: CGFloat { max(40, element.width + resizeDelta.width) }
@@ -46,6 +49,30 @@ struct ImageElementView: View {
         .gesture(isMultiSelectMode ? nil : moveDragGesture)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
+            loadDisplayImageIfNeeded()
+        }
+        .onChange(of: element.imageFileName) { _, _ in loadDisplayImageIfNeeded() }
+    }
+
+    // MARK: - Thumbnail loading
+
+    /// Loads a display-sized thumbnail on a background thread.
+    /// Uses ImageIO's kCGImageSourceThumbnailMaxPixelSize so JPEG is only
+    /// partially decoded — much faster than loading the full bitmap.
+    private func loadDisplayImageIfNeeded() {
+        let fileName = element.imageFileName
+        guard fileName != lastLoadedFileName else { return }
+        lastLoadedFileName = fileName
+
+        // Render at 2× the on-canvas display size so it looks sharp when zoomed.
+        let targetPixels = max(currentWidth, currentHeight) * 2
+
+        Task.detached(priority: .userInitiated) {
+            let image = ImageStorageService.thumbnail(
+                fileName: fileName,
+                maxPixelSize: targetPixels
+            )
+            await MainActor.run { displayImage = image }
         }
     }
 
@@ -72,10 +99,8 @@ struct ImageElementView: View {
     }
 
     private var imageLayer: some View {
-        let hasTransparency = ImageStorageService.hasTransparency(fileName: element.imageFileName)
-
-        return Group {
-            if let img = ImageStorageService.load(fileName: element.imageFileName) {
+        Group {
+            if let img = displayImage ?? ImageStorageService.load(fileName: element.imageFileName) {
                 #if canImport(UIKit)
                 Image(uiImage: img)
                     .resizable()
@@ -97,10 +122,9 @@ struct ImageElementView: View {
         .frame(width: currentWidth, height: currentHeight)
         .modifier(ImageElementClipModifier(cornerRadius: element.cornerRadius))
         .opacity(element.opacity)
+        .drawingGroup()   // rasterise to a GPU texture — eliminates per-frame CPU compositing
         .overlay(RoundedRectangle(cornerRadius: element.cornerRadius)
             .strokeBorder(isSelected && !isMultiSelectMode ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 2))
-        .shadow(color: .black.opacity(hasTransparency ? 0 : (isSelected ? 0.18 : 0.08)),
-                radius: hasTransparency ? 0 : 6, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if !isMultiSelectMode { onExternalTap?(); vm.editingID = isSelected ? nil : element.id }

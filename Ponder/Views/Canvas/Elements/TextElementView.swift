@@ -22,6 +22,8 @@ struct TextElementView: View {
     @State private var resizeDelta: CGFloat  = 0
     @State private var showEditSheet: Bool   = false
     @State private var inlineText: String    = ""
+    /// Guards against double-commit (Done button + focus-loss can both fire).
+    @State private var hasCommittedInline: Bool = false
     @FocusState private var inlineFocused: Bool
 
     private var isSelected: Bool      { vm.editingID == element.id }
@@ -69,8 +71,9 @@ struct TextElementView: View {
         }
         .onChange(of: isInlineEditing) { _, editing in
             if editing {
-                inlineText    = element.text
-                inlineFocused = true
+                inlineText           = element.text
+                inlineFocused        = true
+                hasCommittedInline   = false   // reset for this editing session
             }
         }
     }
@@ -102,10 +105,11 @@ struct TextElementView: View {
     // MARK: - Inline editor
 
     private var inlineEditor: some View {
-        ZStack(alignment: .topLeading) {
-            // Hidden size-tracker keeps the ZStack from collapsing
-            styledText(inlineText.isEmpty ? " " : inlineText)
-                .padding(10)
+        ZStack(alignment: .center) {
+            // Hidden size-tracker — uses the same styling so the ZStack
+            // stays correctly sized as the user types.
+            styledText(inlineText.isEmpty ? "Tap to type..." : inlineText)
+                .padding(12)
                 .fixedSize()
                 .opacity(0)
                 .background(sizeReader)
@@ -113,30 +117,33 @@ struct TextElementView: View {
             TextEditor(text: $inlineText)
                 .font(elementFont)
                 .foregroundStyle(vm.colorFromName(element.colorName))
-                .multilineTextAlignment(element.textAlignment)
+                .multilineTextAlignment(.leading)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .focused($inlineFocused)
-                .frame(minWidth: 120, minHeight: 36)
+                .frame(minWidth: 160, minHeight: 36)
                 .fixedSize()
-                .padding(6)
+                .padding(8)
                 #if os(macOS)
-                .onKeyPress(.return) {
+                .onKeyPress(.escape) {
                     commitInlineEdit()
                     return .handled
                 }
                 #endif
         }
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.accentColor.opacity(0.06))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.05))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            Color.accentColor,
+                            style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
+                        )
                 )
         )
-        // Done button — floats above the editor box, counter-scaled.
-        // Works on both iOS and macOS — no toolbar placement API needed.
+        // Done button — floats above the editor box, counter-scaled so it
+        // stays the same visual size regardless of canvas zoom level.
         .overlay(alignment: .topTrailing) {
             Button { commitInlineEdit() } label: {
                 HStack(spacing: 4) {
@@ -155,21 +162,27 @@ struct TextElementView: View {
             .scaleEffect(1.0 / canvasScale)
             .offset(x: 0, y: -36 / canvasScale)
         }
+        .overlay(alignment: .bottomLeading) {
+            // Hint label so users know ⎋ or clicking away commits
+            Text(inlineText.isEmpty ? "Start typing..." : "")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.accentColor.opacity(0.6))
+                .padding(.horizontal, 8)
+                .padding(.bottom, -18)
+                .scaleEffect(1.0 / canvasScale)
+                .allowsHitTesting(false)
+        }
         .onChange(of: inlineFocused) { _, focused in
-            if !focused { commitInlineEdit() }
+            // Only commit on focus-loss if we're still in inline editing mode
+            // (prevents double-firing when the view tears down after Done).
+            if !focused && isInlineEditing { commitInlineEdit() }
         }
     }
 
     private func commitInlineEdit() {
-        let trimmed = inlineText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            vm.delete(element: element, context: context)
-        } else {
-            element.text      = trimmed
-            element.updatedAt = Date()
-            try? context.save()
-        }
-        vm.inlineEditingID = nil
+        guard !hasCommittedInline else { return }
+        hasCommittedInline = true
+        vm.commitInlineText(element: element, text: inlineText, context: context)
     }
 
     // MARK: - Formatting toolbar

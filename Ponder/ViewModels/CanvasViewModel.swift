@@ -35,7 +35,7 @@ class CanvasViewModel: ObservableObject {
     @Published var pendingTableLocation: CGPoint? = nil
     @Published var showTableCSVImporter: Bool = false
     @Published var pendingCSVTableID: UUID? = nil
-    @Published var lastDoubleTapLocation: CGPoint? = nil
+
 
     let textVM      = TextElementViewModel()
     let stickyVM    = StickyNoteViewModel()
