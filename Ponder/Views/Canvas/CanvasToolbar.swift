@@ -7,16 +7,17 @@ import SwiftUI
 
 struct CanvasToolbar: View {
     @Binding var showTextSheet: Bool
-    let onAddSticky: () -> Void
-    let onAddTodo: () -> Void
-    let onAddShape: () -> Void
-    let onAddImage: () -> Void
-    let onAddPDF: () -> Void
-    let onAddTable: () -> Void
-    let onAddAudio: () -> Void
-    let onAddDrawing: () -> Void
+    let onAddSticky:    () -> Void
+    let onAddTodo:      () -> Void
+    let onAddShape:     () -> Void
+    let onAddImage:     () -> Void
+    let onAddPDF:       () -> Void
+    let onAddTable:     () -> Void
+    let onAddAudio:     () -> Void
+    let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
-    let onConnect: () -> Void
+    let onAddSymbol:    () -> Void          // ← NEW
+    let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
     let isVertical: Bool
 
@@ -29,18 +30,18 @@ struct CanvasToolbar: View {
     private var horizontalLayout: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                toolButton(icon: "textformat",       label: "Text",    tint: .blue)   { showTextSheet = true }
-                toolButton(icon: "note.text",        label: "Sticky",  tint: .orange) { onAddSticky() }
-                toolButton(icon: "checklist",        label: "Todo",    tint: .green)  { onAddTodo() }
-                toolButton(icon: "square.on.circle", label: "Shape",   tint: .purple) { onAddShape() }
-                toolButton(icon: "photo",            label: "Image",   tint: .cyan)   { onAddImage() }
-                toolButton(icon: "doc.richtext",     label: "PDF",     tint: .red)    { onAddPDF() }
-                toolButton(icon: "tablecells",       label: "Table",   tint: .indigo) { onAddTable() }
-                toolButton(icon: "waveform",         label: "Audio",   tint: .pink)   { onAddAudio() }
-                // Drawing tools — iOS/iPadOS only
+                toolButton(icon: "textformat",           label: "Text",    tint: .blue)   { showTextSheet = true }
+                toolButton(icon: "note.text",            label: "Sticky",  tint: .orange) { onAddSticky() }
+                toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
+                toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
+                toolButton(icon: "photo",                label: "Image",   tint: .cyan)   { onAddImage() }
+                toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
+                toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
+                toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
+                toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
                 #if os(iOS)
-                toolButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange) { onAddDrawing() }
-                toolButton(icon: "scribble.variable",   label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
+                toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
+                toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
                 #endif
                 connectButton
             }
@@ -53,18 +54,18 @@ struct CanvasToolbar: View {
 
     private var verticalLayout: some View {
         VStack(spacing: 0) {
-            toolButton(icon: "textformat",       label: "Text",    tint: .blue)   { showTextSheet = true }
-            toolButton(icon: "note.text",        label: "Sticky",  tint: .orange) { onAddSticky() }
-            toolButton(icon: "checklist",        label: "Todo",    tint: .green)  { onAddTodo() }
-            toolButton(icon: "square.on.circle", label: "Shape",   tint: .purple) { onAddShape() }
-            toolButton(icon: "photo",            label: "Image",   tint: .cyan)   { onAddImage() }
-            toolButton(icon: "doc.richtext",     label: "PDF",     tint: .red)    { onAddPDF() }
-            toolButton(icon: "tablecells",       label: "Table",   tint: .indigo) { onAddTable() }
-            toolButton(icon: "waveform",         label: "Audio",   tint: .pink)   { onAddAudio() }
-            // Drawing tools — iOS/iPadOS only
+            toolButton(icon: "textformat",           label: "Text",    tint: .blue)   { showTextSheet = true }
+            toolButton(icon: "note.text",            label: "Sticky",  tint: .orange) { onAddSticky() }
+            toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
+            toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
+            toolButton(icon: "photo",                label: "Image",   tint: .cyan)   { onAddImage() }
+            toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
+            toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
+            toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
+            toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
             #if os(iOS)
-            toolButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange) { onAddDrawing() }
-            toolButton(icon: "scribble.variable",   label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
+            toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
+            toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
             #endif
             connectButton
         }

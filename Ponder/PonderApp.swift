@@ -49,7 +49,8 @@ struct PonderApp: App {
             TableCellModel.self,
             AudioElementModel.self,
             DrawingElementModel.self,
-            ConnectorModel.self
+            ConnectorModel.self,
+            SymbolElementModel.self     // ← NEW
         ])
     }
 }
@@ -58,48 +59,33 @@ private struct SyncCoordinatorView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var auth = AuthService.shared
 
-    // Check account validity every 60 seconds while the app is open
     private let accountCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ContentView()
-            .task {
-                await restoreAndSync()
-            }
-            // Periodic check: did someone delete the account from another device?
+            .task { await restoreAndSync() }
             .onReceive(accountCheckTimer) { _ in
                 guard auth.currentUser != nil else { return }
-                Task {
-                    await auth.checkAccountStillExists(context: modelContext)
-                }
+                Task { await auth.checkAccountStillExists(context: modelContext) }
             }
-            // Also check immediately when app comes back to foreground
             .onReceive(
-                NotificationCenter.default.publisher(
-                    for: {
-                        #if os(iOS)
-                        return UIApplication.willEnterForegroundNotification
-                        #else
-                        return NSApplication.willBecomeActiveNotification
-                        #endif
-                    }()
-                )
+                NotificationCenter.default.publisher(for: {
+                    #if os(iOS)
+                    return UIApplication.willEnterForegroundNotification
+                    #else
+                    return NSApplication.willBecomeActiveNotification
+                    #endif
+                }())
             ) { _ in
                 guard auth.currentUser != nil else { return }
-                Task {
-                    await auth.checkAccountStillExists(context: modelContext)
-                }
+                Task { await auth.checkAccountStillExists(context: modelContext) }
             }
     }
 
     private func restoreAndSync() async {
-        // Step 1 — Restore session (also validates account still exists)
         await AuthService.shared.restoreSession()
-
-        // Step 2 — Only sync if logged in
         guard AuthService.shared.currentUser != nil else { return }
 
-        // Step 3 — Flush all queued offline operations
         await CanvasSyncService.shared.flushQueue()
         await TextSyncService.shared.flushQueue()
         await StickyNoteSyncService.shared.flushQueue()
@@ -111,17 +97,12 @@ private struct SyncCoordinatorView: View {
         await ImageSyncService.shared.flushQueue()
         await PDFSyncService.shared.flushQueue()
         await AudioSyncService.shared.flushQueue()
+        await SymbolSyncService.shared.flushQueue()     // ← NEW
 
-        // Step 4 — Pull canvases from Supabase → SwiftData
         await CanvasSyncService.shared.pullAll(context: modelContext)
-
-        // Step 5 — Reconcile: push any local canvases missing from Supabase
         await CanvasSyncService.shared.reconcileLocalToRemote(context: modelContext)
-
-        // Step 6 — Yield so SwiftData makes new records visible
         await Task.yield()
 
-        // Step 7 — Pull all element types for every canvas
         let canvases = (try? modelContext.fetch(FetchDescriptor<CanvasModel>())) ?? []
         for canvas in canvases {
             await TextSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
@@ -134,6 +115,7 @@ private struct SyncCoordinatorView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
+            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)  // ← NEW
         }
     }
 }

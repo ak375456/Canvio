@@ -10,23 +10,26 @@ import Supabase
 // MARK: - Row shapes
 
 private struct TextElementRow: Codable {
-    let id:            String
-    let canvas_id:     String
-    let user_id:       String
-    let text:          String
-    let x:             Double
-    let y:             Double
-    let font_size:     Double
-    let is_bold:       Bool
-    let is_italic:     Bool
-    let is_underline:  Bool
-    let color_name:    String
-    let font_name:     String
-    let alignment_raw: String
-    let z_index:       Int
-    let created_at:    String
-    let updated_at:    String
-    let is_deleted:    Bool
+    let id:                String
+    let canvas_id:         String
+    let user_id:           String
+    let text:              String
+    let x:                 Double
+    let y:                 Double
+    let font_size:         Double
+    let is_bold:           Bool
+    let is_italic:         Bool
+    let is_underline:      Bool
+    let color_name:        String
+    let font_name:         String
+    let alignment_raw:     String
+    let z_index:           Int
+    let created_at:        String
+    let updated_at:        String
+    let is_deleted:        Bool
+    let bg_color_name:     String
+    let stroke_color_name: String
+    let stroke_width:      Double
 }
 
 private struct TextDeleteUpdate: Encodable {
@@ -115,18 +118,13 @@ final class TextSyncService {
         }
     }
 
-    // MARK: - Pull ALL rows (including deleted) → merge into SwiftData
-    //
-    // KEY FIX: Fetches ALL rows for a canvas including is_deleted = true.
-    // Deleted rows are explicitly removed from local SwiftData.
-    // This ensures deletions propagate to every device reliably.
+    // MARK: - Pull ALL rows → merge into SwiftData
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
         guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
 
         do {
-            // Fetch ALL rows — including is_deleted = true
             let rows: [TextElementRow] = try await supabase
                 .from("text_elements")
                 .select()
@@ -135,62 +133,53 @@ final class TextSyncService {
                 .execute()
                 .value
 
-            let localElements = (try? context.fetch(
-                FetchDescriptor<TextElementModel>()
-            )) ?? []
-            // Filter to this canvas only for local lookup
+            let localElements       = (try? context.fetch(FetchDescriptor<TextElementModel>())) ?? []
             let localCanvasElements = localElements.filter { $0.canvasID == canvasID }
-            let localMap = Dictionary(
-                uniqueKeysWithValues: localCanvasElements.map { ($0.id, $0) }
-            )
+            let localMap            = Dictionary(uniqueKeysWithValues: localCanvasElements.map { ($0.id, $0) })
 
             for row in rows {
                 guard let rowID = UUID(uuidString: row.id) else { continue }
 
                 if row.is_deleted {
-                    // Remote says deleted — remove from local SwiftData if present
-                    if let local = localMap[rowID] {
-                        context.delete(local)
-                    }
+                    if let local = localMap[rowID] { context.delete(local) }
                     continue
                 }
 
-                // Row is alive
                 if let local = localMap[rowID] {
-                    // Update only if remote is newer
                     let remoteUpdated = iso.date(from: row.updated_at) ?? .distantPast
                     if remoteUpdated > local.updatedAt {
-                        local.text         = row.text
-                        local.x            = row.x
-                        local.y            = row.y
-                        local.fontSize     = row.font_size
-                        local.isBold       = row.is_bold
-                        local.isItalic     = row.is_italic
-                        local.isUnderline  = row.is_underline
-                        local.colorName    = row.color_name
-                        local.fontName     = row.font_name
-                        local.alignmentRaw = row.alignment_raw
-                        local.zIndex       = row.z_index
-                        local.updatedAt    = remoteUpdated
+                        local.text            = row.text
+                        local.x               = row.x
+                        local.y               = row.y
+                        local.fontSize        = row.font_size
+                        local.isBold          = row.is_bold
+                        local.isItalic        = row.is_italic
+                        local.isUnderline     = row.is_underline
+                        local.colorName       = row.color_name
+                        local.fontName        = row.font_name
+                        local.alignmentRaw    = row.alignment_raw
+                        local.zIndex          = row.z_index
+                        local.bgColorName     = row.bg_color_name
+                        local.strokeColorName = row.stroke_color_name
+                        local.strokeWidth     = row.stroke_width
+                        local.updatedAt       = remoteUpdated
                     }
                 } else {
-                    // New element from another device — insert locally
-                    let el = TextElementModel(
-                        canvasID: canvasID,
-                        text:     row.text,
-                        x:        row.x,
-                        y:        row.y
-                    )
-                    el.id           = rowID
-                    el.fontSize     = row.font_size
-                    el.isBold       = row.is_bold
-                    el.isItalic     = row.is_italic
-                    el.isUnderline  = row.is_underline
-                    el.colorName    = row.color_name
-                    el.fontName     = row.font_name
-                    el.alignmentRaw = row.alignment_raw
-                    el.zIndex       = row.z_index
-                    el.updatedAt    = iso.date(from: row.updated_at) ?? Date()
+                    let el = TextElementModel(canvasID: canvasID, text: row.text,
+                                              x: row.x, y: row.y)
+                    el.id             = rowID
+                    el.fontSize       = row.font_size
+                    el.isBold         = row.is_bold
+                    el.isItalic       = row.is_italic
+                    el.isUnderline    = row.is_underline
+                    el.colorName      = row.color_name
+                    el.fontName       = row.font_name
+                    el.alignmentRaw   = row.alignment_raw
+                    el.zIndex         = row.z_index
+                    el.bgColorName    = row.bg_color_name
+                    el.strokeColorName = row.stroke_color_name
+                    el.strokeWidth    = row.stroke_width
+                    el.updatedAt      = iso.date(from: row.updated_at) ?? Date()
                     context.insert(el)
                 }
             }
@@ -212,8 +201,8 @@ final class TextSyncService {
 
             switch operation.type {
             case .upsertText:
-                if let row = try? JSONDecoder().decode(
-                    TextElementRow.self, from: operation.payload) {
+                if let row = try? JSONDecoder().decode(TextElementRow.self,
+                                                       from: operation.payload) {
                     do {
                         try await supabase
                             .from("text_elements")
@@ -226,15 +215,13 @@ final class TextSyncService {
                 }
 
             case .deleteText:
-                if let payload = try? JSONDecoder().decode(
-                    TextDeletePayload.self, from: operation.payload) {
+                if let payload = try? JSONDecoder().decode(TextDeletePayload.self,
+                                                           from: operation.payload) {
                     do {
                         try await supabase
                             .from("text_elements")
-                            .update(TextDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
+                            .update(TextDeleteUpdate(is_deleted: true,
+                                                     updated_at: payload.updated_at))
                             .eq("id",      value: payload.id)
                             .eq("user_id", value: payload.user_id)
                             .execute()
@@ -257,23 +244,26 @@ final class TextSyncService {
     private func makeRow(element: TextElementModel, userID: String) -> TextElementRow {
         let now = iso.string(from: Date())
         return TextElementRow(
-            id:            element.id.uuidString,
-            canvas_id:     element.canvasID.uuidString,
-            user_id:       userID,
-            text:          element.text,
-            x:             element.x,
-            y:             element.y,
-            font_size:     element.fontSize,
-            is_bold:       element.isBold,
-            is_italic:     element.isItalic,
-            is_underline:  element.isUnderline,
-            color_name:    element.colorName,
-            font_name:     element.fontName,
-            alignment_raw: element.alignmentRaw,
-            z_index:       element.zIndex,
-            created_at:    iso.string(from: element.updatedAt),
-            updated_at:    now,
-            is_deleted:    false
+            id:                element.id.uuidString,
+            canvas_id:         element.canvasID.uuidString,
+            user_id:           userID,
+            text:              element.text,
+            x:                 element.x,
+            y:                 element.y,
+            font_size:         element.fontSize,
+            is_bold:           element.isBold,
+            is_italic:         element.isItalic,
+            is_underline:      element.isUnderline,
+            color_name:        element.colorName,
+            font_name:         element.fontName,
+            alignment_raw:     element.alignmentRaw,
+            z_index:           element.zIndex,
+            created_at:        iso.string(from: element.updatedAt),
+            updated_at:        now,
+            is_deleted:        false,
+            bg_color_name:     element.bgColorName,
+            stroke_color_name: element.strokeColorName,
+            stroke_width:      element.strokeWidth
         )
     }
 }

@@ -17,51 +17,62 @@ struct TextElementView: View {
     var onExternalTap: (() -> Void)? = nil
 
     @State private var dragOffset: CGSize    = .zero
+    @State private var isDragging: Bool      = false
     @State private var textSize: CGSize      = .zero
     @State private var rotationAngle: Double = 0
     @State private var resizeDelta: CGFloat  = 0
     @State private var showEditSheet: Bool   = false
     @State private var inlineText: String    = ""
-    /// Guards against double-commit (Done button + focus-loss can both fire).
     @State private var hasCommittedInline: Bool = false
+    @State private var showCardPicker: Bool  = false
     @FocusState private var inlineFocused: Bool
 
     private var isSelected: Bool      { vm.editingID == element.id }
     private var isInlineEditing: Bool { vm.inlineEditingID == element.id }
     private let handleSize: CGFloat   = 26
 
+    private let toolbarHeight: CGFloat = 44
+    private let cardPickerGap: CGFloat = 8
+
     var body: some View {
         ZStack {
-            // ── Main content ──────────────────────────────────────────
             if isInlineEditing {
                 inlineEditor
             } else {
                 textLayer
             }
 
-            // ── Corner handles ────────────────────────────────────────
             if isSelected && !isMultiSelectMode && !isInlineEditing {
                 cornerHandles
             }
 
-            // ── Formatting toolbar ────────────────────────────────────
-            // Placed INSIDE the ZStack so it's positioned relative to
-            // the element center. Using .overlay after .position() would
-            // expand to fill the full parent canvas — never do that.
             if isSelected && !isMultiSelectMode && !isInlineEditing {
+                if showCardPicker {
+                    cardPickerPanel
+                        .scaleEffect(1.0 / canvasScale)
+                        .offset(y: -(textSize.height / 2)
+                                   - (toolbarHeight / canvasScale)
+                                   - (cardPickerGap / canvasScale)
+                                   - (estimatedCardPickerHeight / canvasScale / 2))
+                        .zIndex(600)
+                        .transition(.scale(scale: 0.9, anchor: .bottom).combined(with: .opacity))
+                        .animation(.spring(duration: 0.22), value: showCardPicker)
+                }
+
                 formattingToolbar
                     .offset(y: -(textSize.height / 2) - 44 / canvasScale)
                     .scaleEffect(1.0 / canvasScale)
                     .zIndex(500)
-                    .transition(
-                        .scale(scale: 0.85, anchor: .bottom)
-                        .combined(with: .opacity)
-                    )
+                    .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
                     .animation(.spring(duration: 0.22), value: isSelected)
             }
         }
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
-        .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
+        // DragGesture inside SwiftUI's scaleEffect ZStack already reports translation
+        // in canvas coordinate space — SwiftUI inverse-maps screen touches through the
+        // parent transform automatically. No manual scale correction needed here.
+        .position(x: element.x + dragOffset.width,
+                  y: element.y + dragOffset.height)
         .gesture(isMultiSelectMode ? nil : moveDragGesture)
         .sheet(isPresented: $showEditSheet) {
             EditTextSheet(element: element, context: context)
@@ -71,26 +82,39 @@ struct TextElementView: View {
         }
         .onChange(of: isInlineEditing) { _, editing in
             if editing {
-                inlineText           = element.text
-                inlineFocused        = true
-                hasCommittedInline   = false   // reset for this editing session
+                inlineText         = element.text
+                inlineFocused      = true
+                hasCommittedInline = false
             }
+        }
+        .onChange(of: isSelected) { _, selected in
+            if !selected { showCardPicker = false }
         }
     }
 
-    // MARK: - Text layer (display mode)
+    private var estimatedCardPickerHeight: CGFloat {
+        element.strokeColorName != "none" ? 260 : 200
+    }
+
+    // MARK: - Text layer
 
     private var textLayer: some View {
         styledText(element.text)
-            .padding(10)
+            .multilineTextAlignment(element.textAlignment)
+            .padding(element.hasCard ? 16 : 10)
             .fixedSize()
-            .background(selectionBackground)
+            .background(cardBackground)
             .background(sizeReader)
             .overlay(multiSelectRing)
             .onTapGesture {
-                guard !isMultiSelectMode else { return }
+                guard !isMultiSelectMode, !isDragging else { return }
                 onExternalTap?()
-                vm.editingID = isSelected ? nil : element.id
+                if isSelected {
+                    showCardPicker = false
+                    vm.editingID = nil
+                } else {
+                    vm.editingID = element.id
+                }
             }
             .onTapGesture(count: 2) {
                 guard !isMultiSelectMode else { return }
@@ -102,17 +126,44 @@ struct TextElementView: View {
             }
     }
 
+    // MARK: - Card background
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        let hasBg     = element.bgColorName != "none"
+        let hasStroke = element.strokeColorName != "none"
+
+        if hasBg || hasStroke {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(hasBg
+                      ? (vm.cardColorFromName(element.bgColorName) ?? Color.clear)
+                      : Color.clear)
+                .overlay(
+                    hasStroke
+                    ? RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            vm.cardColorFromName(element.strokeColorName) ?? Color.clear,
+                            lineWidth: element.strokeWidth
+                        )
+                    : nil
+                )
+                .shadow(color: .black.opacity(hasBg ? 0.12 : 0), radius: 6, x: 0, y: 3)
+        } else if isSelected && !isMultiSelectMode {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                )
+        }
+    }
+
     // MARK: - Inline editor
 
     private var inlineEditor: some View {
         ZStack(alignment: .center) {
-            // Hidden size-tracker — uses the same styling so the ZStack
-            // stays correctly sized as the user types.
             styledText(inlineText.isEmpty ? "Tap to type..." : inlineText)
-                .padding(12)
-                .fixedSize()
-                .opacity(0)
-                .background(sizeReader)
+                .padding(12).fixedSize().opacity(0).background(sizeReader)
 
             TextEditor(text: $inlineText)
                 .font(elementFont)
@@ -125,10 +176,7 @@ struct TextElementView: View {
                 .fixedSize()
                 .padding(8)
                 #if os(macOS)
-                .onKeyPress(.escape) {
-                    commitInlineEdit()
-                    return .handled
-                }
+                .onKeyPress(.escape) { commitInlineEdit(); return .handled }
                 #endif
         }
         .background(
@@ -136,25 +184,18 @@ struct TextElementView: View {
                 .fill(Color.accentColor.opacity(0.05))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(
-                            Color.accentColor,
-                            style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
-                        )
+                        .strokeBorder(Color.accentColor,
+                                      style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
                 )
         )
-        // Done button — floats above the editor box, counter-scaled so it
-        // stays the same visual size regardless of canvas zoom level.
         .overlay(alignment: .topTrailing) {
             Button { commitInlineEdit() } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                    Text("Done")
-                        .font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                    Text("Done").font(.system(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Color.accentColor, in: Capsule())
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             }
@@ -163,18 +204,14 @@ struct TextElementView: View {
             .offset(x: 0, y: -36 / canvasScale)
         }
         .overlay(alignment: .bottomLeading) {
-            // Hint label so users know ⎋ or clicking away commits
             Text(inlineText.isEmpty ? "Start typing..." : "")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.accentColor.opacity(0.6))
-                .padding(.horizontal, 8)
-                .padding(.bottom, -18)
+                .padding(.horizontal, 8).padding(.bottom, -18)
                 .scaleEffect(1.0 / canvasScale)
                 .allowsHitTesting(false)
         }
         .onChange(of: inlineFocused) { _, focused in
-            // Only commit on focus-loss if we're still in inline editing mode
-            // (prevents double-firing when the view tears down after Done).
             if !focused && isInlineEditing { commitInlineEdit() }
         }
     }
@@ -188,62 +225,169 @@ struct TextElementView: View {
     // MARK: - Formatting toolbar
 
     private var formattingToolbar: some View {
-        HStack(spacing: 2) {
-            formatButton(icon: "bold",      active: element.isBold)      { vm.toggleBold(element: element, context: context) }
-            formatButton(icon: "italic",    active: element.isItalic)    { vm.toggleItalic(element: element, context: context) }
-            formatButton(icon: "underline", active: element.isUnderline) { vm.toggleUnderline(element: element, context: context) }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                formatButton(icon: "bold",      active: element.isBold)      { vm.toggleBold(element: element, context: context) }
+                formatButton(icon: "italic",    active: element.isItalic)    { vm.toggleItalic(element: element, context: context) }
+                formatButton(icon: "underline", active: element.isUnderline) { vm.toggleUnderline(element: element, context: context) }
 
-            toolbarDivider
+                toolbarDivider
 
-            formatButton(icon: "minus", active: false) { vm.adjustFontSize(by: -2, element: element, context: context) }
-            Text("\(Int(element.fontSize))")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
-            formatButton(icon: "plus", active: false) { vm.adjustFontSize(by: 2, element: element, context: context) }
+                formatButton(icon: "minus", active: false) { vm.adjustFontSize(by: -2, element: element, context: context) }
+                Text("\(Int(element.fontSize))")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary).frame(width: 28)
+                formatButton(icon: "plus", active: false) { vm.adjustFontSize(by: 2, element: element, context: context) }
 
-            toolbarDivider
+                toolbarDivider
 
-            Button {
-                let next: TextAlignment
-                switch element.textAlignment {
-                case .leading:    next = .center
-                case .center:     next = .trailing
-                case .trailing:   next = .leading
-                @unknown default: next = .leading
+                Button {
+                    let next: TextAlignment
+                    switch element.textAlignment {
+                    case .leading:    next = .center
+                    case .center:     next = .trailing
+                    case .trailing:   next = .leading
+                    @unknown default: next = .leading
+                    }
+                    vm.setAlignment(next, element: element, context: context)
+                } label: {
+                    Image(systemName: alignmentIcon)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 32, height: 32).contentShape(Rectangle())
                 }
-                vm.setAlignment(next, element: element, context: context)
-            } label: {
-                Image(systemName: alignmentIcon)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            toolbarDivider
+                toolbarDivider
 
-            ForEach(TextStyle.colorOptions.prefix(6), id: \.name) { option in
-                Button { vm.setColor(option.name, element: element, context: context) } label: {
-                    let active = element.colorName == option.name
-                    Circle()
-                        .fill(option.color)
-                        .frame(width: active ? 20 : 16, height: active ? 20 : 16)
-                        .overlay(Circle().strokeBorder(Color.primary.opacity(active ? 0.5 : 0), lineWidth: 1.5))
-                        .animation(.easeInOut(duration: 0.15), value: element.colorName)
+                ForEach(TextStyle.colorOptions.prefix(6), id: \.name) { option in
+                    Button { vm.setColor(option.name, element: element, context: context) } label: {
+                        let active = element.colorName == option.name
+                        Circle()
+                            .fill(option.color)
+                            .frame(width: active ? 20 : 16, height: active ? 20 : 16)
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(active ? 0.5 : 0), lineWidth: 1.5))
+                            .animation(.easeInOut(duration: 0.15), value: element.colorName)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                toolbarDivider
+
+                Button {
+                    withAnimation(.spring(duration: 0.22)) { showCardPicker.toggle() }
+                } label: {
+                    Image(systemName: element.hasCard ? "rectangle.fill" : "rectangle")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(showCardPicker || element.hasCard ? Color.accentColor : Color.primary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            (showCardPicker || element.hasCard)
+                            ? Color.accentColor.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7)
+                        )
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
+            .padding(.horizontal, 10).padding(.vertical, 6)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .frame(maxWidth: 340)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.regularMaterial)
                 .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
         )
+        .fixedSize(horizontal: true, vertical: true)
+    }
+
+    // MARK: - Card picker panel
+
+    private var cardPickerPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("BACKGROUND")
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).tracking(1)
+                HStack(spacing: 6) {
+                    noneButton(selected: element.bgColorName == "none") {
+                        vm.setBgColor("none", element: element, context: context)
+                    }
+                    ForEach(vm.cardColorOptions, id: \.name) { option in
+                        colorDot(option: option, selected: element.bgColorName == option.name) {
+                            vm.setBgColor(option.name, element: element, context: context)
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("BORDER COLOR")
+                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).tracking(1)
+                HStack(spacing: 6) {
+                    noneButton(selected: element.strokeColorName == "none") {
+                        vm.setStrokeColor("none", element: element, context: context)
+                    }
+                    ForEach(vm.cardColorOptions, id: \.name) { option in
+                        colorDot(option: option, selected: element.strokeColorName == option.name) {
+                            vm.setStrokeColor(option.name, element: element, context: context)
+                        }
+                    }
+                }
+            }
+
+            if element.strokeColorName != "none" {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("BORDER WIDTH")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).tracking(1)
+                    HStack(spacing: 8) {
+                        ForEach([1.0, 2.0, 3.0, 5.0], id: \.self) { w in
+                            Button {
+                                vm.setStrokeWidth(w, element: element, context: context)
+                            } label: {
+                                Text("\(Int(w))pt")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(element.strokeWidth == w ? .white : .primary)
+                                    .padding(.horizontal, 10).padding(.vertical, 5)
+                                    .background(Capsule().fill(element.strokeWidth == w
+                                                               ? Color.accentColor
+                                                               : Color.secondary.opacity(0.12)))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+        )
         .fixedSize()
+    }
+
+    private func noneButton(selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle().fill(Color.clear).frame(width: 22, height: 22)
+                    .overlay(Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1.5))
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+            }
+            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(selected ? 1 : 0))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func colorDot(option: (name: String, color: Color),
+                          selected: Bool,
+                          action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Circle().fill(option.color).frame(width: 22, height: 22)
+                .shadow(color: .black.opacity(0.1), radius: 2)
+                .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(selected ? 1 : 0))
+        }
+        .buttonStyle(.plain)
     }
 
     private func formatButton(icon: String, active: Bool, action: @escaping () -> Void) -> some View {
@@ -275,20 +419,7 @@ struct TextElementView: View {
         }
     }
 
-    // MARK: - Selection background & rings
-
-    private var selectionBackground: some View {
-        Group {
-            if isSelected && !isMultiSelectMode {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.accentColor.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1.5)
-                    )
-            }
-        }
-    }
+    // MARK: - Multi-select ring
 
     @ViewBuilder
     private var multiSelectRing: some View {
@@ -325,8 +456,13 @@ struct TextElementView: View {
         let hw = textSize.width  / 2
         let hh = textSize.height / 2
         return ZStack {
-            tapHandle(icon: "trash",  color: .red,         x: -hw, y: -hh) { vm.delete(element: element, context: context) }
-            tapHandle(icon: "pencil", color: .accentColor, x:  hw, y: -hh) { showEditSheet = true }
+            tapHandle(icon: "trash",  color: .red,         x: -hw, y: -hh) {
+                vm.delete(element: element, context: context)
+            }
+            tapHandle(icon: "pencil", color: .accentColor, x:  hw, y: -hh) {
+                showCardPicker = false
+                showEditSheet  = true
+            }
             rotateHandle(x: -hw, y: hh)
             resizeHandle(x:  hw, y: hh)
         }
@@ -376,15 +512,25 @@ struct TextElementView: View {
     }
 
     // MARK: - Move gesture
+    // DragGesture inside the scaled ZStack returns translation already in
+    // canvas coordinates — no division by canvasScale needed here.
+    // updatePosition receives raw translation and divides by scale internally.
 
     private var moveDragGesture: some Gesture {
-        DragGesture()
-            .onChanged { dragOffset = $0.translation }
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                isDragging = true
+                dragOffset = value.translation
+            }
             .onEnded { value in
-                let t = value.translation; dragOffset = .zero
+                let t      = value.translation
+                dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary,
                                   context: context)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    isDragging = false
+                }
             }
     }
 

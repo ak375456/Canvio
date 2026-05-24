@@ -26,6 +26,7 @@ struct CanvasView: View {
     @Query private var allAudio: [AudioElementModel]
     @Query private var allDrawings: [DrawingElementModel]
     @Query private var allConnectors: [ConnectorModel]
+    @Query private var allSymbols: [SymbolElementModel]     // ← NEW
 
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
@@ -43,7 +44,6 @@ struct CanvasView: View {
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
     #if os(iOS)
-    /// Amount we panned the canvas up to avoid the keyboard. Restored on keyboard hide.
     @State private var keyboardAvoidanceOffset: CGFloat = 0
     #endif
 
@@ -67,14 +67,20 @@ struct CanvasView: View {
     private var audioElements: [AudioElementModel] { allAudio.filter        { $0.canvasID == canvas.id } }
     private var drawings: [DrawingElementModel]    { allDrawings.filter     { $0.canvasID == canvas.id } }
     private var connectors: [ConnectorModel]       { allConnectors.filter   { $0.canvasID == canvas.id } }
+    private var symbols: [SymbolElementModel]      { allSymbols.filter      { $0.canvasID == canvas.id } }  // ← NEW
 
     private var allLayerableElements: [any LayerableElement] {
         var arr: [any LayerableElement] = []
-        arr.append(contentsOf: textElements); arr.append(contentsOf: stickyNotes)
-        arr.append(contentsOf: todoLists);    arr.append(contentsOf: shapes)
-        arr.append(contentsOf: images);       arr.append(contentsOf: pdfs)
-        arr.append(contentsOf: tables);       arr.append(contentsOf: audioElements)
-        arr.append(contentsOf: drawings)
+        arr += textElements    as [any LayerableElement]
+        arr += stickyNotes     as [any LayerableElement]
+        arr += todoLists       as [any LayerableElement]
+        arr += shapes          as [any LayerableElement]
+        arr += images          as [any LayerableElement]
+        arr += pdfs            as [any LayerableElement]
+        arr += tables          as [any LayerableElement]
+        arr += audioElements   as [any LayerableElement]
+        arr += drawings        as [any LayerableElement]
+        arr += symbols         as [any LayerableElement]
         return arr
     }
 
@@ -93,6 +99,7 @@ struct CanvasView: View {
         for el in tables         { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.totalWidth, height: el.totalHeight) }
         for el in audioElements  { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
         for el in drawings       { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
+        for el in symbols        { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.fontSize,   height: el.fontSize)    }  // ← NEW
         return map
     }
 
@@ -122,8 +129,6 @@ struct CanvasView: View {
                                       !vm.showCanvasDrawingOverlay,
                                       !vm.connectorVM.isConnectModeActive else { return }
                                 dismissEverything()
-                                // tap.location is in the view's local coordinate space
-                                // — exactly where the user tapped.
                                 let pt = tap.location
                                 let canvasX = (pt.x - vm.offset.width)  / vm.scale
                                 let canvasY = (pt.y - vm.offset.height) / vm.scale
@@ -163,15 +168,20 @@ struct CanvasView: View {
                     )
                     .zIndex(-1)
 
+                    ConnectorAnchorDotsView(
+                        boundsMap:   boundsMap,
+                        vm:          vm.connectorVM,
+                        undoManager: vm.undoManager,
+                        canvasID:    canvas.id,
+                        canvasScale: vm.scale,
+                        connectors:  connectors
+                    )
+                    .zIndex(9999)
+
                     ForEach(sortedElements, id: \.id) { element in
                         renderElement(element)
                     }
                 }
-                // When the draw overlay is open, subtly dim the canvas elements
-                // and block all element-level interactions. Pan/zoom still works
-                // because those gestures live on CanvasGridView (behind this ZStack)
-                // and on the .simultaneousGesture below — neither is affected by
-                // the .allowsHitTesting on the element children.
                 .opacity(vm.showCanvasDrawingOverlay ? 0.82 : 1.0)
                 .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
@@ -258,33 +268,17 @@ struct CanvasView: View {
                               strokeBounds.width > 0, strokeBounds.height > 0 else { return }
                         let padding: CGFloat = 20
                         let paddedBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
-
-                        // Convert the drawing's centre from screen-space to canvas-space.
                         let canvasX = (paddedBounds.midX - effectiveOffset.width) / effectiveScale
                         let canvasY = (paddedBounds.midY - effectiveOffset.height) / effectiveScale
-
-                        // Element dimensions in canvas units.
                         let elemW = paddedBounds.width  / effectiveScale
                         let elemH = paddedBounds.height / effectiveScale
-
-                        // The strokes are currently at screen-pixel scale.
-                        // We need to:
-                        //   1. Shift strokes so paddedBounds.origin -> (0, 0)
-                        //   2. Scale them down by 1/effectiveScale so they fit
-                        //      inside the canvas-unit frame (elemW x elemH).
-                        // Combined affine: translate first, then scale around origin.
-                        //   x' = (x - paddedBounds.minX) / effectiveScale
-                        //   y' = (y - paddedBounds.minY) / effectiveScale
-                        let s = 1.0 / effectiveScale
+                        let s  = 1.0 / effectiveScale
                         let tx = -paddedBounds.minX * s
                         let ty = -paddedBounds.minY * s
                         let transform = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tx, ty: ty)
-
                         let element = DrawingElementModel(
                             canvasID: canvas.id, x: canvasX, y: canvasY,
-                            width: Double(elemW),
-                            height: Double(elemH),
-                            isCanvasDrawing: true
+                            width: Double(elemW), height: Double(elemH), isCanvasDrawing: true
                         )
                         element.pkDrawing = pkDrawing.transformed(using: transform)
                         element.zIndex = LayersViewModel.nextZ(among: allLayerableElements)
@@ -300,13 +294,10 @@ struct CanvasView: View {
             .overlay(
                 MacScrollInterceptor { deltaX, deltaY, phase, isZoom in
                     if isZoom {
-                        // Zoom around the current mouse cursor position.
-                        // NSEvent.mouseLocation is in screen coords; convert to window then view.
                         let screenPt = NSEvent.mouseLocation
                         let windowPt = NSApp.keyWindow?.convertPoint(fromScreen: screenPt)
                         let focal: CGPoint
                         if let wp = windowPt {
-                            // Flip Y: NSWindow origin is bottom-left, SwiftUI is top-left.
                             let windowH = NSApp.keyWindow?.frame.height ?? geo.size.height
                             focal = CGPoint(x: wp.x, y: windowH - wp.y)
                         } else {
@@ -316,25 +307,18 @@ struct CanvasView: View {
                         let delta    = -deltaY * zoomSensitivity
                         let newScale = max(0.15, min(vm.scale * (1.0 + delta), 8.0))
                         let scaleDelta = newScale / vm.scale
-                        vm.offset = CGSize(
-                            width:  focal.x - (focal.x - vm.offset.width)  * scaleDelta,
-                            height: focal.y - (focal.y - vm.offset.height) * scaleDelta
-                        )
-                        vm.scale     = newScale
-                        vm.lastScale = newScale
-                        vm.lastOffset = vm.offset
+                        let newW = focal.x - (focal.x - vm.offset.width)  * scaleDelta
+                        let newH = focal.y - (focal.y - vm.offset.height) * scaleDelta
+                        vm.offset = CGSize(width: newW, height: newH)
+                        vm.scale = newScale; vm.lastScale = newScale; vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize,
-                                           viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                         }
                     } else {
-                        // Two-finger scroll → pan.
-                        vm.offset = CGSize(width: vm.offset.width  + deltaX,
-                                           height: vm.offset.height + deltaY)
+                        vm.offset = CGSize(width: vm.offset.width + deltaX, height: vm.offset.height + deltaY)
                         vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize,
-                                           viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                         }
                     }
                 }
@@ -347,8 +331,6 @@ struct CanvasView: View {
                     }
                 }
                 pullFromCloud()
-                // Clean up any ghost empty-text elements left from previous sessions
-                // (e.g. from double-tapping without typing then force-quitting the app).
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     let ghosts = textElements.filter {
                         $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -368,17 +350,13 @@ struct CanvasView: View {
                 guard let kbFrame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
                       let duration = notif.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
                 else { return }
-
-                // Keyboard height in the canvas view's coordinate space.
                 let kbHeight = kbFrame.height
                 let safeBottom = geo.safeAreaInsets.bottom
                 let availableHeight = geo.size.height - kbHeight + safeBottom
-
-                // Find the editing element and its screen-space Y.
                 if let editID = vm.textVM.inlineEditingID,
                    let el = textElements.first(where: { $0.id == editID }) {
                     let elementScreenY = CGFloat(el.y) * vm.scale + vm.offset.height
-                    let targetY = availableHeight - 80   // 80pt breathing room above keyboard
+                    let targetY = availableHeight - 80
                     if elementScreenY > targetY {
                         let delta = elementScreenY - targetY
                         keyboardAvoidanceOffset = delta
@@ -437,6 +415,21 @@ struct CanvasView: View {
                     vm.pendingShapeLocation = nil
                 }
                 .presentationDetents([.height(380)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
+            }
+            // ── Symbol picker ────────────────────────────────────────────────── NEW
+            .sheet(isPresented: $vm.showSymbolPicker) {
+                SymbolPickerSheet { symbolName, colorName, fontSize in
+                    let center = vm.pendingSymbolLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
+                    vm.symbolVM.addSymbol(
+                        canvasID: canvas.id, symbolName: symbolName,
+                        colorName: colorName, fontSize: fontSize,
+                        center: center, offset: vm.offset, scale: vm.scale,
+                        zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                        context: context, undoManager: vm.undoManager
+                    )
+                    vm.pendingSymbolLocation = nil
+                }
+                .presentationDetents([.large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $showTableSizePicker) {
                 TableSizePickerSheet { rows, cols in
@@ -645,18 +638,15 @@ struct CanvasView: View {
         }
     }
 
-    // MARK: - Start canvas drawing
+    // MARK: - Gestures
 
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 5)
-            .onChanged { value in
-                vm.handleDragChange(value)
-            }
+            .onChanged { value in vm.handleDragChange(value) }
             .onEnded { _ in
                 vm.handleDragEnd()
                 if !canvas.isInfinite {
-                    vm.clampOffset(to: canvas.boundarySize,
-                                   viewportSize: geo.size, scale: vm.scale)
+                    vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                 }
             }
     }
@@ -671,12 +661,10 @@ struct CanvasView: View {
             .onEnded { _ in
                 vm.handleMagnificationEnd()
                 if !canvas.isInfinite {
-                    vm.clampOffset(to: canvas.boundarySize,
-                                   viewportSize: geo.size, scale: vm.scale)
+                    vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                 }
             }
     }
-
 
     private func startCanvasDrawing() {
         dismissEverything()
@@ -699,6 +687,7 @@ struct CanvasView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: context)  // ← NEW
         }
     }
 
@@ -831,12 +820,16 @@ struct CanvasView: View {
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() })
+            } else if let symbol = element as? SymbolElementModel {
+                // ── NEW ────────────────────────────────────────────────────────
+                SymbolElementView(element: symbol, canvasScale: vm.scale, canvasBoundary: boundary,
+                                  vm: vm.symbolVM, isMultiSelectMode: multiSelect,
+                                  isSelectedInMultiSelect: isElemSelected,
+                                  onExternalTap: { dismissEverything() })
             }
         }
         .opacity(layersVM.highlightedID == element.id ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
-        // Lock all element interactions while the full-canvas draw overlay is
-        // active. Touches fall through to CanvasGridView so pan/zoom still works.
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
             multiSelect ? TapGesture().onEnded { selection.toggle(element.id) } : nil
@@ -852,34 +845,36 @@ struct CanvasView: View {
             VStack {
                 Spacer()
                 CanvasToolbar(
-                    showTextSheet: $vm.showTextSheet,
-                    onAddSticky: { addStickyAtCenter(viewportSize: geo.size) },
-                    onAddTodo: { addTodoAtCenter(viewportSize: geo.size) },
-                    onAddShape: { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddImage: { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddPDF: { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddTable: { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddAudio: { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddDrawing: { addDrawingAtCenter(viewportSize: geo.size) },
+                    showTextSheet:  $vm.showTextSheet,
+                    onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
+                    onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
-                    onConnect: { toggleConnectMode() },
+                    onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
+                    onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive, isVertical: false
                 )
             }
         case .left:
             HStack {
                 CanvasToolbar(
-                    showTextSheet: $vm.showTextSheet,
-                    onAddSticky: { addStickyAtCenter(viewportSize: geo.size) },
-                    onAddTodo: { addTodoAtCenter(viewportSize: geo.size) },
-                    onAddShape: { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddImage: { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddPDF: { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddTable: { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddAudio: { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddDrawing: { addDrawingAtCenter(viewportSize: geo.size) },
+                    showTextSheet:  $vm.showTextSheet,
+                    onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
+                    onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
-                    onConnect: { toggleConnectMode() },
+                    onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
+                    onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive, isVertical: true
                 )
                 .padding(.leading, 16)
@@ -889,17 +884,18 @@ struct CanvasView: View {
             HStack {
                 Spacer()
                 CanvasToolbar(
-                    showTextSheet: $vm.showTextSheet,
-                    onAddSticky: { addStickyAtCenter(viewportSize: geo.size) },
-                    onAddTodo: { addTodoAtCenter(viewportSize: geo.size) },
-                    onAddShape: { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddImage: { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddPDF: { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddTable: { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddAudio: { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddDrawing: { addDrawingAtCenter(viewportSize: geo.size) },
+                    showTextSheet:  $vm.showTextSheet,
+                    onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
+                    onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
-                    onConnect: { toggleConnectMode() },
+                    onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
+                    onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive, isVertical: true
                 )
                 .padding(.trailing, 16)
@@ -917,11 +913,6 @@ struct CanvasView: View {
     }
 
     private func dismissEverything() {
-        // ── Silently delete any empty inline text being created ──────────
-        // This covers: tapping canvas background, entering connector mode,
-        // long-press multi-select, or any other dismissal that bypasses the
-        // Done button. The element was inserted but never had content → no
-        // undo entry and no Supabase call are needed.
         if let inlineID = vm.textVM.inlineEditingID,
            let el = textElements.first(where: { $0.id == inlineID }),
            el.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -932,7 +923,7 @@ struct CanvasView: View {
         vm.stickyVM.stopEditing(); vm.todoVM.stopEditing()
         vm.shapeVM.stopEditing(); vm.imageVM.stopEditing(); vm.pdfVM.stopEditing()
         vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.drawingVM.stopEditing()
-        vm.connectorVM.stopEditing()
+        vm.connectorVM.stopEditing(); vm.symbolVM.stopEditing()  // ← NEW
         vm.hideAddMenu()
         #if canImport(UIKit)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
@@ -953,6 +944,7 @@ struct CanvasView: View {
         else if drawings.contains(where:       { $0.id == id }) {
             vm.drawingVM.editingID = id; vm.drawingVM.isDrawingModeActive = false
         }
+        else if symbols.contains(where:        { $0.id == id }) { vm.symbolVM.editingID = id }  // ← NEW
     }
 
     private func addStickyAtCenter(viewportSize: CGSize) {
@@ -981,6 +973,10 @@ struct CanvasView: View {
     }
     private func openShapePicker(at point: CGPoint) {
         dismissEverything(); vm.pendingShapeLocation = point; vm.showShapePicker = true
+    }
+    // ← NEW
+    private func openSymbolPicker(at point: CGPoint) {
+        dismissEverything(); vm.pendingSymbolLocation = point; vm.showSymbolPicker = true
     }
     private func openImagePicker(at point: CGPoint) {
         dismissEverything(); vm.pendingImageLocation = point
@@ -1053,6 +1049,7 @@ struct CanvasView: View {
             else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.duplicate(table: el, cells: tableCells, zIndex: z, context: context, undoManager: vm.undoManager) }
             else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
             else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
+            else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }  // ← NEW
             z += 1
         }
         withAnimation(.spring(duration: 0.3)) { selection.exit() }
@@ -1069,6 +1066,7 @@ struct CanvasView: View {
             else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.delete(table: el, cells: tableCells.filter { $0.tableID == el.id }, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
+            else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }  // ← NEW
         }
         withAnimation(.spring(duration: 0.3)) { selection.exit() }
     }

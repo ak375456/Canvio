@@ -10,14 +10,17 @@ struct EditTextSheet: View {
     let element: TextElementModel
     let context: ModelContext
 
-    @State private var text: String          = ""
-    @State private var selectedColor: String = "primary"
-    @State private var selectedFont: String  = "system"
-    @State private var fontSize: Double      = 16
-    @State private var isBold: Bool          = false
-    @State private var isItalic: Bool        = false
-    @State private var isUnderline: Bool     = false
+    @State private var text: String             = ""
+    @State private var selectedColor: String    = "primary"
+    @State private var selectedFont: String     = "system"
+    @State private var fontSize: Double         = 16
+    @State private var isBold: Bool             = false
+    @State private var isItalic: Bool           = false
+    @State private var isUnderline: Bool        = false
     @State private var alignment: TextAlignment = .leading
+    @State private var bgColorName: String      = "none"
+    @State private var strokeColorName: String  = "none"
+    @State private var strokeWidth: Double      = 2.0
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -30,9 +33,10 @@ struct EditTextSheet: View {
                     textField
                     fontRow
                     fontSizeRow
-                    fontStyleRow      // bold / italic / underline
-                    alignmentRow      // L / C / R
+                    fontStyleRow
+                    alignmentRow
                     colorRow
+                    cardRow
                 }
                 .padding(24)
             }
@@ -40,15 +44,18 @@ struct EditTextSheet: View {
             saveButton
         }
         .onAppear {
-            text          = element.text
-            selectedColor = element.colorName
-            selectedFont  = element.fontName
-            fontSize      = element.fontSize
-            isBold        = element.isBold
-            isItalic      = element.isItalic
-            isUnderline   = element.isUnderline
-            alignment     = element.textAlignment
-            focused       = true
+            text           = element.text
+            selectedColor  = element.colorName
+            selectedFont   = element.fontName
+            fontSize       = element.fontSize
+            isBold         = element.isBold
+            isItalic       = element.isItalic
+            isUnderline    = element.isUnderline
+            alignment      = element.textAlignment
+            bgColorName    = element.bgColorName
+            strokeColorName = element.strokeColorName
+            strokeWidth    = element.strokeWidth
+            focused        = true
         }
     }
 
@@ -59,25 +66,16 @@ struct EditTextSheet: View {
             Spacer()
             Button { dismiss() } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .buttonStyle(.plain)
+                    .font(.title2).foregroundStyle(.secondary).symbolRenderingMode(.hierarchical)
+            }.buttonStyle(.plain)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
-        .padding(.bottom, 20)
+        .padding(.horizontal, 24).padding(.top, 24).padding(.bottom, 20)
     }
 
     // MARK: - Text Field
-    // FIX: Use TextEditor instead of TextField so pasted multiline text
-    // preserves line breaks and doesn't collapse to a single line.
     private var textField: some View {
         VStack(alignment: .leading, spacing: 8) {
             label("TEXT")
-            // TextEditor correctly preserves newlines on paste.
-            // We give it a dynamic min-height so it grows with content.
             TextEditor(text: $text)
                 .font(previewFont)
                 .frame(minHeight: 80, maxHeight: 200)
@@ -93,20 +91,18 @@ struct EditTextSheet: View {
             ? .system(size: fontSize)
             : .custom(selectedFont, size: fontSize)
         var f = base
-        if isBold   { f = f.bold() }
+        if isBold   { f = f.bold()   }
         if isItalic { f = f.italic() }
         return f
     }
 
-    // MARK: - Font Picker
+    // MARK: - Font
     private var fontRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             label("FONT")
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(AppFont.allFonts) { font in fontChip(font: font) }
-                }
-                .padding(.vertical, 2)
+                HStack(spacing: 8) { ForEach(AppFont.allFonts) { fontChip(font: $0) } }
+                    .padding(.vertical, 2)
             }
         }
     }
@@ -115,25 +111,20 @@ struct EditTextSheet: View {
         let isSelected = selectedFont == font.name
         return Button { selectedFont = font.name } label: {
             Text(font.displayName)
-                .font(font.name == "system"
-                      ? .system(size: 15, weight: .medium)
-                      : .custom(font.name, size: 16))
+                .font(font.name == "system" ? .system(size: 15, weight: .medium) : .custom(font.name, size: 16))
                 .foregroundStyle(isSelected ? .white : Color.primary)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 10)
                     .fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.12)))
-        }
-        .buttonStyle(.plain)
+        }.buttonStyle(.plain)
     }
 
     // MARK: - Font Size
     private var fontSizeRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                label("FONT SIZE")
-                Spacer()
-                Text("\(Int(fontSize))pt")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                label("FONT SIZE"); Spacer()
+                Text("\(Int(fontSize))pt").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
                 Button { fontSize = max(10, fontSize - 2) } label: {
@@ -147,7 +138,7 @@ struct EditTextSheet: View {
         }
     }
 
-    // MARK: - Font Style (bold / italic / underline)
+    // MARK: - Style
     private var fontStyleRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             label("STYLE")
@@ -169,8 +160,7 @@ struct EditTextSheet: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 10)
                 .fill(isOn.wrappedValue ? Color.accentColor : Color.secondary.opacity(0.12)))
-        }
-        .buttonStyle(.plain)
+        }.buttonStyle(.plain)
     }
 
     // MARK: - Alignment
@@ -196,14 +186,13 @@ struct EditTextSheet: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 10)
                 .fill(active ? Color.accentColor : Color.secondary.opacity(0.12)))
-        }
-        .buttonStyle(.plain)
+        }.buttonStyle(.plain)
     }
 
-    // MARK: - Color
+    // MARK: - Text Color
     private var colorRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            label("COLOR")
+            label("TEXT COLOR")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(TextStyle.colorOptions, id: \.name) { option in
@@ -217,11 +206,127 @@ struct EditTextSheet: View {
                                         .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
                                 }
                             }
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.vertical, 2)
+            }
+        }
+    }
+
+    // MARK: - Card
+    private var cardRow: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            label("CARD")
+
+            // Background
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Background").font(.subheadline.weight(.medium))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button { bgColorName = "none" } label: {
+                            ZStack {
+                                Circle().fill(Color.clear).frame(width: 32, height: 32)
+                                    .overlay(Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1.5))
+                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                                if bgColorName == "none" {
+                                    Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
+                                }
+                            }
+                        }.buttonStyle(.plain)
+
+                        ForEach(cardColorOptions, id: \.name) { option in
+                            Button { bgColorName = option.name } label: {
+                                ZStack {
+                                    Circle().fill(option.color).frame(width: 32, height: 32)
+                                        .shadow(color: .black.opacity(0.1), radius: 2)
+                                    if bgColorName == option.name {
+                                        Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                                    }
+                                }
+                            }.buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                    }.padding(.vertical, 2)
+                }
+            }
+
+            // Border color
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Border Color").font(.subheadline.weight(.medium))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button { strokeColorName = "none" } label: {
+                            ZStack {
+                                Circle().fill(Color.clear).frame(width: 32, height: 32)
+                                    .overlay(Circle().strokeBorder(Color.secondary.opacity(0.4), lineWidth: 1.5))
+                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                                if strokeColorName == "none" {
+                                    Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
+                                }
+                            }
+                        }.buttonStyle(.plain)
+
+                        ForEach(cardColorOptions, id: \.name) { option in
+                            Button { strokeColorName = option.name } label: {
+                                ZStack {
+                                    Circle().fill(option.color).frame(width: 32, height: 32)
+                                        .shadow(color: .black.opacity(0.1), radius: 2)
+                                    if strokeColorName == option.name {
+                                        Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                                    }
+                                }
+                            }.buttonStyle(.plain)
+                        }
+                    }.padding(.vertical, 2)
+                }
+            }
+
+            // Border width
+            if strokeColorName != "none" {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Border Width").font(.subheadline.weight(.medium))
+                    HStack(spacing: 8) {
+                        ForEach([1.0, 2.0, 3.0, 5.0], id: \.self) { w in
+                            Button { strokeWidth = w } label: {
+                                Text("\(Int(w))pt")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(strokeWidth == w ? .white : .primary)
+                                    .padding(.horizontal, 14).padding(.vertical, 8)
+                                    .background(Capsule()
+                                        .fill(strokeWidth == w ? Color.accentColor : Color.secondary.opacity(0.12)))
+                            }.buttonStyle(.plain)
+                        }
                     }
                 }
-                .padding(.vertical, 2)
+            }
+
+            // Live preview
+            if bgColorName != "none" || strokeColorName != "none" {
+                HStack {
+                    Spacer()
+                    Text(text.isEmpty ? "Preview" : String(text.prefix(20)))
+                        .font(previewFont)
+                        .foregroundStyle(colorFromName(selectedColor))
+                        .padding(12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(bgColorName != "none"
+                                      ? (cardColorFromName(bgColorName) ?? Color.clear)
+                                      : Color.clear)
+                                .overlay(
+                                    strokeColorName != "none"
+                                    ? RoundedRectangle(cornerRadius: 8)
+                                        .strokeBorder(cardColorFromName(strokeColorName) ?? Color.clear,
+                                                      lineWidth: strokeWidth)
+                                    : nil
+                                )
+                        )
+                    Spacer()
+                }
+                .padding(.top, 4)
             }
         }
     }
@@ -231,36 +336,53 @@ struct EditTextSheet: View {
         Button {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            element.text        = trimmed
-            element.fontSize    = fontSize
-            element.isBold      = isBold
-            element.isItalic    = isItalic
-            element.isUnderline = isUnderline
-            element.textAlignment = alignment
-            element.colorName   = selectedColor
-            element.fontName    = selectedFont
+            element.text            = trimmed
+            element.fontSize        = fontSize
+            element.isBold          = isBold
+            element.isItalic        = isItalic
+            element.isUnderline     = isUnderline
+            element.textAlignment   = alignment
+            element.colorName       = selectedColor
+            element.fontName        = selectedFont
+            element.bgColorName     = bgColorName
+            element.strokeColorName = strokeColorName
+            element.strokeWidth     = strokeWidth
+            element.updatedAt       = Date()
             try? context.save()
             Task { await TextSyncService.shared.upsert(element) }
             dismiss()
         } label: {
             let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             Text("Save Changes")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
+                .font(.body.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 14)
                 .background(empty ? Color.secondary.opacity(0.2) : Color.accentColor)
                 .foregroundStyle(empty ? Color.secondary : Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 24).padding(.vertical, 16)
     }
 
+    // MARK: - Helpers
     private func label(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .tracking(1)
+        Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary).tracking(1)
     }
+
+    private func colorFromName(_ name: String) -> Color {
+        TextStyle.colorOptions.first { $0.name == name }?.color ?? .primary
+    }
+
+    private func cardColorFromName(_ name: String) -> Color? {
+        guard name != "none" else { return nil }
+        return cardColorOptions.first { $0.name == name }?.color
+    }
+
+    private let cardColorOptions: [(name: String, color: Color)] = [
+        ("red",    .red),    ("orange", .orange),
+        ("yellow", Color(red: 1, green: 0.85, blue: 0)),
+        ("green",  .green),  ("blue",   .blue),
+        ("purple", .purple), ("pink",   .pink),
+        ("teal",   .teal),   ("white",  .white),
+        ("black",  Color(white: 0.1)), ("gray", Color(white: 0.5)),
+    ]
 }

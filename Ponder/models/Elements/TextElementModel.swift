@@ -17,30 +17,36 @@ class TextElementModel: LayerableElement {
     var fontSize: Double
     var isBold: Bool
     var isItalic: Bool
-    // NEW — default false for safe SwiftData migration
     var isUnderline: Bool = false
     var colorName: String
     var fontName: String = "system"
-    // NEW — "leading" / "center" / "trailing", default "leading"
     var alignmentRaw: String = "leading"
     var zIndex: Int = 0
     var updatedAt: Date = Date()
 
+    // Card background & stroke — default "none" = no card
+    var bgColorName: String     = "none"
+    var strokeColorName: String = "none"
+    var strokeWidth: Double     = 2.0
+
     init(canvasID: UUID, text: String = "", x: Double = 0, y: Double = 0) {
-        self.id          = UUID()
-        self.canvasID    = canvasID
-        self.text        = text
-        self.x           = x
-        self.y           = y
-        self.fontSize    = 16
-        self.isBold      = false
-        self.isItalic    = false
-        self.isUnderline = false
-        self.colorName   = "primary"
-        self.fontName    = "system"
-        self.alignmentRaw = "leading"
-        self.zIndex      = 0
-        self.updatedAt   = Date()
+        self.id             = UUID()
+        self.canvasID       = canvasID
+        self.text           = text
+        self.x              = x
+        self.y              = y
+        self.fontSize       = 16
+        self.isBold         = false
+        self.isItalic       = false
+        self.isUnderline    = false
+        self.colorName      = "primary"
+        self.fontName       = "system"
+        self.alignmentRaw   = "leading"
+        self.zIndex         = 0
+        self.updatedAt      = Date()
+        self.bgColorName     = "none"
+        self.strokeColorName = "none"
+        self.strokeWidth     = 2.0
     }
 
     // MARK: - Computed helpers
@@ -70,11 +76,13 @@ class TextElementModel: LayerableElement {
         }
     }
 
+    var hasCard: Bool { bgColorName != "none" || strokeColorName != "none" }
+
     // MARK: - LayerableElement
     var layerTitle: String {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? "Text" : String(t.prefix(28))
     }
-    var layerIcon:  String { "textformat" }
-    var layerTint:  Color  { .blue }
+    var layerIcon: String { "textformat" }
+    var layerTint: Color  { .blue }
 }

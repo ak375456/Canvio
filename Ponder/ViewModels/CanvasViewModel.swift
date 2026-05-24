@@ -15,15 +15,17 @@ class CanvasViewModel: ObservableObject {
     @Published var lastScale: CGFloat = 1.0
     @Published var showTextSheet: Bool = false
     @Published var showShapePicker: Bool = false
-    @Published var showImagePicker: Bool = false         // PhotosPicker (library)
-    @Published var showImageSourcePicker: Bool = false   // Camera vs Photos chooser (iOS only)
-    @Published var showCameraPicker: Bool = false        // UIImagePickerController camera (iOS only)
+    @Published var showSymbolPicker: Bool = false          // ← NEW
+    @Published var showImagePicker: Bool = false
+    @Published var showImageSourcePicker: Bool = false
+    @Published var showCameraPicker: Bool = false
     @Published var showPDFPicker: Bool = false
     @Published var showAudioPicker: Bool = false
     @Published var showAudioRecorder: Bool = false
     @Published var showAudioImporter: Bool = false
     @Published var showCanvasDrawingOverlay: Bool = false
     @Published var pendingShapeLocation: CGPoint? = nil
+    @Published var pendingSymbolLocation: CGPoint? = nil   // ← NEW
     @Published var pendingImageLocation: CGPoint? = nil
     @Published var pendingPDFLocation: CGPoint? = nil
     @Published var pendingAudioLocation: CGPoint? = nil
@@ -36,7 +38,6 @@ class CanvasViewModel: ObservableObject {
     @Published var showTableCSVImporter: Bool = false
     @Published var pendingCSVTableID: UUID? = nil
 
-
     let textVM      = TextElementViewModel()
     let stickyVM    = StickyNoteViewModel()
     let todoVM      = TodoListViewModel()
@@ -47,16 +48,14 @@ class CanvasViewModel: ObservableObject {
     let audioVM     = AudioElementViewModel()
     let drawingVM   = DrawingElementViewModel()
     let connectorVM = ConnectorViewModel()
+    let symbolVM    = SymbolElementViewModel()             // ← NEW
 
-    // MARK: - Undo/Redo
     let undoManager = CanvasUndoManager()
-
-    // MARK: - Multi-select
-    let selection = SelectionViewModel()
+    let selection   = SelectionViewModel()
 
     func handleDragChange(_ value: DragGesture.Value) {
         offset = CGSize(
-            width: lastOffset.width + value.translation.width,
+            width:  lastOffset.width  + value.translation.width,
             height: lastOffset.height + value.translation.height
         )
     }
@@ -64,19 +63,19 @@ class CanvasViewModel: ObservableObject {
     func handleDragEnd() { lastOffset = offset }
 
     func handleMagnification(_ magnification: CGFloat, focalPoint: CGPoint) {
-        let newScale = max(0.3, min(lastScale * magnification, 5.0))
+        let newScale   = max(0.3, min(lastScale * magnification, 5.0))
         let scaleDelta = newScale / scale
         let dx = focalPoint.x - offset.width
         let dy = focalPoint.y - offset.height
         offset = CGSize(
-            width: focalPoint.x - dx * scaleDelta,
+            width:  focalPoint.x - dx * scaleDelta,
             height: focalPoint.y - dy * scaleDelta
         )
         scale = newScale
     }
 
     func handleMagnificationEnd() {
-        lastScale = scale
+        lastScale  = scale
         lastOffset = offset
     }
 
@@ -84,7 +83,7 @@ class CanvasViewModel: ObservableObject {
     func hideAddMenu() { addMenuPosition = nil }
 
     func centerOn(canvasPoint: CGPoint, viewportSize: CGSize) {
-        let x = viewportSize.width / 2 - canvasPoint.x * scale
+        let x = viewportSize.width  / 2 - canvasPoint.x * scale
         let y = viewportSize.height / 2 - canvasPoint.y * scale
         withAnimation(.spring(duration: 0.4)) {
             offset = CGSize(width: x, height: y)
@@ -94,10 +93,10 @@ class CanvasViewModel: ObservableObject {
 
     func clampOffset(to boundary: CGSize, viewportSize: CGSize, scale: CGFloat) {
         guard boundary != .zero else { return }
-        let scaledW = boundary.width * scale
-        let scaledH = boundary.height * scale
+        let scaledW    = boundary.width  * scale
+        let scaledH    = boundary.height * scale
         let overscroll = max(viewportSize.width, viewportSize.height) / 2
-        let minX = viewportSize.width - scaledW - overscroll
+        let minX = viewportSize.width  - scaledW - overscroll
         let maxX = overscroll
         let minY = viewportSize.height - scaledH - overscroll
         let maxY = overscroll
@@ -113,14 +112,14 @@ class CanvasViewModel: ObservableObject {
     func centerPage(boundary: CGSize, viewportSize: CGSize) {
         guard boundary != .zero, viewportSize.width > 0, viewportSize.height > 0 else { return }
         let padding: CGFloat = 40
-        let scaleX = (viewportSize.width - padding * 2) / boundary.width
-        let scaleY = (viewportSize.height - padding * 2) / boundary.height
+        let scaleX   = (viewportSize.width  - padding * 2) / boundary.width
+        let scaleY   = (viewportSize.height - padding * 2) / boundary.height
         let fitScale = min(scaleX, scaleY, 1.0)
-        scale = fitScale
-        lastScale = fitScale
-        let x = (viewportSize.width - boundary.width * fitScale) / 2
+        scale      = fitScale
+        lastScale  = fitScale
+        let x = (viewportSize.width  - boundary.width  * fitScale) / 2
         let y = (viewportSize.height - boundary.height * fitScale) / 2
-        offset = CGSize(width: x, height: y)
+        offset     = CGSize(width: x, height: y)
         lastOffset = offset
     }
 }

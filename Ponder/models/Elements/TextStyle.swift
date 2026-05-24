@@ -14,6 +14,9 @@ struct TextStyle {
     var isItalic: Bool
     var colorName: String
     var fontName: String = "system"
+    var bgColorName:     String = "none"
+    var strokeColorName: String = "none"
+    var strokeWidth:     Double = 2.0
 
     static let colorOptions: [(name: String, color: Color)] = [
         ("primary", .primary),
