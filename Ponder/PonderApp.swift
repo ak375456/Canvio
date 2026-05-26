@@ -12,6 +12,7 @@ import Combine
 struct PonderApp: App {
     @StateObject private var settings       = AppSettings()
     @StateObject private var networkMonitor = NetworkMonitor.shared
+    @StateObject private var proManager     = ProManager.shared
 
     init() {
         registerCustomFonts()
@@ -34,6 +35,7 @@ struct PonderApp: App {
             SyncCoordinatorView()
                 .environmentObject(settings)
                 .environmentObject(networkMonitor)
+                .environmentObject(proManager)
                 .preferredColorScheme(settings.theme.colorScheme)
         }
         .modelContainer(for: [
@@ -58,6 +60,7 @@ struct PonderApp: App {
 private struct SyncCoordinatorView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var auth = AuthService.shared
+    @ObservedObject private var pro = ProManager.shared
 
     private let accountCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -77,14 +80,17 @@ private struct SyncCoordinatorView: View {
                     #endif
                 }())
             ) { _ in
+                Task { await pro.refreshStatus() }
                 guard auth.currentUser != nil else { return }
                 Task { await auth.checkAccountStillExists(context: modelContext) }
             }
     }
 
     private func restoreAndSync() async {
+        await ProManager.shared.refreshStatus()
         await AuthService.shared.restoreSession()
-        guard AuthService.shared.currentUser != nil else { return }
+        guard ProManager.shared.isPro,
+              AuthService.shared.currentUser != nil else { return }
 
         await CanvasSyncService.shared.flushQueue()
         await TextSyncService.shared.flushQueue()

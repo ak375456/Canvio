@@ -64,7 +64,7 @@ final class TextSyncService {
     // MARK: - Upsert
 
     func upsert(_ element: TextElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
 
         guard network.isConnected else {
@@ -90,7 +90,7 @@ final class TextSyncService {
     // MARK: - Soft delete
 
     func delete(_ element: TextElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let elementID = element.id.uuidString
         let now       = iso.string(from: Date())
 
@@ -122,7 +122,7 @@ final class TextSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [TextElementRow] = try await supabase

@@ -70,9 +70,13 @@ class StickyNoteViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(note: StickyNoteModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
-        let copy = StickyNoteModel(canvasID: note.canvasID, x: note.x + 30, y: note.y + 30)
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let copy = StickyNoteModel(canvasID: note.canvasID,
+                                   x: note.x + Double(offset.width),
+                                   y: note.y + Double(offset.height))
         copy.text = note.text; copy.colorName = note.colorName
         copy.fontSize = note.fontSize; copy.isBold = note.isBold
         copy.isItalic = note.isItalic; copy.width = note.width
@@ -89,12 +93,15 @@ class StickyNoteViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = StickyNoteModel(canvasID: note.canvasID, x: note.x + 30, y: note.y + 30)
+                let el = StickyNoteModel(canvasID: note.canvasID,
+                                         x: note.x + Double(offset.width),
+                                         y: note.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await StickyNoteSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     func updateSize(note: StickyNoteModel, width: Double, height: Double,

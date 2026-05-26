@@ -101,11 +101,14 @@ class TableElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(table: TableElementModel, cells: [TableCellModel], zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let copy = TableElementModel(canvasID: table.canvasID,
                                      rows: table.rowCount, cols: table.colCount,
-                                     x: table.x + 30, y: table.y + 30)
+                                     x: table.x + Double(offset.width),
+                                     y: table.y + Double(offset.height))
         copy.cellWidth = table.cellWidth; copy.cellHeight = table.cellHeight
         copy.showColHeaders = table.showColHeaders; copy.showRowHeaders = table.showRowHeaders
         copy.zIndex = zIndex
@@ -139,7 +142,8 @@ class TableElementViewModel: ObservableObject {
             redo: {
                 let el = TableElementModel(canvasID: table.canvasID,
                                            rows: table.rowCount, cols: table.colCount,
-                                           x: table.x + 30, y: table.y + 30)
+                                           x: table.x + Double(offset.width),
+                                           y: table.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el)
                 var redoCells: [TableCellModel] = []
@@ -157,6 +161,7 @@ class TableElementViewModel: ObservableObject {
                 }
             }
         ))
+        return id
     }
 
     func selectTable(id: UUID) { selectedTableID = id; selectedCellID = nil; editingCellID = nil }

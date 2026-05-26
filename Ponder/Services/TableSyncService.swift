@@ -95,7 +95,7 @@ final class TableSyncService {
     // MARK: - Upsert Table
 
     func upsertTable(_ table: TableElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeTableRow(table: table, userID: userID)
 
         guard network.isConnected else {
@@ -121,7 +121,7 @@ final class TableSyncService {
     // MARK: - Delete Table (soft-deletes all cells first)
 
     func deleteTable(_ table: TableElementModel, cells: [TableCellModel]) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         // Soft-delete all cells first
         for cell in cells {
@@ -158,7 +158,7 @@ final class TableSyncService {
     // MARK: - Upsert Cell
 
     func upsertCell(_ cell: TableCellModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeCellRow(cell: cell, userID: userID)
 
         guard network.isConnected else {
@@ -192,7 +192,7 @@ final class TableSyncService {
     // MARK: - Delete Cell
 
     func deleteCell(_ cell: TableCellModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let cellID = cell.id.uuidString
         let now    = iso.string(from: Date())
 
@@ -224,7 +224,7 @@ final class TableSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         // Pull tables
         do {

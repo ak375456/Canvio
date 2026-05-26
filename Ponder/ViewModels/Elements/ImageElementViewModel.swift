@@ -81,8 +81,10 @@ class ImageElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(element: ImageElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let newFileName: String
         do {
             let srcURL = ImageStorageService.url(for: element.imageFileName)
@@ -93,10 +95,11 @@ class ImageElementViewModel: ObservableObject {
             newFileName = newName
         } catch {
             print("⚠️ Failed to copy image for duplicate: \(error)")
-            return
+            return nil
         }
         let copy = ImageElementModel(canvasID: element.canvasID, imageFileName: newFileName,
-                                     x: element.x + 30, y: element.y + 30,
+                                     x: element.x + Double(offset.width),
+                                     y: element.y + Double(offset.height),
                                      width: element.width, height: element.height)
         copy.cornerRadius = element.cornerRadius; copy.opacity = element.opacity
         copy.zIndex = zIndex
@@ -114,13 +117,15 @@ class ImageElementViewModel: ObservableObject {
             },
             redo: {
                 let el = ImageElementModel(canvasID: element.canvasID, imageFileName: newFileName,
-                                           x: element.x + 30, y: element.y + 30,
+                                           x: element.x + Double(offset.width),
+                                           y: element.y + Double(offset.height),
                                            width: element.width, height: element.height)
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             }
         ))
+        return id
     }
 
     func updateSize(element: ImageElementModel, width: Double, height: Double,

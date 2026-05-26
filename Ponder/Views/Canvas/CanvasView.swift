@@ -43,6 +43,8 @@ struct CanvasView: View {
     @State private var showPDFImporter = false
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
+    @State private var isCanvasGestureActive = false
+    @State private var canvasGestureSuppressionID = UUID()
     #if os(iOS)
     @State private var keyboardAvoidanceOffset: CGFloat = 0
     #endif
@@ -103,6 +105,32 @@ struct CanvasView: View {
         return map
     }
 
+    private var activeSelectedElementID: UUID? {
+        vm.textVM.editingID
+        ?? vm.stickyVM.editingID
+        ?? vm.todoVM.editingID
+        ?? vm.shapeVM.editingID
+        ?? vm.imageVM.editingID
+        ?? vm.pdfVM.editingID
+        ?? vm.tableVM.selectedTableID
+        ?? vm.audioVM.editingID
+        ?? vm.drawingVM.editingID
+        ?? vm.symbolVM.editingID
+    }
+
+    private var selectedElementGestureFrame: CGRect? {
+        guard let id = activeSelectedElementID,
+              let bounds = boundsMap[id] else { return nil }
+
+        let width  = CGFloat(bounds.width) * vm.scale
+        let height = CGFloat(bounds.height) * vm.scale
+        let x = CGFloat(bounds.cx) * vm.scale + vm.offset.width - width / 2
+        let y = CGFloat(bounds.cy) * vm.scale + vm.offset.height - height / 2
+
+        return CGRect(x: x, y: y, width: width, height: height)
+            .insetBy(dx: -44, dy: -80)
+    }
+
     init(canvas: CanvasModel, onDelete: @escaping () -> Void, onRename: @escaping (String) -> Void) {
         self.canvas   = canvas
         self.onDelete = onDelete
@@ -114,9 +142,10 @@ struct CanvasView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
 
-                CanvasGridView(offset: vm.offset, scale: vm.scale, style: settings.gridStyle)
+                CanvasGridView(offset: vm.offset, scale: vm.scale, style: settings.effectiveGridStyle)
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        guard !isCanvasGestureActive else { return }
                         if selection.isMultiSelectActive || vm.connectorVM.isConnectModeActive {
                         } else {
                             dismissEverything()
@@ -127,7 +156,8 @@ struct CanvasView: View {
                             .onEnded { tap in
                                 guard !selection.isMultiSelectActive,
                                       !vm.showCanvasDrawingOverlay,
-                                      !vm.connectorVM.isConnectModeActive else { return }
+                                      !vm.connectorVM.isConnectModeActive,
+                                      !isCanvasGestureActive else { return }
                                 dismissEverything()
                                 let pt = tap.location
                                 let canvasX = (pt.x - vm.offset.width)  / vm.scale
@@ -142,18 +172,21 @@ struct CanvasView: View {
                             }
                     )
                     .onLongPressGesture(minimumDuration: 0.5) {
-                        guard !vm.connectorVM.isConnectModeActive else { return }
+                        guard !vm.connectorVM.isConnectModeActive,
+                              !isCanvasGestureActive else { return }
                         if !selection.isMultiSelectActive {
                             dismissEverything()
                             withAnimation(.spring(duration: 0.3)) { selection.enterMultiSelect() }
                         }
                     }
+                    #if os(macOS)
                     .gesture(
                         SimultaneousGesture(
                             canvasPanGesture(geo: geo),
                             canvasMagnifyGesture(geo: geo)
                         )
                     )
+                    #endif
 
                 if !canvas.isInfinite { pageBoundaryOverlay(geo: geo) }
 
@@ -186,8 +219,47 @@ struct CanvasView: View {
                 .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
                 .offset(vm.offset)
+                #if os(macOS)
                 .gesture(canvasPanGesture(geo: geo))
                 .simultaneousGesture(canvasMagnifyGesture(geo: geo))
+                #endif
+
+                #if os(iOS)
+                CanvasGestureBridge(
+                    isEnabled: !vm.showCanvasDrawingOverlay,
+                    selectedElementFrame: selectedElementGestureFrame,
+                    onPanChanged: { translation in
+                        vm.offset = CGSize(
+                            width: vm.lastOffset.width + translation.width,
+                            height: vm.lastOffset.height + translation.height
+                        )
+                    },
+                    onPanEnded: {
+                        vm.handleDragEnd()
+                        if !canvas.isInfinite {
+                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                        }
+                    },
+                    onPinchBegan: {
+                        beginCanvasGestureSuppression()
+                        vm.lastScale = vm.scale
+                        vm.lastOffset = vm.offset
+                    },
+                    onPinchChanged: { magnification, focal in
+                        beginCanvasGestureSuppression()
+                        vm.handleMagnification(magnification, focalPoint: focal)
+                    },
+                    onPinchEnded: {
+                        vm.handleMagnificationEnd()
+                        if !canvas.isInfinite {
+                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                        }
+                        endCanvasGestureSuppression()
+                    }
+                )
+                .frame(width: geo.size.width, height: geo.size.height)
+                .allowsHitTesting(false)
+                #endif
 
                 if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive {
                     toolbarLayer(geo: geo)
@@ -656,6 +728,7 @@ struct CanvasView: View {
     private func canvasMagnifyGesture(geo: GeometryProxy) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
+                beginCanvasGestureSuppression()
                 let focal = CGPoint(x: value.startAnchor.x * geo.size.width,
                                     y: value.startAnchor.y * geo.size.height)
                 vm.handleMagnification(value.magnification, focalPoint: focal)
@@ -665,7 +738,24 @@ struct CanvasView: View {
                 if !canvas.isInfinite {
                     vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                 }
+                endCanvasGestureSuppression()
             }
+    }
+
+    private func beginCanvasGestureSuppression() {
+        canvasGestureSuppressionID = UUID()
+        isCanvasGestureActive = true
+    }
+
+    private func endCanvasGestureSuppression() {
+        let token = UUID()
+        canvasGestureSuppressionID = token
+        isCanvasGestureActive = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            if canvasGestureSuppressionID == token {
+                isCanvasGestureActive = false
+            }
+        }
     }
 
     private func startCanvasDrawing() {
@@ -769,34 +859,40 @@ struct CanvasView: View {
                 TextElementView(element: text, canvasScale: vm.scale, canvasBoundary: boundary,
                                 vm: vm.textVM, isMultiSelectMode: multiSelect,
                                 isSelectedInMultiSelect: isElemSelected,
-                                onExternalTap: { dismissEverything() })
+                                onExternalTap: { dismissEverything() },
+                                isCanvasGestureActive: isCanvasGestureActive)
             } else if let sticky = element as? StickyNoteModel {
                 StickyNoteView(note: sticky, canvasScale: vm.scale, canvasBoundary: boundary,
                                vm: vm.stickyVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
-                               onExternalTap: { dismissEverything() })
+                               onExternalTap: { dismissEverything() },
+                               isCanvasGestureActive: isCanvasGestureActive)
             } else if let todo = element as? TodoListModel {
                 TodoListView(list: todo, allTasks: todoTasks, canvasScale: vm.scale,
                              canvasBoundary: boundary, vm: vm.todoVM,
                              isMultiSelectMode: multiSelect,
                              isSelectedInMultiSelect: isElemSelected,
-                             onExternalTap: { dismissEverything() })
+                             onExternalTap: { dismissEverything() },
+                             isCanvasGestureActive: isCanvasGestureActive)
             } else if let shape = element as? ShapeElementModel {
                 ShapeElementView(shape: shape, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.shapeVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
-                                 onExternalTap: { dismissEverything() })
+                                 onExternalTap: { dismissEverything() },
+                                 isCanvasGestureActive: isCanvasGestureActive)
             } else if let img = element as? ImageElementModel {
                 ImageElementView(element: img, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
-                                 onExternalTap: { dismissEverything() })
+                                 onExternalTap: { dismissEverything() },
+                                 isCanvasGestureActive: isCanvasGestureActive)
             } else if let pdf = element as? PDFElementModel {
                 PDFElementView(element: pdf, canvasScale: vm.scale, canvasBoundary: boundary,
                                vm: vm.pdfVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onOpenReader: { openPDFElement = pdf; showPDFReader = true },
-                               onExternalTap: { dismissEverything() })
+                               onExternalTap: { dismissEverything() },
+                               isCanvasGestureActive: isCanvasGestureActive)
             } else if let table = element as? TableElementModel {
                 TableElementView(
                     table: table, allCells: tableCells,
@@ -811,30 +907,44 @@ struct CanvasView: View {
                         showCSVExporter = true
                     },
                     onExternalTap: { dismissEverything() },
-                    onMultiSelectTap: { selection.toggle(table.id) })
+                    onMultiSelectTap: { selection.toggle(table.id) },
+                    isCanvasGestureActive: isCanvasGestureActive)
             } else if let audio = element as? AudioElementModel {
                 AudioElementView(element: audio, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.audioVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
-                                 onExternalTap: { dismissEverything() })
+                                 onExternalTap: { dismissEverything() },
+                                 isCanvasGestureActive: isCanvasGestureActive)
             } else if let drawing = element as? DrawingElementModel {
                 DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
-                                   onExternalTap: { dismissEverything() })
+                                   onExternalTap: { dismissEverything() },
+                                   isCanvasGestureActive: isCanvasGestureActive)
             } else if let symbol = element as? SymbolElementModel {
                 // ── NEW ────────────────────────────────────────────────────────
                 SymbolElementView(element: symbol, canvasScale: vm.scale, canvasBoundary: boundary,
                                   vm: vm.symbolVM, isMultiSelectMode: multiSelect,
                                   isSelectedInMultiSelect: isElemSelected,
-                                  onExternalTap: { dismissEverything() })
+                                  onExternalTap: { dismissEverything() },
+                                  isCanvasGestureActive: isCanvasGestureActive)
             }
         }
         .opacity(layersVM.highlightedID == element.id ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
-            multiSelect ? TapGesture().onEnded { selection.toggle(element.id) } : nil
+            multiSelect ? nil : LongPressGesture(minimumDuration: 0.5)
+                .onEnded { _ in
+                    guard !isCanvasGestureActive else { return }
+                    duplicateElement(element, offset: .zero)
+                }
+        )
+        .highPriorityGesture(
+            multiSelect ? TapGesture().onEnded {
+                guard !isCanvasGestureActive else { return }
+                selection.toggle(element.id)
+            } : nil
         )
     }
 
@@ -1042,19 +1152,83 @@ struct CanvasView: View {
     private func duplicateSelected() {
         var z = LayersViewModel.nextZ(among: allLayerableElements)
         for id in selection.selectedIDs {
-            if let el = textElements.first(where:       { $0.id == id }) { vm.textVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = stickyNotes.first(where:   { $0.id == id }) { vm.stickyVM.duplicate(note: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = todoLists.first(where:     { $0.id == id }) { vm.todoVM.duplicate(list: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = shapes.first(where:        { $0.id == id }) { vm.shapeVM.duplicate(shape: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = images.first(where:        { $0.id == id }) { vm.imageVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = pdfs.first(where:          { $0.id == id }) { vm.pdfVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.duplicate(table: el, cells: tableCells, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }
-            else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.duplicate(element: el, zIndex: z, context: context, undoManager: vm.undoManager) }  // ← NEW
+            if let element = layerableElement(withID: id) {
+                duplicateElement(element, zIndex: z, selectCopy: false)
+            }
             z += 1
         }
         withAnimation(.spring(duration: 0.3)) { selection.exit() }
+    }
+
+    @discardableResult
+    private func duplicateElement(_ element: any LayerableElement,
+                                  zIndex: Int? = nil,
+                                  offset: CGSize = CGSize(width: 30, height: 30),
+                                  selectCopy: Bool = true) -> UUID? {
+        guard !vm.showCanvasDrawingOverlay,
+              !vm.connectorVM.isConnectModeActive else { return nil }
+
+        if selectCopy { dismissEverything() }
+
+        let z = zIndex ?? LayersViewModel.nextZ(among: allLayerableElements)
+        var duplicatedID: UUID?
+        if let el = element as? TextElementModel {
+            duplicatedID = vm.textVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.textVM.editingID = duplicatedID
+            }
+        } else if let el = element as? StickyNoteModel {
+            duplicatedID = vm.stickyVM.duplicate(note: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.stickyVM.editingID = duplicatedID
+            }
+        } else if let el = element as? TodoListModel {
+            duplicatedID = vm.todoVM.duplicate(list: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.todoVM.editingID = duplicatedID
+            }
+        } else if let el = element as? ShapeElementModel {
+            duplicatedID = vm.shapeVM.duplicate(shape: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.shapeVM.editingID = duplicatedID
+            }
+        } else if let el = element as? ImageElementModel {
+            duplicatedID = vm.imageVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.imageVM.editingID = duplicatedID
+            }
+        } else if let el = element as? PDFElementModel {
+            duplicatedID = vm.pdfVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.pdfVM.editingID = duplicatedID
+            }
+        } else if let el = element as? TableElementModel {
+            duplicatedID = vm.tableVM.duplicate(table: el, cells: tableCells, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.tableVM.selectTable(id: duplicatedID)
+            }
+        } else if let el = element as? AudioElementModel {
+            duplicatedID = vm.audioVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.audioVM.editingID = duplicatedID
+            }
+        } else if let el = element as? DrawingElementModel {
+            duplicatedID = vm.drawingVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.drawingVM.editingID = duplicatedID
+                vm.drawingVM.isDrawingModeActive = false
+            }
+        } else if let el = element as? SymbolElementModel {
+            duplicatedID = vm.symbolVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.symbolVM.editingID = duplicatedID
+            }
+        }
+        return duplicatedID
+    }
+
+    private func layerableElement(withID id: UUID) -> (any LayerableElement)? {
+        allLayerableElements.first { $0.id == id }
     }
 
     private func deleteSelected() {

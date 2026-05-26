@@ -21,7 +21,7 @@ final class AuthService: NSObject, ObservableObject {
     @Published var errorMessage: String? = nil
 
     /// True when the user tapped "Continue without account".
-    @Published var isGuest: Bool = false
+    @Published var isGuest: Bool = true
 
     /// Set to true when account was remotely deleted — triggers UI reset
     @Published var wasRemotelyDeleted: Bool = false
@@ -31,11 +31,16 @@ final class AuthService: NSObject, ObservableObject {
 
     private override init() { super.init() }
 
+    var syncUserID: String? {
+        guard ProManager.shared.isPro else { return nil }
+        return currentUser?.id.uuidString
+    }
+
     // MARK: - Session restore
 
     func restoreSession() async {
         do {
-            let session = try await supabase.auth.session
+            _ = try await supabase.auth.session
             // Verify the account still exists on the server.
             // If deleted from another device, getUser() throws an auth error.
             do {
@@ -50,7 +55,8 @@ final class AuthService: NSObject, ObservableObject {
             }
         } catch {
             currentUser = nil
-            isGuest = UserDefaults.standard.bool(forKey: "ponder.isGuest")
+            isGuest = true
+            UserDefaults.standard.set(true, forKey: "ponder.isGuest")
         }
     }
 
@@ -85,13 +91,14 @@ final class AuthService: NSObject, ObservableObject {
     func forceLocalLogout() async {
         try? await supabase.auth.signOut()
         currentUser = nil
-        isGuest     = false
-        UserDefaults.standard.set(false, forKey: "ponder.isGuest")
+        isGuest     = true
+        UserDefaults.standard.set(true, forKey: "ponder.isGuest")
     }
 
     // MARK: - Guest mode
 
     func continueAsGuest() {
+        guard currentUser == nil else { return }
         isGuest = true
         UserDefaults.standard.set(true, forKey: "ponder.isGuest")
     }
@@ -173,8 +180,8 @@ final class AuthService: NSObject, ObservableObject {
             errorMessage = "Sign out failed: \(error.localizedDescription)"
         }
         currentUser = nil
-        isGuest     = false
-        UserDefaults.standard.set(false, forKey: "ponder.isGuest")
+        isGuest     = true
+        UserDefaults.standard.set(true, forKey: "ponder.isGuest")
     }
 
     // MARK: - Delete account
@@ -201,8 +208,8 @@ final class AuthService: NSObject, ObservableObject {
 
         try? await supabase.auth.signOut()
         currentUser = nil
-        isGuest     = false
-        UserDefaults.standard.set(false, forKey: "ponder.isGuest")
+        isGuest     = true
+        UserDefaults.standard.set(true, forKey: "ponder.isGuest")
 
         return nil
     }
@@ -306,6 +313,8 @@ final class AuthService: NSObject, ObservableObject {
                         UserDefaults.standard.set(false, forKey: "ponder.isGuest")
                     case .signedOut:
                         self.currentUser = nil
+                        self.isGuest = true
+                        UserDefaults.standard.set(true, forKey: "ponder.isGuest")
                     default:
                         break
                     }

@@ -213,11 +213,14 @@ class TextElementViewModel: ObservableObject {
 
     // MARK: - Duplicate
 
+    @discardableResult
     func duplicate(element: TextElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let copy = TextElementModel(canvasID: element.canvasID,
                                     text: element.text,
-                                    x: element.x + 30, y: element.y + 30)
+                                    x: element.x + Double(offset.width),
+                                    y: element.y + Double(offset.height))
         copy.fontSize       = element.fontSize
         copy.isBold         = element.isBold
         copy.isItalic       = element.isItalic
@@ -245,12 +248,14 @@ class TextElementViewModel: ObservableObject {
             redo: {
                 let el = TextElementModel(canvasID: element.canvasID,
                                           text: element.text,
-                                          x: element.x + 30, y: element.y + 30)
+                                          x: element.x + Double(offset.width),
+                                          y: element.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex; el.updatedAt = Date()
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     // MARK: - Delete

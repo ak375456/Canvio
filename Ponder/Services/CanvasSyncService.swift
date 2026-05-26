@@ -56,10 +56,10 @@ final class CanvasSyncService {
     // Waits up to 3 seconds for session restore before giving up.
 
     private func resolveUserID() async -> String? {
-        if let id = AuthService.shared.currentUser?.id.uuidString { return id }
+        if let id = AuthService.shared.syncUserID { return id }
         for _ in 0..<6 {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-            if let id = AuthService.shared.currentUser?.id.uuidString { return id }
+            if let id = AuthService.shared.syncUserID { return id }
         }
         return nil
     }
@@ -93,7 +93,7 @@ final class CanvasSyncService {
     // MARK: - Soft delete
 
     func delete(_ canvas: CanvasModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let canvasID = canvas.id.uuidString
         let now      = iso.string(from: Date())
 
@@ -125,7 +125,7 @@ final class CanvasSyncService {
 
     func pullAll(context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [CanvasRow] = try await supabase
@@ -192,7 +192,7 @@ final class CanvasSyncService {
 
     func reconcileLocalToRemote(context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         // Fetch all remote IDs (non-deleted)
         do {

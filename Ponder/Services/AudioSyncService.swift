@@ -61,7 +61,7 @@ final class AudioSyncService {
     // MARK: - Upsert
 
     func upsert(_ element: AudioElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
 
         Task { await media.uploadAudio(fileName: element.audioFileName) }
@@ -89,7 +89,7 @@ final class AudioSyncService {
     // MARK: - Soft delete
 
     func delete(_ element: AudioElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let elementID = element.id.uuidString
         let now       = iso.string(from: Date())
 
@@ -124,7 +124,7 @@ final class AudioSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [AudioRow] = try await supabase

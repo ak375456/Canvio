@@ -107,6 +107,8 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("ponder.toolbarPosition") private var toolbarPositionRaw: String = ToolbarPosition.bottom.rawValue
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
+    @AppStorage("isPro") private var isProRaw: Bool = false
+    @AppStorage("hasSeenOnboarding") private var hasSeenOnboardingRaw: Bool = false
 
     var theme: AppTheme {
         get { AppTheme(rawValue: themeRaw) ?? .system }
@@ -121,5 +123,19 @@ class AppSettings: ObservableObject {
     var gridStyle: GridStyle {
         get { GridStyle(rawValue: gridStyleRaw) ?? .dotted }
         set { gridStyleRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var isPro: Bool {
+        get { isProRaw }
+        set { isProRaw = newValue; objectWillChange.send() }
+    }
+
+    var hasSeenOnboarding: Bool {
+        get { hasSeenOnboardingRaw }
+        set { hasSeenOnboardingRaw = newValue; objectWillChange.send() }
+    }
+
+    var effectiveGridStyle: GridStyle {
+        isPro ? gridStyle : .dotted
     }
 }

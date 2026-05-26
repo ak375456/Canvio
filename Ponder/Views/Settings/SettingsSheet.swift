@@ -14,7 +14,11 @@ import SwiftUI
 
 struct SettingsSheet: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject private var pro = ProManager.shared
+    @ObservedObject private var auth = AuthService.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var showPaywall = false
+    @State private var showAuth = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,10 +28,33 @@ struct SettingsSheet: View {
                 VStack(alignment: .leading, spacing: 28) {
                     themeSection
                     toolbarSection
+                    canvasActionsSection
                     gridSection
                 }
                 .padding(24)
             }
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallSheet {
+                settings.isPro = true
+                if auth.currentUser == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showAuth = true
+                    }
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showAuth) {
+            AuthView(
+                title: "Sign in for Sync",
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
         }
     }
 
@@ -73,15 +100,7 @@ struct SettingsSheet: View {
     // MARK: - Toolbar position
     private var toolbarSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                label("TOOLBAR")
-                Spacer()
-                if settings.toolbarPosition == .hidden {
-                    Text("Long-press canvas to add")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            label("TOOLBAR")
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 78))], spacing: 10) {
                 ForEach(ToolbarPosition.allCases) { pos in
                     optionCard(
@@ -98,6 +117,17 @@ struct SettingsSheet: View {
         }
     }
 
+    // MARK: - Canvas actions
+    private var canvasActionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("CANVAS ACTIONS")
+            VStack(alignment: .leading, spacing: 10) {
+                instructionRow(icon: "doc.on.doc", text: "Hold any item on the canvas to duplicate it.")
+                instructionRow(icon: "checkmark.circle", text: "To duplicate multiple items, hold the canvas, select items, then tap Duplicate.")
+            }
+        }
+    }
+
     // MARK: - Grid style
     private var gridSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -107,10 +137,14 @@ struct SettingsSheet: View {
                     optionCard(
                         title: style.title,
                         icon: style.icon,
-                        isSelected: settings.gridStyle == style
+                        isSelected: settings.effectiveGridStyle == style
                     ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            settings.gridStyle = style
+                        if style == .dotted || pro.isPro {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                settings.gridStyle = style
+                            }
+                        } else {
+                            showPaywall = true
                         }
                     }
                 }
@@ -151,5 +185,21 @@ struct SettingsSheet: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private func instructionRow(icon: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 18, height: 18)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }

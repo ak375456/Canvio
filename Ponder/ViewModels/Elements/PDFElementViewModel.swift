@@ -84,8 +84,10 @@ class PDFElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(element: PDFElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let newPDFName   = "\(UUID().uuidString).pdf"
         let newThumbName = newPDFName.replacingOccurrences(of: ".pdf", with: "_thumb.jpg")
         do {
@@ -95,12 +97,13 @@ class PDFElementViewModel: ObservableObject {
             try FileManager.default.copyItem(
                 at: PDFStorageService.thumbnailsDirectory.appendingPathComponent(element.thumbnailFileName),
                 to: PDFStorageService.thumbnailsDirectory.appendingPathComponent(newThumbName))
-        } catch { print("⚠️ Failed to copy PDF for duplicate: \(error)"); return }
+        } catch { print("⚠️ Failed to copy PDF for duplicate: \(error)"); return nil }
 
         let copy = PDFElementModel(canvasID: element.canvasID,
                                    pdfFileName: newPDFName, thumbnailFileName: newThumbName,
                                    originalName: element.originalName, pageCount: element.pageCount,
-                                   x: element.x + 30, y: element.y + 30)
+                                   x: element.x + Double(offset.width),
+                                   y: element.y + Double(offset.height))
         copy.width = element.width; copy.height = element.height; copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await PDFSyncService.shared.upsert(copy) }
@@ -118,12 +121,14 @@ class PDFElementViewModel: ObservableObject {
                 let el = PDFElementModel(canvasID: element.canvasID,
                                          pdfFileName: newPDFName, thumbnailFileName: newThumbName,
                                          originalName: element.originalName, pageCount: element.pageCount,
-                                         x: element.x + 30, y: element.y + 30)
+                                         x: element.x + Double(offset.width),
+                                         y: element.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await PDFSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     func updateSize(element: PDFElementModel, width: Double, height: Double,

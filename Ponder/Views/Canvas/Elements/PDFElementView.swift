@@ -16,6 +16,7 @@ struct PDFElementView: View {
     var isSelectedInMultiSelect: Bool = false
     let onOpenReader: () -> Void
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
@@ -44,7 +45,7 @@ struct PDFElementView: View {
         .frame(width: currentWidth, height: currentHeight)
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
         }
@@ -116,7 +117,7 @@ struct PDFElementView: View {
         .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
-            if !isMultiSelectMode {
+            if !isMultiSelectMode && !isCanvasGestureActive {
                 if !isSelected { onExternalTap?(); vm.editingID = element.id }
                 else { onOpenReader() }
             }
@@ -159,11 +160,25 @@ struct PDFElementView: View {
 
     private var moveDragGesture: some Gesture {
         DragGesture()
-            .onChanged { dragOffset = $0.translation }
+            .onChanged {
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
+                dragOffset = $0.translation
+            }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 let t = value.translation; dragOffset = .zero
                 vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private func handleCircle(icon: String, color: Color) -> some View {

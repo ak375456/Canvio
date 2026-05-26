@@ -15,6 +15,7 @@ struct AudioElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @StateObject private var player = AudioPlayerViewModel()
     @State private var dragOffset: CGSize = .zero
@@ -36,7 +37,7 @@ struct AudioElementView: View {
         .frame(width: element.width, height: element.height)
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
             player.load(fileName: element.audioFileName, elementID: element.id)
@@ -121,7 +122,10 @@ struct AudioElementView: View {
         .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
-            if !isMultiSelectMode { onExternalTap?(); vm.editingID = isSelected ? nil : element.id }
+            if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
+                onExternalTap?()
+                vm.editingID = element.id
+            }
         }
     }
 
@@ -135,10 +139,24 @@ struct AudioElementView: View {
 
     private var moveDragGesture: some Gesture {
         DragGesture()
-            .onChanged { dragOffset = $0.translation }
+            .onChanged {
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
+                dragOffset = $0.translation
+            }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 let t = value.translation; dragOffset = .zero
                 vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 }

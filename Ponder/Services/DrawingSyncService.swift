@@ -58,7 +58,7 @@ final class DrawingSyncService {
     // MARK: - Upsert
 
     func upsert(_ element: DrawingElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
 
         guard network.isConnected else {
@@ -84,7 +84,7 @@ final class DrawingSyncService {
     // MARK: - Soft delete
 
     func delete(_ element: DrawingElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let elementID = element.id.uuidString
         let now       = iso.string(from: Date())
 
@@ -116,7 +116,7 @@ final class DrawingSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [DrawingRow] = try await supabase

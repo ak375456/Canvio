@@ -15,6 +15,7 @@ struct ShapeElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
@@ -38,7 +39,7 @@ struct ShapeElementView: View {
         }
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: shape.x + dragOffset.width, y: shape.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = shape.rotation; hasLoadedRotation = true }
         }
@@ -79,7 +80,7 @@ struct ShapeElementView: View {
             )
             .background(toolbarOverlay)
             .onTapGesture {
-                if !isMultiSelectMode && !isSelected {
+                if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
                     onExternalTap?()
                     vm.editingID = shape.id
                 }
@@ -274,11 +275,25 @@ struct ShapeElementView: View {
 
     private var moveDragGesture: some Gesture {
         DragGesture()
-            .onChanged { dragOffset = $0.translation }
+            .onChanged {
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
+                dragOffset = $0.translation
+            }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 let t = value.translation; dragOffset = .zero
                 vm.updatePosition(shape: shape, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private func paletteColor(_ name: String) -> Color {

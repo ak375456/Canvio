@@ -63,7 +63,7 @@ final class PDFSyncService {
     // MARK: - Upsert
 
     func upsert(_ element: PDFElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
 
         Task { await media.uploadPDF(pdfFileName: element.pdfFileName,
@@ -92,7 +92,7 @@ final class PDFSyncService {
     // MARK: - Soft delete
 
     func delete(_ element: PDFElementModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let elementID = element.id.uuidString
         let now       = iso.string(from: Date())
 
@@ -130,7 +130,7 @@ final class PDFSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [PDFRow] = try await supabase

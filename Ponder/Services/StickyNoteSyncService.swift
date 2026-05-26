@@ -63,7 +63,7 @@ final class StickyNoteSyncService {
     // MARK: - Upsert
 
     func upsert(_ note: StickyNoteModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(note: note, userID: userID)
 
         guard network.isConnected else {
@@ -89,7 +89,7 @@ final class StickyNoteSyncService {
     // MARK: - Soft delete
 
     func delete(_ note: StickyNoteModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let noteID = note.id.uuidString
         let now    = iso.string(from: Date())
 
@@ -121,7 +121,7 @@ final class StickyNoteSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [StickyNoteRow] = try await supabase

@@ -15,6 +15,7 @@ struct TextElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize    = .zero
     @State private var isDragging: Bool      = false
@@ -73,7 +74,7 @@ struct TextElementView: View {
         // parent transform automatically. No manual scale correction needed here.
         .position(x: element.x + dragOffset.width,
                   y: element.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .sheet(isPresented: $showEditSheet) {
             EditTextSheet(element: element, context: context)
                 .presentationDetents([.height(480)])
@@ -107,17 +108,14 @@ struct TextElementView: View {
             .background(sizeReader)
             .overlay(multiSelectRing)
             .onTapGesture {
-                guard !isMultiSelectMode, !isDragging else { return }
-                onExternalTap?()
-                if isSelected {
-                    showCardPicker = false
-                    vm.editingID = nil
-                } else {
+                guard !isMultiSelectMode, !isDragging, !isCanvasGestureActive else { return }
+                if !isSelected {
+                    onExternalTap?()
                     vm.editingID = element.id
                 }
             }
             .onTapGesture(count: 2) {
-                guard !isMultiSelectMode else { return }
+                guard !isMultiSelectMode, !isCanvasGestureActive else { return }
                 onExternalTap?()
                 vm.editingID       = element.id
                 vm.inlineEditingID = element.id
@@ -519,10 +517,20 @@ struct TextElementView: View {
     private var moveDragGesture: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard canMove else {
+                    isDragging = false
+                    dragOffset = .zero
+                    return
+                }
                 isDragging = true
                 dragOffset = value.translation
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    isDragging = false
+                    return
+                }
                 let t      = value.translation
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
@@ -532,6 +540,10 @@ struct TextElementView: View {
                     isDragging = false
                 }
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isInlineEditing && !isCanvasGestureActive
     }
 
     // MARK: - Text rendering

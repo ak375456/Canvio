@@ -22,16 +22,25 @@ struct CanvasExportButton: View {
     let drawings:      [DrawingElementModel]
     let connectors:    [ConnectorModel]
 
+    @ObservedObject private var pro = ProManager.shared
+    @ObservedObject private var auth = AuthService.shared
+
     // Read current color scheme so export matches what user sees
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var isExporting    = false
     @State private var exportedImage: ExportedImage? = nil
     @State private var showShareSheet = false
+    @State private var showPaywall = false
+    @State private var showAuth = false
 
     var body: some View {
         Button {
-            Task { await export() }
+            if pro.isPro {
+                Task { await export() }
+            } else {
+                showPaywall = true
+            }
         } label: {
             if isExporting {
                 ProgressView().scaleEffect(0.8)
@@ -40,6 +49,27 @@ struct CanvasExportButton: View {
             }
         }
         .disabled(isExporting)
+        .sheet(isPresented: $showPaywall) {
+            PaywallSheet {
+                if auth.currentUser == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showAuth = true
+                    }
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showAuth) {
+            AuthView(
+                title: "Sign in for Sync",
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
         #if os(iOS)
         .sheet(isPresented: $showShareSheet) {
             if let img = exportedImage {

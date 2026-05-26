@@ -79,10 +79,13 @@ class DrawingElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(element: DrawingElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let copy = DrawingElementModel(canvasID: element.canvasID,
-                                       x: element.x + 30, y: element.y + 30,
+                                       x: element.x + Double(offset.width),
+                                       y: element.y + Double(offset.height),
                                        width: element.width, height: element.height,
                                        isCanvasDrawing: element.isCanvasDrawing)
         copy.drawingData = element.drawingData
@@ -100,13 +103,15 @@ class DrawingElementViewModel: ObservableObject {
             },
             redo: {
                 let el = DrawingElementModel(canvasID: element.canvasID,
-                                             x: element.x + 30, y: element.y + 30,
+                                             x: element.x + Double(offset.width),
+                                             y: element.y + Double(offset.height),
                                              width: element.width, height: element.height)
                 el.id = id; el.drawingData = element.drawingData; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await DrawingSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     func updateSize(element: DrawingElementModel, width: Double, height: Double,

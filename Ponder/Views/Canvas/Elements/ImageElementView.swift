@@ -15,6 +15,7 @@ struct ImageElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
@@ -46,7 +47,7 @@ struct ImageElementView: View {
         .frame(width: currentWidth, height: currentHeight)
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
             loadDisplayImageIfNeeded()
@@ -127,7 +128,10 @@ struct ImageElementView: View {
             .strokeBorder(isSelected && !isMultiSelectMode ? Color.accentColor.opacity(0.7) : Color.clear, lineWidth: 2))
         .contentShape(Rectangle())
         .onTapGesture {
-            if !isMultiSelectMode { onExternalTap?(); vm.editingID = isSelected ? nil : element.id }
+            if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
+                onExternalTap?()
+                vm.editingID = element.id
+            }
         }
     }
 
@@ -193,11 +197,25 @@ struct ImageElementView: View {
 
     private var moveDragGesture: some Gesture {
         DragGesture()
-            .onChanged { dragOffset = $0.translation }
+            .onChanged {
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
+                dragOffset = $0.translation
+            }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 let t = value.translation; dragOffset = .zero
                 vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private func handleCircle(icon: String, color: Color) -> some View {

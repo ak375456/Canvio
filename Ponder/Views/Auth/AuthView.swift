@@ -7,6 +7,10 @@ import SwiftUI
 import AuthenticationServices
 
 struct AuthView: View {
+    var title: String = "Canvio"
+    var subtitle: String = "Sign in to sync across devices. Local canvases stay on this device until sync is enabled."
+    var showsGuestButton: Bool = false
+
     @ObservedObject var auth = AuthService.shared
 
     @Environment(\.authorizationController) private var authorizationController
@@ -40,14 +44,15 @@ struct AuthView: View {
                     }
 
                     VStack(spacing: 6) {
-                        Text("Canvio")
+                        Text(title)
                             .font(.system(size: 36, weight: .bold, design: .rounded))
                             .foregroundStyle(.primary)
 
-                        Text("Your ideas, beautifully organised")
+                        Text(subtitle)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
                     }
                 }
                 .padding(.bottom, 64)
@@ -104,19 +109,20 @@ struct AuthView: View {
                     }
                     #endif
 
-                    // Guest option
-                    Button {
-                        auth.continueAsGuest()
-                    } label: {
-                        Text("Continue without account")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .underline()
+                    if showsGuestButton {
+                        Button {
+                            auth.continueAsGuest()
+                        } label: {
+                            Text("Continue without account")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .underline()
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(auth.isLoading)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(auth.isLoading)
 
-                    Text("Sign in to sync across devices. Guest data stays on this device only.")
+                    Text("Your local canvases stay on this device. Sign in after Pro to turn on sync.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)

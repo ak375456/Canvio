@@ -15,6 +15,7 @@ struct SymbolElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool   = false
@@ -42,9 +43,11 @@ struct SymbolElementView: View {
                 )
                 .overlay(multiSelectRing)
                 .onTapGesture {
-                    guard !isMultiSelectMode, !isDragging else { return }
-                    onExternalTap?()
-                    vm.editingID = isSelected ? nil : element.id
+                    guard !isMultiSelectMode, !isDragging, !isCanvasGestureActive else { return }
+                    if !isSelected {
+                        onExternalTap?()
+                        vm.editingID = element.id
+                    }
                 }
 
             // Delete handle — top left when selected
@@ -77,7 +80,7 @@ struct SymbolElementView: View {
         }
         .position(x: element.x + dragOffset.width,
                   y: element.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onChange(of: isSelected) { _, selected in
             // nothing needed
         }
@@ -176,10 +179,20 @@ struct SymbolElementView: View {
     private var moveDragGesture: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard canMove else {
+                    isDragging = false
+                    dragOffset = .zero
+                    return
+                }
                 isDragging = true
                 dragOffset = value.translation
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    isDragging = false
+                    return
+                }
                 let t = value.translation
                 dragOffset = .zero
                 vm.updatePosition(
@@ -191,5 +204,9 @@ struct SymbolElementView: View {
                     isDragging = false
                 }
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 }

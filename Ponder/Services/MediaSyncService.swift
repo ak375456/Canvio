@@ -24,7 +24,7 @@ final class MediaSyncService {
     // MARK: - Storage paths
 
     private func userID() -> String? {
-        AuthService.shared.currentUser?.id.uuidString.lowercased()
+        AuthService.shared.syncUserID?.lowercased()
     }
 
     func imagePath(for fileName: String) -> String {

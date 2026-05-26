@@ -17,6 +17,7 @@ struct DrawingElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeStartWidth: Double = 0
@@ -26,9 +27,6 @@ struct DrawingElementView: View {
 
     private var isSelected: Bool { vm.editingID == element.id }
     private var isEditing: Bool { isSelected && vm.isDrawingModeActive }
-    private var isPassiveCanvasInk: Bool {
-        element.isCanvasDrawing && !isSelected && !isMultiSelectMode
-    }
     private let handleVisualSize: CGFloat = 28
     private let handleHitSize: CGFloat = 54
 
@@ -71,7 +69,7 @@ struct DrawingElementView: View {
         .frame(width: CGFloat(element.width), height: CGFloat(element.height))
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
-        .gesture(isEditing || isMultiSelectMode || isPassiveCanvasInk ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
         }
@@ -155,7 +153,7 @@ struct DrawingElementView: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))
         .onTapGesture {
-            if !isMultiSelectMode && !isSelected {
+            if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
                 onExternalTap?(); vm.editingID = element.id; vm.isDrawingModeActive = false
             }
         }
@@ -251,14 +249,26 @@ struct DrawingElementView: View {
     private var moveDragGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 dragOffset = value.translation
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 let t = value.translation
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary, context: context)
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isEditing && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private var rotateGesture: some Gesture {

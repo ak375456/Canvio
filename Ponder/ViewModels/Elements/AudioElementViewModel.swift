@@ -73,18 +73,21 @@ class AudioElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(element: AudioElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let srcURL = AudioStorageService.url(for: element.audioFileName)
         let ext = srcURL.pathExtension
         let newFileName = "\(UUID().uuidString).\(ext)"
         let destURL = AudioStorageService.audioDirectory.appendingPathComponent(newFileName)
         do { try FileManager.default.copyItem(at: srcURL, to: destURL) }
-        catch { print("⚠️ Failed to copy audio: \(error)"); return }
+        catch { print("⚠️ Failed to copy audio: \(error)"); return nil }
 
         let copy = AudioElementModel(canvasID: element.canvasID, audioFileName: newFileName,
                                      originalName: element.originalName, duration: element.duration,
-                                     x: element.x + 30, y: element.y + 30)
+                                     x: element.x + Double(offset.width),
+                                     y: element.y + Double(offset.height))
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await AudioSyncService.shared.upsert(copy) }
@@ -101,12 +104,14 @@ class AudioElementViewModel: ObservableObject {
             redo: {
                 let el = AudioElementModel(canvasID: element.canvasID, audioFileName: newFileName,
                                            originalName: element.originalName, duration: element.duration,
-                                           x: element.x + 30, y: element.y + 30)
+                                           x: element.x + Double(offset.width),
+                                           y: element.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await AudioSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     func delete(element: AudioElementModel, context: ModelContext,

@@ -85,7 +85,7 @@ final class TodoSyncService {
     // MARK: - Upsert List
 
     func upsertList(_ list: TodoListModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeListRow(list: list, userID: userID)
 
         guard network.isConnected else {
@@ -111,7 +111,7 @@ final class TodoSyncService {
     // MARK: - Delete List (soft-deletes all tasks first)
 
     func deleteList(_ list: TodoListModel, tasks: [TodoTaskModel]) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         // Soft-delete all tasks belonging to this list first
         for task in tasks {
@@ -149,7 +149,7 @@ final class TodoSyncService {
     // MARK: - Upsert Task
 
     func upsertTask(_ task: TodoTaskModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeTaskRow(task: task, userID: userID)
 
         guard network.isConnected else {
@@ -175,7 +175,7 @@ final class TodoSyncService {
     // MARK: - Delete Task
 
     func deleteTask(_ task: TodoTaskModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let taskID = task.id.uuidString
         let now    = iso.string(from: Date())
 
@@ -207,7 +207,7 @@ final class TodoSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         // Pull lists
         do {

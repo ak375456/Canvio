@@ -10,6 +10,7 @@ struct StickyNoteView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool = false
@@ -36,9 +37,7 @@ struct StickyNoteView: View {
         .frame(width: currentSize.width, height: currentSize.height)
         .rotationEffect(.degrees(note.rotation))
         .position(x: note.x + dragOffset.width, y: note.y + dragOffset.height)
-        // Drag is always available (not gated on isSelected)
-        // minimumDistance: 6 prevents accidental moves on tap
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear { localText = note.text }
         .onChange(of: vm.editingID) { _, newID in
             if newID == note.id {
@@ -90,7 +89,7 @@ struct StickyNoteView: View {
         )
         .onTapGesture {
             // Only select/focus on tap — not if a drag just finished
-            guard !isMultiSelectMode, !isDragging else { return }
+            guard !isMultiSelectMode, !isDragging, !isCanvasGestureActive else { return }
             if !isSelected {
                 onExternalTap?()
                 vm.editingID = note.id
@@ -273,12 +272,22 @@ struct StickyNoteView: View {
     private var moveDragGesture: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard canMove else {
+                    isDragging = false
+                    dragOffset = .zero
+                    return
+                }
                 isDragging = true
                 dragOffset = value.translation
                 // Dismiss keyboard while dragging so it doesn't fight the gesture
                 if textFocused { textFocused = false }
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    isDragging = false
+                    return
+                }
                 let t = value.translation
                 dragOffset = .zero
                 vm.updatePosition(note: note, translation: t,
@@ -288,6 +297,10 @@ struct StickyNoteView: View {
                     isDragging = false
                 }
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private var stickyFont: Font {

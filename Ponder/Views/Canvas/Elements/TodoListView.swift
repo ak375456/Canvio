@@ -16,6 +16,7 @@ struct TodoListView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool   = false
@@ -45,8 +46,7 @@ struct TodoListView: View {
         }
         .frame(width: currentSize.width, height: currentSize.height)
         .position(x: list.x + dragOffset.width, y: list.y + dragOffset.height)
-        // Drag always available — not gated on isSelected
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear { localTitle = list.title }
         .sheet(item: openTaskBinding) { task in
             TodoTaskDetailSheet(task: task, allTasks: allTasks, context: context) { openTaskID = nil }
@@ -101,7 +101,7 @@ struct TodoListView: View {
         .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
         .onTapGesture {
             // Only select on tap, not after a drag
-            guard !isMultiSelectMode, !isDragging else { return }
+            guard !isMultiSelectMode, !isDragging, !isCanvasGestureActive else { return }
             if !isSelected { onExternalTap?(); vm.editingID = list.id }
         }
     }
@@ -237,6 +237,7 @@ struct TodoListView: View {
 
     private var addTaskRow: some View {
         Button {
+            guard !isCanvasGestureActive else { return }
             if !isSelected { vm.editingID = list.id }
             let t = vm.addTask(to: list, existingCount: topLevelTasks.count, context: context)
             openTaskID = t.id
@@ -297,19 +298,29 @@ struct TodoListView: View {
     }
 
     // MARK: - Move drag gesture
-    // Always available (not gated on isSelected).
+    // Enabled only after the list is selected.
     // minimumDistance: 8 prevents accidental drags on tap.
     // isDragging flag stops the tap handler firing after drag ends.
 
     private var moveDragGesture: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard canMove else {
+                    isDragging = false
+                    dragOffset = .zero
+                    return
+                }
                 isDragging   = true
                 dragOffset   = value.translation
                 // Dismiss keyboard if open while dragging
                 if titleFocused { titleFocused = false }
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    isDragging = false
+                    return
+                }
                 let t      = value.translation
                 dragOffset = .zero
                 vm.updatePosition(
@@ -322,5 +333,9 @@ struct TodoListView: View {
                     isDragging = false
                 }
             }
+    }
+
+    private var canMove: Bool {
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive
     }
 }

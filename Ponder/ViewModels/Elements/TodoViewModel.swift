@@ -69,9 +69,13 @@ class TodoListViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(list: TodoListModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
-        let copy = TodoListModel(canvasID: list.canvasID, x: list.x + 30, y: list.y + 30)
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let copy = TodoListModel(canvasID: list.canvasID,
+                                 x: list.x + Double(offset.width),
+                                 y: list.y + Double(offset.height))
         copy.title = list.title; copy.colorName = list.colorName
         copy.width = list.width; copy.height = list.height; copy.zIndex = zIndex
         context.insert(copy); try? context.save()
@@ -86,12 +90,15 @@ class TodoListViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = TodoListModel(canvasID: list.canvasID, x: list.x + 30, y: list.y + 30)
+                let el = TodoListModel(canvasID: list.canvasID,
+                                       x: list.x + Double(offset.width),
+                                       y: list.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await TodoSyncService.shared.upsertList(el) }
             }
         ))
+        return id
     }
 
     func updateTitle(list: TodoListModel, title: String, context: ModelContext) {

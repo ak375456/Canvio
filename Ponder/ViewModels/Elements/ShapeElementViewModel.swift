@@ -69,10 +69,13 @@ class ShapeElementViewModel: ObservableObject {
         ))
     }
 
+    @discardableResult
     func duplicate(shape: ShapeElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let copy = ShapeElementModel(canvasID: shape.canvasID, kind: shape.shapeKind,
-                                     x: shape.x + 30, y: shape.y + 30)
+                                     x: shape.x + Double(offset.width),
+                                     y: shape.y + Double(offset.height))
         copy.width = shape.width; copy.height = shape.height
         copy.strokeColorName = shape.strokeColorName; copy.fillColorName = shape.fillColorName
         copy.hasFill = shape.hasFill; copy.strokeWidth = shape.strokeWidth
@@ -91,12 +94,14 @@ class ShapeElementViewModel: ObservableObject {
             },
             redo: {
                 let el = ShapeElementModel(canvasID: shape.canvasID, kind: shape.shapeKind,
-                                           x: shape.x + 30, y: shape.y + 30)
+                                           x: shape.x + Double(offset.width),
+                                           y: shape.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await ShapeSyncService.shared.upsert(el) }
             }
         ))
+        return id
     }
 
     func updateSize(shape: ShapeElementModel, width: Double, height: Double,

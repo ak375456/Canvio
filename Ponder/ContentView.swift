@@ -4,24 +4,26 @@
 //
 
 import SwiftUI
-import Auth
 
 struct ContentView: View {
-    @ObservedObject private var auth = AuthService.shared
+    @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
         Group {
-            if auth.currentUser != nil || auth.isGuest {
+            if settings.hasSeenOnboarding {
                 HomeView()
             } else {
-                AuthView()
+                OnboardingView {
+                    settings.hasSeenOnboarding = true
+                    AuthService.shared.continueAsGuest()
+                }
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: auth.currentUser?.id.uuidString)
-        .animation(.easeInOut(duration: 0.3), value: auth.isGuest)
+        .animation(.easeInOut(duration: 0.3), value: settings.hasSeenOnboarding)
     }
 }
 
 #Preview {
     ContentView()
+        .environmentObject(AppSettings())
 }

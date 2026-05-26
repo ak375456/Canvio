@@ -5,11 +5,14 @@ import Auth
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @ObservedObject private var auth = AuthService.shared
+    @ObservedObject private var pro = ProManager.shared
     @Environment(\.modelContext) private var context
     @Query(sort: \CanvasModel.createdAt, order: .reverse) var canvases: [CanvasModel]
 
     @State private var showSettings = false
     @State private var isSyncing = false
+    @State private var showPaywall = false
+    @State private var showAuth = false
 
     let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
@@ -34,25 +37,22 @@ struct HomeView: View {
 
                 // Right side — sync + new canvas
                 ToolbarItemGroup(placement: .automatic) {
-                    // Sync button — only shown when signed in
-                    if auth.currentUser != nil {
-                        Button {
-                            Task { await syncAll() }
-                        } label: {
-                            Image(systemName: isSyncing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                                .fontWeight(.medium)
-                                .rotationEffect(.degrees(isSyncing ? 360 : 0))
-                                .animation(
-                                    isSyncing
-                                        ? .linear(duration: 0.8).repeatForever(autoreverses: false)
-                                        : .default,
-                                    value: isSyncing
-                                )
-                        }
-                        .disabled(isSyncing)
+                    Button {
+                        handleSyncTap()
+                    } label: {
+                        Image(systemName: isSyncing ? "arrow.triangle.2.circlepath" : "icloud")
+                            .fontWeight(.medium)
+                            .rotationEffect(.degrees(isSyncing ? 360 : 0))
+                            .animation(
+                                isSyncing
+                                    ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                                    : .default,
+                                value: isSyncing
+                            )
                     }
+                    .disabled(isSyncing)
 
-                    Button { viewModel.showCreateSheet = true } label: {
+                    Button { handleCreateCanvasTap() } label: {
                         Image(systemName: "square.and.pencil").fontWeight(.semibold)
                     }
                 }
@@ -66,7 +66,11 @@ struct HomeView: View {
             .sheet(isPresented: $viewModel.showCreateSheet, onDismiss: {
                 viewModel.resetForm()
             }) {
-                CreateCanvasSheet(viewModel: viewModel)
+                CreateCanvasSheet(
+                    viewModel: viewModel,
+                    canCreateCanvas: canCreateCanvas,
+                    onProRequired: { showPaywall = true }
+                )
                     .presentationDetents([.height(480)])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(24)
@@ -77,13 +81,66 @@ struct HomeView: View {
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(24)
             }
+            .sheet(isPresented: $showPaywall) {
+                PaywallSheet {
+                    settingsDidUnlockPro()
+                }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
+            .sheet(isPresented: $showAuth) {
+                AuthView(
+                    title: "Sign in for Sync",
+                    subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
+            .onChange(of: auth.currentUser?.id.uuidString) { _, newValue in
+                guard newValue != nil, pro.isPro else { return }
+                Task { await syncAll() }
+            }
+        }
+    }
+
+    private var canCreateCanvas: Bool {
+        pro.isPro || canvases.count < 2
+    }
+
+    private func handleCreateCanvasTap() {
+        if canCreateCanvas {
+            viewModel.showCreateSheet = true
+        } else {
+            showPaywall = true
+        }
+    }
+
+    private func handleSyncTap() {
+        guard pro.isPro else {
+            showPaywall = true
+            return
+        }
+        guard auth.currentUser != nil else {
+            showAuth = true
+            return
+        }
+        Task { await syncAll() }
+    }
+
+    private func settingsDidUnlockPro() {
+        if auth.currentUser == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                showAuth = true
+            }
         }
     }
 
     // MARK: - Sync
 
     private func syncAll() async {
-        guard !isSyncing else { return }
+        guard !isSyncing, pro.isPro, auth.currentUser != nil else { return }
         isSyncing = true
         defer { isSyncing = false }
 
@@ -103,6 +160,7 @@ struct HomeView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: context)
         }
     }
 
@@ -189,7 +247,7 @@ struct HomeView: View {
                 .multilineTextAlignment(.center)
 
             Button {
-                viewModel.showCreateSheet = true
+                handleCreateCanvasTap()
             } label: {
                 Text("New Canvas")
                     .font(.subheadline.weight(.semibold))
@@ -287,6 +345,8 @@ struct CanvasCard: View {
 
 struct CreateCanvasSheet: View {
     @ObservedObject var viewModel: HomeViewModel
+    let canCreateCanvas: Bool
+    let onProRequired: () -> Void
     @Environment(\.modelContext) private var context
     @FocusState private var nameFocused: Bool
     @FocusState private var widthFocused: Bool
@@ -388,7 +448,13 @@ struct CreateCanvasSheet: View {
 
             Divider()
 
-            Button { viewModel.createCanvas(context: context) } label: {
+            Button {
+                if canCreateCanvas {
+                    viewModel.createCanvas(context: context)
+                } else {
+                    onProRequired()
+                }
+            } label: {
                 Text("Create Canvas").font(.body.weight(.semibold)).frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(viewModel.newCanvasName.isEmpty

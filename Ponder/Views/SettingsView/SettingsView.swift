@@ -9,6 +9,7 @@ import Auth
 
 struct SettingsView: View {
     @ObservedObject private var auth = AuthService.shared
+    @ObservedObject private var pro = ProManager.shared
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
@@ -16,6 +17,8 @@ struct SettingsView: View {
     @State private var isEditingName: Bool = false
     @State private var showDeleteConfirm: Bool = false
     @State private var showSignOutConfirm: Bool = false
+    @State private var showPaywall: Bool = false
+    @State private var showAuth: Bool = false
     @State private var isDeleting: Bool = false
     @State private var deleteError: String? = nil
     @FocusState private var nameFocused: Bool
@@ -135,20 +138,16 @@ struct SettingsView: View {
 
                             Text("Not signed in")
                                 .font(.title3.weight(.semibold))
-                            Text("Sign in to sync your canvases across all your devices.")
+                            Text("Sign in to restore your canvases and sync them across all your devices with Canvio Pro.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 32)
 
                             Button {
-                                dismiss()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                    AuthService.shared.isGuest = false
-                                    UserDefaults.standard.set(false, forKey: "ponder.isGuest")
-                                }
+                                handleSignInTap()
                             } label: {
-                                Text("Sign In")
+                                Text("Sign In to Restore Canvases")
                                     .font(.subheadline.weight(.semibold))
                                     .padding(.horizontal, 28)
                                     .padding(.vertical, 10)
@@ -177,6 +176,14 @@ struct SettingsView: View {
 
                         settingsRow(icon: "envelope", iconColor: .orange, title: "Contact Support") {
                             openURL("mailto:ak375456@gmail.com")
+                        }
+
+                        settingsRow(
+                            icon: pro.isPro ? "checkmark.seal.fill" : "star.fill",
+                            iconColor: pro.isPro ? .green : .yellow,
+                            title: pro.isPro ? "Canvio Pro Active" : "Unlock Canvio Pro"
+                        ) {
+                            if !pro.isPro { showPaywall = true }
                         }
                     }
                     .padding(.top, 8)
@@ -225,6 +232,27 @@ struct SettingsView: View {
             }
         }
         .task { await loadProfile() }
+        .sheet(isPresented: $showPaywall) {
+            PaywallSheet {
+                if auth.currentUser == nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showAuth = true
+                    }
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showAuth) {
+            AuthView(
+                title: "Sign in for Sync",
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
             Button("Sign Out", role: .destructive) {
                 Task { await AuthService.shared.signOut(); dismiss() }
@@ -286,6 +314,14 @@ struct SettingsView: View {
         guard !trimmed.isEmpty else { return }
         displayName = trimmed
         Task { await AuthService.shared.updateDisplayName(trimmed) }
+    }
+
+    private func handleSignInTap() {
+        if pro.isPro {
+            showAuth = true
+        } else {
+            showPaywall = true
+        }
     }
 
     private func performDelete() async {

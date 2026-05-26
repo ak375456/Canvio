@@ -21,6 +21,7 @@ struct TableElementView: View {
     let onExportCSV: () -> Void
     var onExternalTap: (() -> Void)? = nil
     var onMultiSelectTap: (() -> Void)? = nil
+    var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var rotationAngle: Double = 0
@@ -77,13 +78,16 @@ struct TableElementView: View {
             if isMultiSelectMode {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture { onMultiSelectTap?() }
+                    .onTapGesture {
+                        guard !isCanvasGestureActive else { return }
+                        onMultiSelectTap?()
+                    }
             }
         }
         .frame(width: totalWidth, height: totalHeight)
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: table.x + dragOffset.width, y: table.y + dragOffset.height)
-        .gesture(isMultiSelectMode ? nil : moveDragGesture)
+        .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = table.rotation; hasLoadedRotation = true }
         }
@@ -149,7 +153,7 @@ struct TableElementView: View {
         .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard !isMultiSelectMode else { return }
+            guard !isMultiSelectMode, !isCanvasGestureActive else { return }
             if !isTableSelected { onExternalTap?(); vm.selectTable(id: table.id) }
             else { vm.stopEditing() }
         }
@@ -193,6 +197,7 @@ struct TableElementView: View {
                     isSelected: vm.selectedCellID == cell.id,
                     isEditing: vm.editingCellID == cell.id,
                     isMultiSelectMode: isMultiSelectMode,
+                    isCanvasGestureActive: isCanvasGestureActive,
                     colorScheme: colorScheme,
                     onSingleTap: { handleSingleTap(cell: cell) },
                     onDoubleTap: { handleDoubleTap(cell: cell) }
@@ -212,13 +217,13 @@ struct TableElementView: View {
     }
 
     private func handleSingleTap(cell: TableCellModel) {
-        guard !isMultiSelectMode else { return }
+        guard !isMultiSelectMode, !isCanvasGestureActive else { return }
         if !isTableSelected { vm.selectTable(id: table.id) }
         else { if vm.editingCellID != cell.id { vm.selectCell(id: cell.id) } }
     }
 
     private func handleDoubleTap(cell: TableCellModel) {
-        guard !isMultiSelectMode else { return }
+        guard !isMultiSelectMode, !isCanvasGestureActive else { return }
         if !isTableSelected { vm.selectTable(id: table.id) }
         vm.startEditing(id: cell.id)
     }
@@ -258,9 +263,17 @@ struct TableElementView: View {
     private var moveDragGesture: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 if vm.editingCellID == nil { dragOffset = value.translation }
             }
             .onEnded { value in
+                guard canMove else {
+                    dragOffset = .zero
+                    return
+                }
                 if vm.editingCellID == nil {
                     let t = value.translation; dragOffset = .zero
                     vm.updatePosition(table: table, translation: t,
@@ -271,6 +284,10 @@ struct TableElementView: View {
             }
     }
 
+    private var canMove: Bool {
+        isTableSelected && !isMultiSelectMode && !isCanvasGestureActive
+    }
+
     private struct TappableTableCell: View {
         @Bindable var cell: TableCellModel
         let cellWidth: CGFloat
@@ -279,6 +296,7 @@ struct TableElementView: View {
         let isSelected: Bool
         let isEditing: Bool
         let isMultiSelectMode: Bool
+        let isCanvasGestureActive: Bool
         let colorScheme: ColorScheme
         let onSingleTap: () -> Void
         let onDoubleTap: () -> Void
@@ -296,6 +314,7 @@ struct TableElementView: View {
             .simultaneousGesture(
                 isMultiSelectMode ? nil :
                 TapGesture(count: 1).onEnded {
+                    guard !isCanvasGestureActive else { return }
                     tapCount += 1
                     if tapCount == 1 {
                         tapTimer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: false) { _ in

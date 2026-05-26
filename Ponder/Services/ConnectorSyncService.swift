@@ -58,7 +58,7 @@ final class ConnectorSyncService {
     // MARK: - Upsert
 
     func upsert(_ connector: ConnectorModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(connector: connector, userID: userID)
 
         guard network.isConnected else {
@@ -84,7 +84,7 @@ final class ConnectorSyncService {
     // MARK: - Soft delete
 
     func delete(_ connector: ConnectorModel) async {
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
         let connectorID = connector.id.uuidString
         let now         = iso.string(from: Date())
 
@@ -116,7 +116,7 @@ final class ConnectorSyncService {
 
     func pullAll(canvasID: UUID, context: ModelContext) async {
         guard network.isConnected else { return }
-        guard let userID = AuthService.shared.currentUser?.id.uuidString else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
             let rows: [ConnectorRow] = try await supabase

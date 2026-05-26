@@ -98,13 +98,16 @@ class SymbolElementViewModel: ObservableObject {
 
     // MARK: - Duplicate
 
+    @discardableResult
     func duplicate(element: SymbolElementModel, zIndex: Int,
-                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+                   offset: CGSize = CGSize(width: 30, height: 30),
+                   context: ModelContext, undoManager: CanvasUndoManager? = nil) -> UUID? {
         let copy = SymbolElementModel(canvasID: element.canvasID,
                                       symbolName: element.symbolName,
                                       colorName:  element.colorName,
                                       fontSize:   element.fontSize,
-                                      x: element.x + 30, y: element.y + 30)
+                                      x: element.x + Double(offset.width),
+                                      y: element.y + Double(offset.height))
         copy.zIndex = zIndex; copy.updatedAt = Date()
         context.insert(copy); try? context.save()
         Task { await SymbolSyncService.shared.upsert(copy) }
@@ -123,12 +126,14 @@ class SymbolElementViewModel: ObservableObject {
                                            symbolName: element.symbolName,
                                            colorName:  element.colorName,
                                            fontSize:   element.fontSize,
-                                           x: element.x + 30, y: element.y + 30)
+                                           x: element.x + Double(offset.width),
+                                           y: element.y + Double(offset.height))
                 e.id = id; e.zIndex = zIndex; e.updatedAt = Date()
                 context.insert(e); try? context.save()
                 Task { await SymbolSyncService.shared.upsert(e) }
             }
         ))
+        return id
     }
 
     // MARK: - Delete
