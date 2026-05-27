@@ -19,18 +19,19 @@ final class AuthService: NSObject, ObservableObject {
     @Published var currentUser: User?    = nil
     @Published var isLoading: Bool       = false
     @Published var errorMessage: String? = nil
-
-    /// True when the user tapped "Continue without account".
-    @Published var isGuest: Bool = true
-
-    /// Set to true when account was remotely deleted — triggers UI reset
+    @Published var isGuest: Bool         = true
     @Published var wasRemotelyDeleted: Bool = false
+
+    // Fired after a successful login so SyncCoordinatorView can
+    // trigger a full reconcile + pull for newly logged-in users.
+    let didSignIn = PassthroughSubject<Void, Never>()
 
     private let supabase = SupabaseService.shared.client
     private(set) var currentNonce: String = ""
 
     private override init() { super.init() }
 
+    // syncUserID only works when Pro is active AND user is logged in
     var syncUserID: String? {
         guard ProManager.shared.isPro else { return nil }
         return currentUser?.id.uuidString
@@ -41,28 +42,23 @@ final class AuthService: NSObject, ObservableObject {
     func restoreSession() async {
         do {
             _ = try await supabase.auth.session
-            // Verify the account still exists on the server.
-            // If deleted from another device, getUser() throws an auth error.
             do {
                 let user = try await supabase.auth.user()
                 currentUser = user
                 isGuest     = false
                 UserDefaults.standard.set(false, forKey: "ponder.isGuest")
             } catch {
-                // Session token exists locally but account is gone on server
                 print("⚠️ Account no longer exists on server — forcing local logout")
                 await forceLocalLogout()
             }
         } catch {
             currentUser = nil
-            isGuest = true
+            isGuest     = true
             UserDefaults.standard.set(true, forKey: "ponder.isGuest")
         }
     }
 
     // MARK: - Periodic account validity check
-    // Call this from SyncCoordinatorView on a timer so device B
-    // discovers the deletion within ~60 seconds of it happening.
 
     func checkAccountStillExists(context: ModelContext) async {
         guard currentUser != nil else { return }
@@ -70,7 +66,6 @@ final class AuthService: NSObject, ObservableObject {
             _ = try await supabase.auth.user()
         } catch {
             let errStr = error.localizedDescription.lowercased()
-            // Supabase returns "user not found" or 401/403 when account is deleted
             let isGone = errStr.contains("user not found")
                       || errStr.contains("not found")
                       || errStr.contains("invalid")
@@ -86,7 +81,7 @@ final class AuthService: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Force local logout (no server call — account may not exist)
+    // MARK: - Force local logout
 
     func forceLocalLogout() async {
         try? await supabase.auth.signOut()
@@ -145,8 +140,8 @@ final class AuthService: NSObject, ObservableObject {
             let session = try await supabase.auth.signInWithIdToken(
                 credentials: .init(provider: .apple, idToken: idToken, nonce: currentNonce)
             )
-            currentUser = session.user
-            isGuest     = false
+            currentUser        = session.user
+            isGuest            = false
             wasRemotelyDeleted = false
             UserDefaults.standard.set(false, forKey: "ponder.isGuest")
 
@@ -158,6 +153,10 @@ final class AuthService: NSObject, ObservableObject {
                     .eq("id", value: session.user.id.uuidString)
                     .execute()
             }
+
+            // Notify SyncCoordinatorView to reconcile local data → Supabase
+            didSignIn.send()
+
         } catch {
             errorMessage = "Sign in failed: \(error.localizedDescription)"
         }
@@ -196,9 +195,7 @@ final class AuthService: NSObject, ObservableObject {
         await deleteStorageFolder(userID: uid)
 
         do {
-            try await supabase
-                .rpc("delete_own_user")
-                .execute()
+            try await supabase.rpc("delete_own_user").execute()
         } catch {
             print("⚠️ RPC delete_own_user failed: \(error.localizedDescription)")
         }
@@ -219,19 +216,13 @@ final class AuthService: NSObject, ObservableObject {
     private func deleteStorageFolder(userID: String) async {
         let bucket     = "ponder-files"
         let subfolders = ["images", "pdfs", "pdfthumbs", "audio"]
-
         for folder in subfolders {
             do {
                 let files = try await supabase.storage
-                    .from(bucket)
-                    .list(path: "\(userID)/\(folder)")
-
+                    .from(bucket).list(path: "\(userID)/\(folder)")
                 guard !files.isEmpty else { continue }
-
                 let paths = files.map { "\(userID)/\(folder)/\($0.name)" }
-                try await supabase.storage
-                    .from(bucket)
-                    .remove(paths: paths)
+                try await supabase.storage.from(bucket).remove(paths: paths)
             } catch {
                 print("⚠️ Storage cleanup failed [\(folder)]: \(error.localizedDescription)")
             }
@@ -277,11 +268,9 @@ final class AuthService: NSObject, ObservableObject {
         guard let user = currentUser else { return nil }
         do {
             let response = try await supabase
-                .from("profiles")
-                .select("full_name")
+                .from("profiles").select("full_name")
                 .eq("id", value: user.id.uuidString)
-                .single()
-                .execute()
+                .single().execute()
             if let dict = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any],
                let name = dict["full_name"] as? String, !name.isEmpty {
                 return name
@@ -293,10 +282,8 @@ final class AuthService: NSObject, ObservableObject {
     func updateDisplayName(_ name: String) async {
         guard let user = currentUser else { return }
         _ = try? await supabase
-            .from("profiles")
-            .update(["full_name": name])
-            .eq("id", value: user.id.uuidString)
-            .execute()
+            .from("profiles").update(["full_name": name])
+            .eq("id", value: user.id.uuidString).execute()
     }
 
     // MARK: - Auth state listener
@@ -307,13 +294,13 @@ final class AuthService: NSObject, ObservableObject {
                 await MainActor.run {
                     switch event {
                     case .signedIn, .tokenRefreshed, .userUpdated:
-                        self.currentUser       = session?.user
-                        self.isGuest           = false
+                        self.currentUser        = session?.user
+                        self.isGuest            = false
                         self.wasRemotelyDeleted = false
                         UserDefaults.standard.set(false, forKey: "ponder.isGuest")
                     case .signedOut:
                         self.currentUser = nil
-                        self.isGuest = true
+                        self.isGuest     = true
                         UserDefaults.standard.set(true, forKey: "ponder.isGuest")
                     default:
                         break

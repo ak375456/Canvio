@@ -19,6 +19,8 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showPaywall = false
     @State private var showAuth = false
+    
+    var exportButton: AnyView? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,6 +32,7 @@ struct SettingsSheet: View {
                     toolbarSection
                     canvasActionsSection
                     gridSection
+                    exportSection
                 }
                 .padding(24)
             }
@@ -124,6 +127,7 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 instructionRow(icon: "doc.on.doc", text: "Hold any item on the canvas to duplicate it.")
                 instructionRow(icon: "checkmark.circle", text: "To duplicate multiple items, hold the canvas, select items, then tap Duplicate.")
+                instructionRow(icon: "text.cursor", text: "Double tap on the canvas to start typing directly.")
             }
         }
     }
@@ -137,9 +141,10 @@ struct SettingsSheet: View {
                     optionCard(
                         title: style.title,
                         icon: style.icon,
-                        isSelected: settings.effectiveGridStyle == style
+                        isSelected: settings.effectiveGridStyle == style,
+                        isProFeature: style != .dotted && style != .none
                     ) {
-                        if style == .dotted || pro.isPro {
+                        if style == .dotted || style == .none || pro.isPro {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 settings.gridStyle = style
                             }
@@ -152,6 +157,17 @@ struct SettingsSheet: View {
         }
     }
 
+    // MARK: - Export
+    @ViewBuilder
+    private var exportSection: some View {
+        if let exportButton {
+            VStack(alignment: .leading, spacing: 12) {
+                label("EXPORT")
+                exportButton
+            }
+        }
+    }
+
     // MARK: - Helpers
     private func label(_ text: String) -> some View {
         Text(text)
@@ -160,15 +176,26 @@ struct SettingsSheet: View {
             .tracking(1)
     }
 
-    private func optionCard(title: String, icon: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private func optionCard(title: String, icon: String, isSelected: Bool, isProFeature: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: .light))
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
-                Text(title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.8))
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.8))
+                    if isProFeature && !pro.isPro {
+                        Text("PRO")
+                            .font(.system(size: 7, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor)
+                            .foregroundStyle(Color.white)
+                            .clipShape(Capsule())
+                    }
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)

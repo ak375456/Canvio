@@ -21,16 +21,16 @@
 		FCB5C9282FB19AAF00E0E3B5 /* latoregular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = latoregular.ttf; sourceTree = "<group>"; };
 		FCB5C9292FB19AAF00E0E3B5 /* montezregular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = montezregular.ttf; sourceTree = "<group>"; };
 		FCB5C92A2FB19AAF00E0E3B5 /* poppinsregular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = poppinsregular.ttf; sourceTree = "<group>"; };
-		FCDEF22A2F9E216000ED5009 /* Ponder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ponder.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FCDEF22A2F9E216000ED5009 /* Canvio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Canvio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		FCB5C9362FB1A1A500E0E3B5 /* Exceptions for "Ponder" folder in "Ponder" target */ = {
+		FCB5C9362FB1A1A500E0E3B5 /* Exceptions for "Ponder" folder in "Canvio" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = FCDEF2292F9E216000ED5009 /* Ponder */;
+			target = FCDEF2292F9E216000ED5009 /* Canvio */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -38,7 +38,7 @@
 		FCDEF22C2F9E216000ED5009 /* Ponder */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				FCB5C9362FB1A1A500E0E3B5 /* Exceptions for "Ponder" folder in "Ponder" target */,
+				FCB5C9362FB1A1A500E0E3B5 /* Exceptions for "Ponder" folder in "Canvio" target */,
 			);
 			path = Ponder;
 			sourceTree = "<group>";
@@ -82,7 +82,7 @@
 		FCDEF22B2F9E216000ED5009 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				FCDEF22A2F9E216000ED5009 /* Ponder.app */,
+				FCDEF22A2F9E216000ED5009 /* Canvio.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,9 +97,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		FCDEF2292F9E216000ED5009 /* Ponder */ = {
+		FCDEF2292F9E216000ED5009 /* Canvio */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = FCDEF2352F9E216200ED5009 /* Build configuration list for PBXNativeTarget "Ponder" */;
+			buildConfigurationList = FCDEF2352F9E216200ED5009 /* Build configuration list for PBXNativeTarget "Canvio" */;
 			buildPhases = (
 				FCDEF2262F9E216000ED5009 /* Sources */,
 				FCDEF2272F9E216000ED5009 /* Frameworks */,
@@ -112,12 +112,12 @@
 			fileSystemSynchronizedGroups = (
 				FCDEF22C2F9E216000ED5009 /* Ponder */,
 			);
-			name = Ponder;
+			name = Canvio;
 			packageProductDependencies = (
 				FCE30A972FBB21F7003EBBA2 /* Supabase */,
 			);
 			productName = Ponder;
-			productReference = FCDEF22A2F9E216000ED5009 /* Ponder.app */;
+			productReference = FCDEF22A2F9E216000ED5009 /* Canvio.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -152,7 +152,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				FCDEF2292F9E216000ED5009 /* Ponder */,
+				FCDEF2292F9E216000ED5009 /* Canvio */,
 			);
 		};
 /* End PBXProject section */
@@ -304,6 +304,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Ponder/Ponder.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -365,6 +366,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Ponder/Ponder.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -433,7 +435,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		FCDEF2352F9E216200ED5009 /* Build configuration list for PBXNativeTarget "Ponder" */ = {
+		FCDEF2352F9E216200ED5009 /* Build configuration list for PBXNativeTarget "Canvio" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				FCDEF2362F9E216200ED5009 /* Debug */,

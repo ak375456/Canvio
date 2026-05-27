@@ -52,7 +52,7 @@ struct PonderApp: App {
             AudioElementModel.self,
             DrawingElementModel.self,
             ConnectorModel.self,
-            SymbolElementModel.self     // ← NEW
+            SymbolElementModel.self
         ])
     }
 }
@@ -60,17 +60,14 @@ struct PonderApp: App {
 private struct SyncCoordinatorView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var auth = AuthService.shared
-    @ObservedObject private var pro = ProManager.shared
+    @ObservedObject private var pro  = ProManager.shared
 
     private let accountCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
     var body: some View {
         ContentView()
             .task { await restoreAndSync() }
-            .onReceive(accountCheckTimer) { _ in
-                guard auth.currentUser != nil else { return }
-                Task { await auth.checkAccountStillExists(context: modelContext) }
-            }
+            // Full sync whenever app comes to foreground
             .onReceive(
                 NotificationCenter.default.publisher(for: {
                     #if os(iOS)
@@ -84,14 +81,53 @@ private struct SyncCoordinatorView: View {
                 guard auth.currentUser != nil else { return }
                 Task { await auth.checkAccountStillExists(context: modelContext) }
             }
+            // Periodic account validity check
+            .onReceive(accountCheckTimer) { _ in
+                guard auth.currentUser != nil else { return }
+                Task { await auth.checkAccountStillExists(context: modelContext) }
+            }
+            // ── Trigger reconcile when user logs in ───────────────────
+            // This pushes all local canvases + elements that were created
+            // before the user had an account up to Supabase.
+            .onReceive(AuthService.shared.didSignIn) {
+                Task {
+                    guard ProManager.shared.isPro else { return }
+                    print("🔑 Login detected — reconciling all local data")
+                    await fullSyncAfterAuth()
+                }
+            }
+            // ── Trigger reconcile when Pro is purchased ───────────────
+            // This pushes all local data that existed before Pro was bought.
+            .onChange(of: pro.isPro) { _, isPro in
+                guard isPro, auth.currentUser != nil else { return }
+                Task {
+                    print("⭐ Pro purchased — reconciling all local data")
+                    await fullSyncAfterAuth()
+                }
+            }
     }
+
+    // MARK: - App launch sync
 
     private func restoreAndSync() async {
         await ProManager.shared.refreshStatus()
         await AuthService.shared.restoreSession()
         guard ProManager.shared.isPro,
               AuthService.shared.currentUser != nil else { return }
+        await fullSyncAfterAuth()
+    }
 
+    // MARK: - Full sync
+    //
+    // 1. Flush any queued offline operations
+    // 2. Reconcile all local data → Supabase (handles pre-login / pre-Pro data)
+    // 3. Pull everything from Supabase → local
+
+    private func fullSyncAfterAuth() async {
+        guard ProManager.shared.isPro,
+              AuthService.shared.currentUser != nil else { return }
+
+        // Step 1 — flush offline queue
         await CanvasSyncService.shared.flushQueue()
         await TextSyncService.shared.flushQueue()
         await StickyNoteSyncService.shared.flushQueue()
@@ -103,10 +139,13 @@ private struct SyncCoordinatorView: View {
         await ImageSyncService.shared.flushQueue()
         await PDFSyncService.shared.flushQueue()
         await AudioSyncService.shared.flushQueue()
-        await SymbolSyncService.shared.flushQueue()     // ← NEW
+        await SymbolSyncService.shared.flushQueue()
 
+        // Step 2 — push all local data that Supabase doesn't have yet
+        await CanvasSyncService.shared.reconcileAllLocalData(context: modelContext)
+
+        // Step 3 — pull everything from Supabase
         await CanvasSyncService.shared.pullAll(context: modelContext)
-        await CanvasSyncService.shared.reconcileLocalToRemote(context: modelContext)
         await Task.yield()
 
         let canvases = (try? modelContext.fetch(FetchDescriptor<CanvasModel>())) ?? []
@@ -121,7 +160,7 @@ private struct SyncCoordinatorView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)  // ← NEW
+            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
         }
     }
 }

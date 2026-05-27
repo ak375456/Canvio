@@ -42,11 +42,41 @@ struct CanvasExportButton: View {
                 showPaywall = true
             }
         } label: {
-            if isExporting {
-                ProgressView().scaleEffect(0.8)
-            } else {
-                Image(systemName: "square.and.arrow.up").fontWeight(.medium)
+            HStack(spacing: 14) {
+                Image(systemName: "photo")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 24, alignment: .center)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("Export as PNG")
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                            .foregroundStyle(Color.primary)
+                        
+                        if !pro.isPro {
+                            Text("PRO")
+                                .font(.system(size: 10, weight: .bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor)
+                                .foregroundStyle(Color.white)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Text("Save a high-quality image of your canvas to share with others.")
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+                
+                if isExporting {
+                    ProgressView().scaleEffect(0.9)
+                }
             }
+            .padding(14)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         }
         .disabled(isExporting)
         .sheet(isPresented: $showPaywall) {

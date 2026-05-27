@@ -517,8 +517,24 @@ struct CanvasView: View {
                 .presentationDetents([.height(600)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $showSettings) {
-                SettingsSheet(settings: settings)
-                    .presentationDetents([.height(560)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
+                SettingsSheet(settings: settings, exportButton: AnyView(
+                    CanvasExportButton(
+                        canvas:        canvas,
+                        textElements:  textElements,
+                        stickyNotes:   stickyNotes,
+                        todoLists:     todoLists,
+                        todoTasks:     todoTasks,
+                        shapes:        shapes,
+                        images:        images,
+                        pdfs:          pdfs,
+                        tables:        tables,
+                        tableCells:    tableCells,
+                        audioElements: audioElements,
+                        drawings:      drawings,
+                        connectors:    connectors
+                    )
+                ))
+                    .presentationDetents([.height(680), .large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $showLayers) {
                 LayersSheet(allElements: allLayerableElements, vm: layersVM) { id in
@@ -647,21 +663,6 @@ struct CanvasView: View {
                     }
                     Button { showLayers = true } label: { Image(systemName: "square.3.layers.3d") }
                     Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
-                    CanvasExportButton(
-                        canvas:        canvas,
-                        textElements:  textElements,
-                        stickyNotes:   stickyNotes,
-                        todoLists:     todoLists,
-                        todoTasks:     todoTasks,
-                        shapes:        shapes,
-                        images:        images,
-                        pdfs:          pdfs,
-                        tables:        tables,
-                        tableCells:    tableCells,
-                        audioElements: audioElements,
-                        drawings:      drawings,
-                        connectors:    connectors
-                    )
                     Menu {
                         Button { newName = canvas.name; showRenameAlert = true } label: {
                             Label("Rename", systemImage: "pencil")

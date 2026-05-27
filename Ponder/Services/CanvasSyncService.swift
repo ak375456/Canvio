@@ -53,18 +53,17 @@ final class CanvasSyncService {
     private init() {}
 
     // MARK: - Resolve userID
-    // Waits up to 3 seconds for session restore before giving up.
 
     private func resolveUserID() async -> String? {
         if let id = AuthService.shared.syncUserID { return id }
         for _ in 0..<6 {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            try? await Task.sleep(nanoseconds: 500_000_000)
             if let id = AuthService.shared.syncUserID { return id }
         }
         return nil
     }
 
-    // MARK: - Upsert (create / rename)
+    // MARK: - Upsert
 
     func upsert(_ canvas: CanvasModel) async {
         guard let userID = await resolveUserID() else { return }
@@ -78,10 +77,7 @@ final class CanvasSyncService {
         }
 
         do {
-            try await supabase
-                .from("canvases")
-                .upsert(row, onConflict: "id")
-                .execute()
+            try await supabase.from("canvases").upsert(row, onConflict: "id").execute()
         } catch {
             if let data = try? JSONEncoder().encode(row) {
                 queue.enqueue(SyncOperation(type: .upsertCanvas, payload: data))
@@ -106,12 +102,9 @@ final class CanvasSyncService {
         }
 
         do {
-            try await supabase
-                .from("canvases")
+            try await supabase.from("canvases")
                 .update(DeleteUpdate(is_deleted: true, updated_at: now))
-                .eq("id",      value: canvasID)
-                .eq("user_id", value: userID)
-                .execute()
+                .eq("id", value: canvasID).eq("user_id", value: userID).execute()
         } catch {
             let payload = DeletePayload(id: canvasID, user_id: userID, updated_at: now)
             if let data = try? JSONEncoder().encode(payload) {
@@ -129,12 +122,10 @@ final class CanvasSyncService {
 
         do {
             let rows: [CanvasRow] = try await supabase
-                .from("canvases")
-                .select()
+                .from("canvases").select()
                 .eq("user_id", value: userID)
                 .order("created_at", ascending: true)
-                .execute()
-                .value
+                .execute().value
 
             let localCanvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
             let localMap = Dictionary(uniqueKeysWithValues: localCanvases.map { ($0.id, $0) })
@@ -181,49 +172,132 @@ final class CanvasSyncService {
         }
     }
 
-    // MARK: - Reconcile local → remote
-    //
-    // Finds any local canvases that are missing from Supabase and pushes them up.
-    // This fixes the "first canvas never synced" scenario where upsert fired
-    // before the session was restored (currentUser was nil) so the row was
-    // silently dropped and never retried.
-    //
-    // Call this AFTER pullAll so we know what's already in Supabase.
+    // MARK: - Reconcile local canvases → remote
 
     func reconcileLocalToRemote(context: ModelContext) async {
         guard network.isConnected else { return }
         guard let userID = AuthService.shared.syncUserID else { return }
 
-        // Fetch all remote IDs (non-deleted)
         do {
             struct IDOnly: Codable { let id: String }
             let remoteRows: [IDOnly] = try await supabase
-                .from("canvases")
-                .select("id")
-                .eq("user_id",   value: userID)
+                .from("canvases").select("id")
+                .eq("user_id",    value: userID)
                 .eq("is_deleted", value: false)
-                .execute()
-                .value
+                .execute().value
 
-            let remoteIDs = Set(remoteRows.map { $0.id.lowercased() })
-
-            // Find local canvases not in Supabase
-            let localCanvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
-            let orphans = localCanvases.filter { !remoteIDs.contains($0.id.uuidString.lowercased()) }
+            let remoteIDs      = Set(remoteRows.map { $0.id.lowercased() })
+            let localCanvases  = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
+            let orphans        = localCanvases.filter {
+                !remoteIDs.contains($0.id.uuidString.lowercased())
+            }
 
             if !orphans.isEmpty {
                 print("🔁 Reconciling \(orphans.count) local canvas(es) missing from Supabase")
                 for canvas in orphans {
                     let row = makeRow(canvas: canvas, userID: userID)
-                    try? await supabase
-                        .from("canvases")
-                        .upsert(row, onConflict: "id")
-                        .execute()
+                    try? await supabase.from("canvases").upsert(row, onConflict: "id").execute()
                 }
             }
         } catch {
             print("⚠️ Canvas reconcile failed: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Reconcile ALL local elements → Supabase
+    //
+    // Called after login or after Pro purchase so that canvases and elements
+    // created while the user was a guest (no account / not Pro) are pushed up.
+    // Each sync service already has upsert — we just call it for every local record.
+
+    func reconcileAllLocalData(context: ModelContext) async {
+        guard network.isConnected else { return }
+        guard AuthService.shared.syncUserID != nil else { return }
+
+        print("🔁 reconcileAllLocalData — pushing all local data to Supabase")
+
+        // 1. Canvases
+        let canvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
+        for canvas in canvases {
+            await upsert(canvas)
+        }
+
+        // Small yield so Supabase has the canvas rows before elements reference them
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // 2. All element types for every canvas
+        for canvas in canvases {
+            let canvasID = canvas.id
+
+            let texts = (try? context.fetch(FetchDescriptor<TextElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in texts { await TextSyncService.shared.upsert(el) }
+
+            let stickies = (try? context.fetch(FetchDescriptor<StickyNoteModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in stickies { await StickyNoteSyncService.shared.upsert(el) }
+
+            let shapes = (try? context.fetch(FetchDescriptor<ShapeElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in shapes { await ShapeSyncService.shared.upsert(el) }
+
+            let images = (try? context.fetch(FetchDescriptor<ImageElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in images { await ImageSyncService.shared.upsert(el) }
+
+            let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in pdfs { await PDFSyncService.shared.upsert(el) }
+
+            let todos = (try? context.fetch(FetchDescriptor<TodoListModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in todos { await TodoSyncService.shared.upsertList(el) }
+
+            let tasks = (try? context.fetch(FetchDescriptor<TodoTaskModel>())) ?? []
+            let todoIDs = Set(todos.map { $0.id })
+            for el in tasks.filter({ todoIDs.contains($0.listID) }) {
+                await TodoSyncService.shared.upsertTask(el)
+            }
+
+            let tables = (try? context.fetch(FetchDescriptor<TableElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in tables { await TableSyncService.shared.upsertTable(el) }
+
+            let cells = (try? context.fetch(FetchDescriptor<TableCellModel>())) ?? []
+            let tableIDs = Set(tables.map { $0.id })
+            for el in cells.filter({ tableIDs.contains($0.tableID) }) {
+                await TableSyncService.shared.upsertCell(el)
+            }
+
+            let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in audio { await AudioSyncService.shared.upsert(el) }
+
+            let drawings = (try? context.fetch(FetchDescriptor<DrawingElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in drawings { await DrawingSyncService.shared.upsert(el) }
+
+            let connectors = (try? context.fetch(FetchDescriptor<ConnectorModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in connectors { await ConnectorSyncService.shared.upsert(el) }
+
+            let symbols = (try? context.fetch(FetchDescriptor<SymbolElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in symbols { await SymbolSyncService.shared.upsert(el) }
+        }
+
+        print("✅ reconcileAllLocalData complete")
     }
 
     // MARK: - Flush offline queue
@@ -238,10 +312,7 @@ final class CanvasSyncService {
             case .upsertCanvas:
                 if let row = try? JSONDecoder().decode(CanvasRow.self, from: operation.payload) {
                     do {
-                        try await supabase
-                            .from("canvases")
-                            .upsert(row, onConflict: "id")
-                            .execute()
+                        try await supabase.from("canvases").upsert(row, onConflict: "id").execute()
                         succeeded = true
                     } catch {
                         print("⚠️ Queue flush canvas upsert failed: \(error.localizedDescription)")
@@ -249,14 +320,11 @@ final class CanvasSyncService {
                 }
 
             case .deleteCanvas:
-                if let payload = try? JSONDecoder().decode(DeletePayload.self,
-                                                           from: operation.payload) {
+                if let payload = try? JSONDecoder().decode(DeletePayload.self, from: operation.payload) {
                     do {
-                        try await supabase
-                            .from("canvases")
+                        try await supabase.from("canvases")
                             .update(DeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
+                            .eq("id", value: payload.id).eq("user_id", value: payload.user_id)
                             .execute()
                         succeeded = true
                     } catch {
