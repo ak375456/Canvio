@@ -140,7 +140,6 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
-				Base,
 			);
 			mainGroup = FCDEF2212F9E216000ED5009;
 			minimizedProjectReferenceProxies = 1;
@@ -327,6 +326,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Ponder/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Canvio;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Canvio uses your camera to add photos directly to your canvas";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Canvio uses the microphone to record audio notes on your canvas.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -389,6 +389,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Ponder/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Canvio;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Canvio uses your camera to add photos directly to your canvas";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Canvio uses the microphone to record audio notes on your canvas.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
