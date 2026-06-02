@@ -642,8 +642,23 @@ struct CanvasView: View {
         .navigationTitle("")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .background(InteractivePopGestureDisabler(isDisabled: true))
         #endif
         .toolbar {
+            #if os(iOS)
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 44, height: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
+            }
+            #endif
+
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     Button { vm.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }

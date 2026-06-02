@@ -24,6 +24,7 @@ struct ImageElementView: View {
     /// Downsampled display image, generated once on a background thread.
     @State private var displayImage: PlatformImage? = nil
     @State private var lastLoadedFileName: String = ""
+    @State private var showOpacityControls = false
 
     private var isSelected: Bool { vm.editingID == element.id }
     private var currentWidth: CGFloat { max(40, element.width + resizeDelta.width) }
@@ -139,7 +140,7 @@ struct ImageElementView: View {
         HStack(spacing: 6) {
             Menu {
                 ForEach([0.0, 4.0, 8.0, 12.0, 16.0, 24.0], id: \.self) { r in
-                    Button { element.cornerRadius = r; element.updatedAt = Date(); try? context.save() } label: {
+                    Button { vm.updateCornerRadius(element: element, cornerRadius: r, context: context) } label: {
                         HStack { Image(systemName: r == 0 ? "rectangle" : "rectangle.roundedtop"); Text(r == 0 ? "Sharp" : "\(Int(r))pt") }
                     }
                 }
@@ -150,20 +151,59 @@ struct ImageElementView: View {
                 }.foregroundStyle(Color.primary.opacity(0.7)).padding(.horizontal, 6).frame(height: 26)
             }
             Divider().frame(height: 18)
-            Menu {
-                ForEach([1.0, 0.9, 0.75, 0.5, 0.25], id: \.self) { o in
-                    Button { element.opacity = o; element.updatedAt = Date(); try? context.save() } label: { Text("\(Int(o * 100))%") }
-                }
+            Button {
+                showOpacityControls = true
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "circle.lefthalf.filled").font(.system(size: 12, weight: .semibold))
                     Text("\(Int(element.opacity * 100))%").font(.caption.weight(.semibold))
                 }.foregroundStyle(Color.primary.opacity(0.7)).padding(.horizontal, 6).frame(height: 26)
             }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showOpacityControls, arrowEdge: .top) {
+                opacityControls
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2).fixedSize()
+    }
+
+    private var opacityControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Opacity", systemImage: "circle.lefthalf.filled")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(Int(element.opacity * 100))%")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Slider(
+                value: Binding(
+                    get: { element.opacity },
+                    set: { vm.updateOpacity(element: element, opacity: $0, context: context) }
+                ),
+                in: 0.1...1.0,
+                step: 0.05
+            )
+
+            HStack(spacing: 8) {
+                ForEach([1.0, 0.75, 0.5, 0.25, 0.1], id: \.self) { value in
+                    Button {
+                        vm.updateOpacity(element: element, opacity: value, context: context)
+                    } label: {
+                        Text("\(Int(value * 100))")
+                            .font(.caption.weight(.semibold))
+                            .frame(minWidth: 34)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
     }
 
     private var rotateGesture: some Gesture {

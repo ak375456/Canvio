@@ -142,9 +142,9 @@ struct SettingsSheet: View {
                         title: style.title,
                         icon: style.icon,
                         isSelected: settings.effectiveGridStyle == style,
-                        isProFeature: style != .dotted && style != .none
+                        isProFeature: style != .dotted
                     ) {
-                        if style == .dotted || style == .none || pro.isPro {
+                        if style == .dotted || pro.isPro {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 settings.gridStyle = style
                             }

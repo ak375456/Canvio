@@ -101,7 +101,9 @@ class ImageElementViewModel: ObservableObject {
                                      x: element.x + Double(offset.width),
                                      y: element.y + Double(offset.height),
                                      width: element.width, height: element.height)
-        copy.cornerRadius = element.cornerRadius; copy.opacity = element.opacity
+        copy.rotation = element.rotation
+        copy.cornerRadius = element.cornerRadius
+        copy.opacity = element.opacity
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await ImageSyncService.shared.upsert(copy, uploadFile: true) }
@@ -120,7 +122,11 @@ class ImageElementViewModel: ObservableObject {
                                            x: element.x + Double(offset.width),
                                            y: element.y + Double(offset.height),
                                            width: element.width, height: element.height)
-                el.id = id; el.zIndex = zIndex
+                el.id = id
+                el.rotation = element.rotation
+                el.cornerRadius = element.cornerRadius
+                el.opacity = element.opacity
+                el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             }
@@ -152,12 +158,30 @@ class ImageElementViewModel: ObservableObject {
         ))
     }
 
+    func updateCornerRadius(element: ImageElementModel, cornerRadius: Double,
+                            context: ModelContext) {
+        element.cornerRadius = max(0, min(48, cornerRadius))
+        element.updatedAt = Date()
+        try? context.save()
+        Task { await ImageSyncService.shared.upsert(element) }
+    }
+
+    func updateOpacity(element: ImageElementModel, opacity: Double,
+                       context: ModelContext) {
+        element.opacity = max(0.1, min(1.0, opacity))
+        element.updatedAt = Date()
+        try? context.save()
+        Task { await ImageSyncService.shared.upsert(element) }
+    }
+
     func delete(element: ImageElementModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: element.id, canvasID: element.canvasID,
                     fileName: element.imageFileName,
                     x: element.x, y: element.y, width: element.width,
-                    height: element.height, zIndex: element.zIndex)
+                    height: element.height, rotation: element.rotation,
+                    cornerRadius: element.cornerRadius, opacity: element.opacity,
+                    zIndex: element.zIndex)
 
         Task { await ImageSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
@@ -167,7 +191,11 @@ class ImageElementViewModel: ObservableObject {
             undo: {
                 let el = ImageElementModel(canvasID: snap.canvasID, imageFileName: snap.fileName,
                                            x: snap.x, y: snap.y, width: snap.width, height: snap.height)
-                el.id = snap.id; el.zIndex = snap.zIndex
+                el.id = snap.id
+                el.rotation = snap.rotation
+                el.cornerRadius = snap.cornerRadius
+                el.opacity = snap.opacity
+                el.zIndex = snap.zIndex
                 context.insert(el); try? context.save()
                 Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             },
