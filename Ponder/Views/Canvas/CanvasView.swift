@@ -43,6 +43,7 @@ struct CanvasView: View {
     @State private var showPDFImporter = false
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
+    @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var canvasGestureSuppressionID = UUID()
     #if os(iOS)
@@ -226,7 +227,7 @@ struct CanvasView: View {
 
                 #if os(iOS)
                 CanvasGestureBridge(
-                    isEnabled: !vm.showCanvasDrawingOverlay,
+                    isEnabled: !vm.showCanvasDrawingOverlay || !isCanvasDrawingInputActive,
                     selectedElementFrame: selectedElementGestureFrame,
                     onPanChanged: { translation in
                         vm.offset = CGSize(
@@ -330,6 +331,7 @@ struct CanvasView: View {
                 if vm.showCanvasDrawingOverlay {
                     CanvasDrawingOverlay(
                         isActive:     $vm.showCanvasDrawingOverlay,
+                        isDrawingInputActive: $isCanvasDrawingInputActive,
                         startScale:   drawingStartScale,
                         startOffset:  drawingStartOffset,
                         liveScale:    $vm.scale,
@@ -763,6 +765,7 @@ struct CanvasView: View {
         dismissEverything()
         drawingStartScale  = vm.scale
         drawingStartOffset = vm.offset
+        isCanvasDrawingInputActive = true
         vm.showCanvasDrawingOverlay = true
     }
 

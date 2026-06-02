@@ -19,6 +19,8 @@ private struct ContentAreaSizeKey: PreferenceKey {
 
 struct CanvasDrawingOverlay: View {
     @Binding var isActive: Bool
+    @Binding var isDrawingInputActive: Bool
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     /// Canvas state captured the moment the overlay was opened.
     let startScale:  CGFloat
@@ -49,6 +51,7 @@ struct CanvasDrawingOverlay: View {
 
     init(
         isActive:    Binding<Bool>,
+        isDrawingInputActive: Binding<Bool>,
         startScale:  CGFloat,
         startOffset: CGSize,
         liveScale:   Binding<CGFloat>,
@@ -56,6 +59,7 @@ struct CanvasDrawingOverlay: View {
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
         self._isActive       = isActive
+        self._isDrawingInputActive = isDrawingInputActive
         self.startScale      = startScale
         self.startOffset     = startOffset
         self._liveScale      = liveScale
@@ -69,6 +73,13 @@ struct CanvasDrawingOverlay: View {
 
     /// Ratio to visually scale the snapshot so it tracks the canvas zoom.
     private var visualRatio: CGFloat { liveScale / effectiveScale }
+    private var usesCompactToolbar: Bool { horizontalSizeClass == .compact }
+    private var modeButtonTitle: String {
+        if isDrawingModeActive {
+            return usesCompactToolbar ? "Draw" : "Drawing"
+        }
+        return usesCompactToolbar ? "Move" : "Navigate"
+    }
 
     /// Translation to visually shift the snapshot so it tracks the canvas pan.
     private var visualTranslation: CGSize {
@@ -139,6 +150,7 @@ struct CanvasDrawingOverlay: View {
     private func toggleMode() {
         if isDrawingModeActive {
             // Draw → Navigate ────────────────────────────────────────────────
+            isDrawingInputActive = false
             // Render the drawing to a UIImage once.  During Navigate mode
             // this image is shown with a SwiftUI transform — pure GPU compositing,
             // no UIKit involvement, no per-frame updateUIView calls.
@@ -150,6 +162,7 @@ struct CanvasDrawingOverlay: View {
             }
         } else {
             // Navigate → Draw ────────────────────────────────────────────────
+            isDrawingInputActive = true
             // Bake the accumulated pan/zoom delta into PKDrawing so that new
             // strokes share the same coordinate space as the existing ones.
             let ratio = liveScale  / effectiveScale
@@ -178,16 +191,18 @@ struct CanvasDrawingOverlay: View {
     // MARK: Toolbar
 
     private var overlayToolbar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: usesCompactToolbar ? 8 : 12) {
 
             // Done
             Button { saveAndDismiss() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
                     Text("Done").font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 16).padding(.vertical, 9)
+                .padding(.horizontal, usesCompactToolbar ? 12 : 16).padding(.vertical, 9)
                 .background(Color.orange, in: Capsule())
                 .shadow(color: .orange.opacity(0.35), radius: 6, x: 0, y: 2)
             }
@@ -206,26 +221,31 @@ struct CanvasDrawingOverlay: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "trash").font(.system(size: 13, weight: .semibold))
-                    Text("Clear").font(.caption.weight(.semibold))
+                    if !usesCompactToolbar {
+                        Text("Clear").font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                    }
                 }
                 .foregroundStyle(.red)
-                .padding(.horizontal, 12).padding(.vertical, 9)
+                .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
                 .background(.regularMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
 
-            Spacer()
+            Spacer(minLength: usesCompactToolbar ? 6 : 12)
 
             // Draw / Navigate toggle
             Button { toggleMode() } label: {
                 HStack(spacing: 5) {
                     Image(systemName: isDrawingModeActive ? "hand.draw.fill" : "hand.raised.fill")
                         .font(.system(size: 13, weight: .semibold))
-                    Text(isDrawingModeActive ? "Drawing" : "Navigate")
+                    Text(modeButtonTitle)
                         .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .foregroundStyle(isDrawingModeActive ? Color.white : Color.primary)
-                .padding(.horizontal, 12).padding(.vertical, 9)
+                .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
                 .background(
                     isDrawingModeActive
                         ? AnyShapeStyle(Color.accentColor)
@@ -240,14 +260,20 @@ struct CanvasDrawingOverlay: View {
             .buttonStyle(.plain)
 
             // Cancel
-            Button { isActive = false } label: {
+            Button {
+                isDrawingInputActive = true
+                isActive = false
+            } label: {
                 Text("Cancel")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
                     .background(.regularMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Save
@@ -268,6 +294,7 @@ struct CanvasDrawingOverlay: View {
             }
             onSave(final, liveScale, liveOffset)
         }
+        isDrawingInputActive = true
         isActive = false
     }
 }
@@ -335,6 +362,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
 struct CanvasDrawingOverlay: View {
     @Binding var isActive:    Bool
+    @Binding var isDrawingInputActive: Bool
     let startScale:           CGFloat
     let startOffset:          CGSize
     @Binding var liveScale:   CGFloat
