@@ -6,6 +6,20 @@
 import SwiftUI
 import SwiftData
 
+private enum ShapeCustomColorTarget: String, Identifiable {
+    case stroke
+    case fill
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .stroke: return "Custom Stroke"
+        case .fill:   return "Custom Fill"
+        }
+    }
+}
+
 struct ShapeElementView: View {
     @Environment(\.modelContext) private var context
     @Bindable var shape: ShapeElementModel
@@ -21,6 +35,8 @@ struct ShapeElementView: View {
     @State private var resizeDelta: CGSize = .zero
     @State private var rotationAngle: Double = 0
     @State private var hasLoadedRotation = false
+    @State private var customColorTarget: ShapeCustomColorTarget?
+    @State private var customColorDraft: Color = .primary
 
     private var isSelected: Bool { vm.editingID == shape.id }
     private var currentSize: CGSize {
@@ -29,6 +45,9 @@ struct ShapeElementView: View {
     }
     private var strokeColor: Color { paletteColor(shape.strokeColorName) }
     private var fillColor: Color { paletteColor(shape.fillColorName) }
+    private var hasVisibleStroke: Bool { shape.hasVisibleStroke }
+    private var canDisableStroke: Bool { shape.shapeKind.supportsFill && shape.hasFill }
+    private var canDisableFill: Bool { hasVisibleStroke }
     private let handleSize: CGFloat = 26
 
     var body: some View {
@@ -40,8 +59,12 @@ struct ShapeElementView: View {
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: shape.x + dragOffset.width, y: shape.y + dragOffset.height)
         .gesture(canMove ? moveDragGesture : nil)
+        .popover(item: $customColorTarget) { target in
+            customColorPanel(for: target)
+        }
         .onAppear {
             if !hasLoadedRotation { rotationAngle = shape.rotation; hasLoadedRotation = true }
+            ensureVisibleStyle()
         }
     }
 
@@ -101,64 +124,54 @@ struct ShapeElementView: View {
     private var shapeRenderer: some View {
         switch shape.shapeKind {
         case .line:
-            LineShapeView(width: currentSize.width, strokeColor: strokeColor,
-                          strokeWidth: shape.strokeWidth, hasArrow: shape.hasArrowHead)
+            if hasVisibleStroke {
+                LineShapeView(width: currentSize.width, strokeColor: strokeColor,
+                              strokeWidth: shape.strokeWidth, hasArrow: shape.hasArrowHead)
+            } else {
+                Color.clear
+            }
         case .rectangle:
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
-                .background(shape.hasFill ? RoundedRectangle(cornerRadius: 4).fill(fillColor) : nil)
+            ZStack {
+                if shape.hasFill { RoundedRectangle(cornerRadius: 4).fill(fillColor) }
+                if hasVisibleStroke {
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
+                }
+            }
         case .triangle:
-            TriangleShape(variant: shape.triangleVariant)
-                .stroke(strokeColor, lineWidth: shape.strokeWidth)
-                .background(shape.hasFill ? TriangleShape(variant: shape.triangleVariant).fill(fillColor) : nil)
+            ZStack {
+                if shape.hasFill { TriangleShape(variant: shape.triangleVariant).fill(fillColor) }
+                if hasVisibleStroke {
+                    TriangleShape(variant: shape.triangleVariant)
+                        .stroke(strokeColor, lineWidth: shape.strokeWidth)
+                }
+            }
         case .polygon:
-            PolygonShape(sides: shape.polygonSides)
-                .stroke(strokeColor, lineWidth: shape.strokeWidth)
-                .background(shape.hasFill ? PolygonShape(sides: shape.polygonSides).fill(fillColor) : nil)
+            ZStack {
+                if shape.hasFill { PolygonShape(sides: shape.polygonSides).fill(fillColor) }
+                if hasVisibleStroke {
+                    PolygonShape(sides: shape.polygonSides)
+                        .stroke(strokeColor, lineWidth: shape.strokeWidth)
+                }
+            }
         case .circle:
-            Circle()
-                .strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
-                .background(shape.hasFill ? Circle().fill(fillColor) : nil)
+            ZStack {
+                if shape.hasFill { Circle().fill(fillColor) }
+                if hasVisibleStroke {
+                    Circle().strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
+                }
+            }
         }
     }
 
     private var toolbar: some View {
-        HStack(spacing: 6) {
-            colorMenu(label: "S", selected: shape.strokeColorName) { n in
-                shape.strokeColorName = n; shape.updatedAt = Date(); try? context.save()
-                Task { await ShapeSyncService.shared.upsert(shape) }
-            }
+        HStack(spacing: 8) {
+            strokeStyleMenu
             if shape.shapeKind.supportsFill {
-                Button {
-                    shape.hasFill.toggle(); shape.updatedAt = Date(); try? context.save()
-                    Task { await ShapeSyncService.shared.upsert(shape) }
-                } label: {
-                    Image(systemName: shape.hasFill ? "drop.fill" : "drop")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(shape.hasFill ? Color.accentColor : Color.primary.opacity(0.6))
-                        .frame(width: 26, height: 26)
-                }.buttonStyle(.plain)
-                if shape.hasFill {
-                    colorMenu(label: "F", selected: shape.fillColorName) { n in
-                        shape.fillColorName = n; shape.updatedAt = Date(); try? context.save()
-                        Task { await ShapeSyncService.shared.upsert(shape) }
-                    }
-                }
+                fillStyleMenu
             }
             Divider().frame(height: 18)
-            Menu {
-                ForEach([1.0, 2.0, 3.0, 4.0, 6.0, 9.0], id: \.self) { w in
-                    Button {
-                        shape.strokeWidth = w; shape.updatedAt = Date(); try? context.save()
-                        Task { await ShapeSyncService.shared.upsert(shape) }
-                    } label: { Text("\(Int(w))pt") }
-                }
-            } label: {
-                HStack(spacing: 2) {
-                    Image(systemName: "lineweight").font(.system(size: 12, weight: .semibold))
-                    Text("\(Int(shape.strokeWidth))").font(.caption.weight(.semibold))
-                }.foregroundStyle(Color.primary.opacity(0.7)).frame(width: 36, height: 26)
-            }
+            strokeWidthMenu
             if shape.shapeKind == .line {
                 Divider().frame(height: 18)
                 Button {
@@ -207,21 +220,232 @@ struct ShapeElementView: View {
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2)
     }
 
-    private func colorMenu(label: String, selected: String, onPick: @escaping (String) -> Void) -> some View {
+    private var strokeStyleMenu: some View {
         Menu {
-            ForEach(["primary","blue","red","green","orange","purple","pink","yellow","teal","gray"], id: \.self) { name in
-                Button { onPick(name) } label: {
-                    HStack { Circle().fill(paletteColor(name)).frame(width: 12, height: 12); Text(name.capitalized) }
+            if shape.shapeKind.supportsFill {
+                Button {
+                    setStrokeColor("none")
+                } label: {
+                    Label("No Stroke", systemImage: "slash.circle")
+                }
+                .disabled(!canDisableStroke)
+                Divider()
+            }
+
+            Button {
+                openCustomColorPanel(for: .stroke)
+            } label: {
+                Label("More Colors...", systemImage: "paintpalette")
+            }
+            Divider()
+
+            ForEach(ShapeColorPalette.options) { option in
+                colorOptionButton(
+                    option: option,
+                    selected: shape.strokeColorName == option.name,
+                    onPick: { setStrokeColor(option.name) }
+                )
+            }
+        } label: {
+            styleControlLabel(
+                title: "Stroke",
+                icon: "pencil.tip",
+                color: strokeColor,
+                isActive: hasVisibleStroke
+            )
+        }
+    }
+
+    private var fillStyleMenu: some View {
+        Menu {
+            Button {
+                setFillEnabled(!shape.hasFill)
+            } label: {
+                Label(shape.hasFill ? "No Fill" : "Enable Fill",
+                      systemImage: shape.hasFill ? "slash.circle" : "paintpalette.fill")
+            }
+            .disabled(shape.hasFill && !canDisableFill)
+
+            Divider()
+            Button {
+                openCustomColorPanel(for: .fill)
+            } label: {
+                Label("More Colors...", systemImage: "paintpalette")
+            }
+            Divider()
+
+            ForEach(ShapeColorPalette.options) { option in
+                colorOptionButton(
+                    option: option,
+                    selected: shape.hasFill && shape.fillColorName == option.name,
+                    onPick: { setFillColor(option.name) }
+                )
+            }
+        } label: {
+            styleControlLabel(
+                title: "Fill",
+                icon: "paintpalette.fill",
+                color: fillColor,
+                isActive: shape.hasFill
+            )
+        }
+    }
+
+    private func customColorPanel(for target: ShapeCustomColorTarget) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(target.title)
+                .font(.headline)
+
+            ColorPicker("Color", selection: $customColorDraft, supportsOpacity: false)
+
+            HStack {
+                Button("Cancel") {
+                    customColorTarget = nil
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button("Apply") {
+                    applyCustomColor(to: target)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(width: 260)
+    }
+
+    private var strokeWidthMenu: some View {
+        Menu {
+            ForEach([1.0, 2.0, 3.0, 4.0, 6.0, 9.0], id: \.self) { width in
+                Button {
+                    setStrokeWidth(width)
+                } label: {
+                    HStack {
+                        Text("\(Int(width))pt")
+                        if Int(shape.strokeWidth) == Int(width) {
+                            Image(systemName: "checkmark")
+                        }
+                    }
                 }
             }
         } label: {
-            ZStack {
-                Circle().fill(paletteColor(selected)).frame(width: 18, height: 18)
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1))
-                Text(label).font(.system(size: 8, weight: .heavy)).foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.6), radius: 1)
+            HStack(spacing: 3) {
+                Image(systemName: "lineweight").font(.system(size: 12, weight: .semibold))
+                Text(hasVisibleStroke ? "\(Int(shape.strokeWidth))" : "Off")
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(hasVisibleStroke ? Color.primary.opacity(0.75) : Color.primary.opacity(0.4))
+            .frame(width: 42, height: 26)
+        }
+        .disabled(!hasVisibleStroke)
+    }
+
+    private func openCustomColorPanel(for target: ShapeCustomColorTarget) {
+        switch target {
+        case .stroke:
+            customColorDraft = hasVisibleStroke ? strokeColor : ShapeColorPalette.color(named: "primary")
+        case .fill:
+            customColorDraft = fillColor
+        }
+        customColorTarget = target
+    }
+
+    private func applyCustomColor(to target: ShapeCustomColorTarget) {
+        let colorName = ShapeColorPalette.storageName(for: customColorDraft)
+        switch target {
+        case .stroke:
+            setStrokeColor(colorName)
+        case .fill:
+            setFillColor(colorName)
+        }
+        customColorTarget = nil
+    }
+
+    private func colorOptionButton(option: ShapeColorOption,
+                                   selected: Bool,
+                                   onPick: @escaping () -> Void) -> some View {
+        Button(action: onPick) {
+            HStack {
+                Circle()
+                    .fill(option.color)
+                    .frame(width: 14, height: 14)
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 1))
+                Text(option.title)
+                if selected {
+                    Spacer()
+                    Image(systemName: "checkmark")
+                }
             }
         }
+    }
+
+    private func styleControlLabel(title: String,
+                                   icon: String,
+                                   color: Color,
+                                   isActive: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+            Text(title)
+                .font(.caption.weight(.semibold))
+            ZStack {
+                Circle()
+                    .fill(isActive ? color : Color.clear)
+                    .frame(width: 15, height: 15)
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1))
+                if !isActive {
+                    Image(systemName: "slash")
+                        .font(.system(size: 8, weight: .bold))
+                }
+            }
+        }
+        .foregroundStyle(isActive ? Color.primary.opacity(0.82) : Color.primary.opacity(0.48))
+        .frame(height: 26)
+    }
+
+    private func setStrokeColor(_ name: String) {
+        guard name != "none" || canDisableStroke else { return }
+        if shape.shapeKind == .line && name == "none" { return }
+        shape.strokeColorName = name
+        if name != "none", shape.strokeWidth <= 0 {
+            shape.strokeWidth = 2.5
+        }
+        persistShapeStyle()
+    }
+
+    private func setFillEnabled(_ enabled: Bool) {
+        guard shape.shapeKind.supportsFill else { return }
+        if !enabled && !canDisableFill { return }
+        shape.hasFill = enabled
+        persistShapeStyle()
+    }
+
+    private func setFillColor(_ name: String) {
+        guard shape.shapeKind.supportsFill else { return }
+        shape.fillColorName = name
+        shape.hasFill = true
+        persistShapeStyle()
+    }
+
+    private func setStrokeWidth(_ width: Double) {
+        guard hasVisibleStroke else { return }
+        shape.strokeWidth = width
+        persistShapeStyle()
+    }
+
+    private func ensureVisibleStyle() {
+        if shape.hasVisibleStyle { return }
+        shape.strokeColorName = "primary"
+        shape.strokeWidth = max(shape.strokeWidth, 2.5)
+        persistShapeStyle()
+    }
+
+    private func persistShapeStyle() {
+        shape.updatedAt = Date()
+        try? context.save()
+        Task { await ShapeSyncService.shared.upsert(shape) }
     }
 
     private var cornerHandles: some View {
@@ -297,12 +521,7 @@ struct ShapeElementView: View {
     }
 
     private func paletteColor(_ name: String) -> Color {
-        switch name {
-        case "blue": return .blue; case "red": return .red; case "green": return .green
-        case "orange": return .orange; case "purple": return .purple; case "pink": return .pink
-        case "yellow": return .yellow; case "teal": return .teal; case "gray": return .gray
-        default: return .primary
-        }
+        ShapeColorPalette.color(named: name)
     }
 }
 

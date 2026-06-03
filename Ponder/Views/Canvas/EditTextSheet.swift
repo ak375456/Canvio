@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct EditTextSheet: View {
     let element: TextElementModel
@@ -21,6 +22,11 @@ struct EditTextSheet: View {
     @State private var bgColorName: String      = "none"
     @State private var strokeColorName: String  = "none"
     @State private var strokeWidth: Double      = 2.0
+    @State private var isImportingFont: Bool    = false
+    @State private var fontImportError: String?
+    @State private var showPaywall: Bool        = false
+    @ObservedObject private var pro             = ProManager.shared
+    @ObservedObject private var customFontStore = CustomFontStore.shared
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -56,6 +62,34 @@ struct EditTextSheet: View {
             strokeColorName = element.strokeColorName
             strokeWidth    = element.strokeWidth
             focused        = true
+        }
+        .fileImporter(
+            isPresented: $isImportingFont,
+            allowedContentTypes: supportedFontTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            handleFontImport(result)
+        }
+        .alert(
+            "Font Import Failed",
+            isPresented: Binding(
+                get: { fontImportError != nil },
+                set: { if !$0 { fontImportError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { fontImportError = nil }
+        } message: {
+            Text(fontImportError ?? "")
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallSheet {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    isImportingFont = true
+                }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
         }
     }
 
@@ -98,10 +132,21 @@ struct EditTextSheet: View {
 
     // MARK: - Font
     private var fontRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            label("FONT")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    label("FONT")
+                    Text("Add your custom fonts (.ttf)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                importFontButton
+            }
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) { ForEach(AppFont.allFonts) { fontChip(font: $0) } }
+                HStack(spacing: 8) {
+                    ForEach(customFontStore.allFonts) { fontChip(font: $0) }
+                }
                     .padding(.vertical, 2)
             }
         }
@@ -112,11 +157,43 @@ struct EditTextSheet: View {
         return Button { selectedFont = font.name } label: {
             Text(font.displayName)
                 .font(font.name == "system" ? .system(size: 15, weight: .medium) : .custom(font.name, size: 16))
+                .lineLimit(1)
                 .foregroundStyle(isSelected ? .white : Color.primary)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 10)
                     .fill(isSelected ? Color.accentColor : Color.secondary.opacity(0.12)))
         }.buttonStyle(.plain)
+    }
+
+    private var importFontButton: some View {
+        Button {
+            if pro.isPro {
+                isImportingFont = true
+            } else {
+                showPaywall = true
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                Text("Import")
+                    .font(.subheadline.weight(.semibold))
+                if !pro.isPro {
+                    Text("PRO")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor)
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                }
+            }
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor.opacity(0.12)))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Font Size
@@ -375,6 +452,25 @@ struct EditTextSheet: View {
     private func cardColorFromName(_ name: String) -> Color? {
         guard name != "none" else { return nil }
         return cardColorOptions.first { $0.name == name }?.color
+    }
+
+    private var supportedFontTypes: [UTType] {
+        [UTType(filenameExtension: "ttf") ?? .data]
+    }
+
+    private func handleFontImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            do {
+                let importedFont = try customFontStore.importFont(from: url)
+                selectedFont = importedFont.name
+            } catch {
+                fontImportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        case .failure(let error):
+            fontImportError = error.localizedDescription
+        }
     }
 
     private let cardColorOptions: [(name: String, color: Color)] = [

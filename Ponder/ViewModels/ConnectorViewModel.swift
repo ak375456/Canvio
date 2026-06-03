@@ -236,23 +236,56 @@ class ConnectorViewModel: ObservableObject {
 
     static func path(from start: CGPoint, to end: CGPoint,
                      style: ConnectorLineStyle) -> Path {
-        var p = Path()
-        p.move(to: start)
-        switch style {
-        case .straight:
-            p.addLine(to: end)
-        case .curved:
-            let dx = (end.x - start.x) * 0.5
-            let cp1 = CGPoint(x: start.x + dx, y: start.y)
-            let cp2 = CGPoint(x: end.x   - dx, y: end.y)
-            let dist = hypot(end.x - start.x, end.y - start.y)
-            if dist < 60 {
-                p.addLine(to: end)
-            } else {
-                p.addCurve(to: end, control1: cp1, control2: cp2)
-            }
-        }
-        return p
+        ConnectorGeometry.path(from: start, to: end, style: style)
+    }
+
+    static func path(from start: CGPoint, fromAnchor: ConnectorAnchor,
+                     to end: CGPoint, toAnchor: ConnectorAnchor,
+                     style: ConnectorLineStyle) -> Path {
+        ConnectorGeometry.path(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            toAnchor: toAnchor,
+            style: style
+        )
+    }
+
+    static func path(from start: CGPoint, fromAnchor: ConnectorAnchor,
+                     to end: CGPoint, style: ConnectorLineStyle) -> Path {
+        ConnectorGeometry.path(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            style: style
+        )
+    }
+
+    static func point(from start: CGPoint, fromAnchor: ConnectorAnchor,
+                      to end: CGPoint, toAnchor: ConnectorAnchor,
+                      style: ConnectorLineStyle, t: CGFloat) -> CGPoint {
+        ConnectorGeometry.point(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            toAnchor: toAnchor,
+            style: style,
+            t: t
+        )
+    }
+
+    static func pointBeforeEnd(from start: CGPoint, fromAnchor: ConnectorAnchor,
+                               to end: CGPoint, toAnchor: ConnectorAnchor,
+                               style: ConnectorLineStyle,
+                               distance offset: CGFloat) -> CGPoint {
+        ConnectorGeometry.pointBeforeEnd(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            toAnchor: toAnchor,
+            style: style,
+            distance: offset
+        )
     }
 
     static func arrowPath(from start: CGPoint, to end: CGPoint,

@@ -143,7 +143,13 @@ struct CanvasView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
 
-                CanvasGridView(offset: vm.offset, scale: vm.scale, style: settings.effectiveGridStyle)
+                CanvasGridView(
+                    offset: vm.offset,
+                    scale: vm.scale,
+                    style: settings.effectiveGridStyle,
+                    backgroundMode: settings.canvasBackgroundMode,
+                    backgroundPalette: settings.canvasBackgroundPalette
+                )
                     .contentShape(Rectangle())
                     .onTapGesture {
                         guard !isCanvasGestureActive else { return }
@@ -807,6 +813,9 @@ struct CanvasView: View {
             canvas: canvas, textElements: textElements,
             stickyNotes: stickyNotes, todoLists: todoLists,
             shapes: shapes, images: images, drawings: drawings,
+            gridStyle: settings.effectiveGridStyle,
+            backgroundMode: settings.canvasBackgroundMode,
+            backgroundPalette: settings.canvasBackgroundPalette,
             context: context
         )
     }

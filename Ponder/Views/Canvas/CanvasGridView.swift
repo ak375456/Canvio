@@ -9,64 +9,137 @@ struct CanvasGridView: View {
     let offset: CGSize
     let scale: CGFloat
     let style: GridStyle
+    let backgroundMode: CanvasBackgroundMode
+    let backgroundPalette: CanvasBackgroundPalette
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        offset: CGSize,
+        scale: CGFloat,
+        style: GridStyle,
+        backgroundMode: CanvasBackgroundMode = .adaptive,
+        backgroundPalette: CanvasBackgroundPalette = .neutral
+    ) {
+        self.offset = offset
+        self.scale = scale
+        self.style = style
+        self.backgroundMode = backgroundMode
+        self.backgroundPalette = backgroundPalette
+    }
 
     var body: some View {
         GeometryReader { geo in
             Canvas { context, size in
-                drawGrid(in: context, size: size)
+                drawBackground(in: context, size: size)
             }
-            .background(canvasBackground)
         }
     }
 
-    private var canvasBackground: Color {
-        #if canImport(UIKit)
-        return Color(uiColor: .systemBackground)
-        #else
-        return Color(nsColor: .windowBackgroundColor)
-        #endif
+    private var appearance: CanvasBackgroundAppearance {
+        let resolvedScheme = backgroundMode.resolvedColorScheme(system: colorScheme)
+        return backgroundPalette.appearance(for: resolvedScheme)
     }
 
-    private func drawGrid(in context: GraphicsContext, size: CGSize) {
-        guard style != .none else { return }
+    private func drawBackground(in context: GraphicsContext, size: CGSize) {
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(appearance.base))
 
         let spacing: CGFloat = 30
-        let stepX = spacing * scale
-        let stepY = spacing * scale
+        let stepX = max(1, spacing * scale)
+        let stepY = max(1, spacing * scale)
 
-        let offsetX = offset.width.truncatingRemainder(dividingBy: stepX)
-        let offsetY = offset.height.truncatingRemainder(dividingBy: stepY)
+        drawAlternatingBands(context: context, size: size, stepX: stepX, stepY: stepY)
+        drawGrid(context: context, size: size, stepX: stepX, stepY: stepY)
+    }
 
-        let lineColor = Color.gray.opacity(0.25)
-        let dotColor = Color.gray.opacity(0.4)
+    private func drawGrid(context: GraphicsContext, size: CGSize, stepX: CGFloat, stepY: CGFloat) {
+        guard style != .none else { return }
+
+        let offsetX = snappedOffset(offset.width, step: stepX)
+        let offsetY = snappedOffset(offset.height, step: stepY)
 
         switch style {
         case .dotted:
             drawDots(context: context, size: size,
                      stepX: stepX, stepY: stepY,
                      offsetX: offsetX, offsetY: offsetY,
-                     color: dotColor)
+                     color: appearance.dot)
         case .squares:
             drawLines(context: context, size: size,
                       stepX: stepX, stepY: stepY,
                       offsetX: offsetX, offsetY: offsetY,
-                      color: lineColor,
+                      color: appearance.line,
                       horizontal: true, vertical: true)
         case .horizontal:
             drawLines(context: context, size: size,
                       stepX: stepX, stepY: stepY,
                       offsetX: offsetX, offsetY: offsetY,
-                      color: lineColor,
+                      color: appearance.line,
                       horizontal: true, vertical: false)
         case .vertical:
             drawLines(context: context, size: size,
                       stepX: stepX, stepY: stepY,
                       offsetX: offsetX, offsetY: offsetY,
-                      color: lineColor,
+                      color: appearance.line,
                       horizontal: false, vertical: true)
         case .none:
             break
         }
+    }
+
+    private func drawAlternatingBands(
+        context: GraphicsContext,
+        size: CGSize,
+        stepX: CGFloat,
+        stepY: CGFloat
+    ) {
+        switch style {
+        case .vertical:
+            drawColumnBands(context: context, size: size, stepX: stepX)
+        case .horizontal:
+            drawRowBands(context: context, size: size, stepY: stepY)
+        case .squares:
+            drawColumnBands(context: context, size: size, stepX: stepX, opacity: 0.55)
+        case .dotted, .none:
+            break
+        }
+    }
+
+    private func drawColumnBands(
+        context: GraphicsContext,
+        size: CGSize,
+        stepX: CGFloat,
+        opacity: Double = 1
+    ) {
+        let startIndex = Int(floor((0 - offset.width) / stepX)) - 1
+        let endIndex = Int(ceil((size.width - offset.width) / stepX)) + 1
+
+        for index in startIndex...endIndex where index.isMultiple(of: 2) {
+            let x = CGFloat(index) * stepX + offset.width
+            let rect = CGRect(x: x, y: 0, width: stepX, height: size.height)
+            context.fill(Path(rect), with: .color(appearance.alternate.opacity(opacity)))
+        }
+    }
+
+    private func drawRowBands(
+        context: GraphicsContext,
+        size: CGSize,
+        stepY: CGFloat,
+        opacity: Double = 1
+    ) {
+        let startIndex = Int(floor((0 - offset.height) / stepY)) - 1
+        let endIndex = Int(ceil((size.height - offset.height) / stepY)) + 1
+
+        for index in startIndex...endIndex where index.isMultiple(of: 2) {
+            let y = CGFloat(index) * stepY + offset.height
+            let rect = CGRect(x: 0, y: y, width: size.width, height: stepY)
+            context.fill(Path(rect), with: .color(appearance.alternate.opacity(opacity)))
+        }
+    }
+
+    private func snappedOffset(_ value: CGFloat, step: CGFloat) -> CGFloat {
+        let remainder = value.truncatingRemainder(dividingBy: step)
+        return remainder >= 0 ? remainder : remainder + step
     }
 
     private func drawDots(context: GraphicsContext, size: CGSize,

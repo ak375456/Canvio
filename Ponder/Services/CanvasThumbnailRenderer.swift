@@ -24,6 +24,9 @@ enum CanvasThumbnailRenderer {
         shapes:        [ShapeElementModel],
         images:        [ImageElementModel],
         drawings:      [DrawingElementModel],
+        gridStyle:     GridStyle = .dotted,
+        backgroundMode: CanvasBackgroundMode = .adaptive,
+        backgroundPalette: CanvasBackgroundPalette = .neutral,
         context:       ModelContext
     ) {
         let snapshot = CanvasThumbnailSnapshot(
@@ -34,6 +37,9 @@ enum CanvasThumbnailRenderer {
             shapes:       shapes,
             images:       images,
             drawings:     drawings,
+            gridStyle:    gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette,
             width:        kThumbWidth,
             height:       kThumbHeight
         )
@@ -112,6 +118,9 @@ private struct CanvasThumbnailSnapshot: View {
     let shapes:       [ShapeElementModel]
     let images:       [ImageElementModel]
     let drawings:     [DrawingElementModel]
+    let gridStyle:     GridStyle
+    let backgroundMode: CanvasBackgroundMode
+    let backgroundPalette: CanvasBackgroundPalette
     let width:        CGFloat
     let height:       CGFloat
 
@@ -145,9 +154,13 @@ private struct CanvasThumbnailSnapshot: View {
     var body: some View {
         let t = transform
         ZStack(alignment: .topLeading) {
-            // Plain white background — works on iOS and macOS,
-            // JPEG thumbnails don't need dark mode adaptation
-            Rectangle().fill(Color.white)
+            CanvasGridView(
+                offset: CGSize(width: t.offsetX, height: t.offsetY),
+                scale: t.scale,
+                style: gridStyle,
+                backgroundMode: backgroundMode,
+                backgroundPalette: backgroundPalette
+            )
 
             ZStack(alignment: .topLeading) {
                 ForEach(shapes) { shape in
@@ -194,28 +207,47 @@ private struct ThumbnailShapeView: View {
         Group {
             switch shape.shapeKind {
             case .rectangle:
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    .background(shape.hasFill ? RoundedRectangle(cornerRadius: 3).fill(fill) : nil)
+                ZStack {
+                    if shape.hasFill { RoundedRectangle(cornerRadius: 3).fill(fill) }
+                    if shape.hasVisibleStroke {
+                        RoundedRectangle(cornerRadius: 3)
+                            .strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
+                    }
+                }
                     .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
             case .line:
-                Rectangle()
-                    .fill(stroke)
-                    .frame(width: CGFloat(shape.width), height: CGFloat(max(1, shape.strokeWidth)))
+                if shape.hasVisibleStroke {
+                    Rectangle()
+                        .fill(stroke)
+                        .frame(width: CGFloat(shape.width), height: CGFloat(max(1, shape.strokeWidth)))
+                } else {
+                    Color.clear
+                }
             case .triangle:
-                TriangleShape(variant: shape.triangleVariant)
-                    .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    .background(shape.hasFill ? TriangleShape(variant: shape.triangleVariant).fill(fill) : nil)
+                ZStack {
+                    if shape.hasFill { TriangleShape(variant: shape.triangleVariant).fill(fill) }
+                    if shape.hasVisibleStroke {
+                        TriangleShape(variant: shape.triangleVariant)
+                            .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
+                    }
+                }
                     .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
             case .polygon:
-                PolygonShape(sides: shape.polygonSides)
-                    .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    .background(shape.hasFill ? PolygonShape(sides: shape.polygonSides).fill(fill) : nil)
+                ZStack {
+                    if shape.hasFill { PolygonShape(sides: shape.polygonSides).fill(fill) }
+                    if shape.hasVisibleStroke {
+                        PolygonShape(sides: shape.polygonSides)
+                            .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
+                    }
+                }
                     .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
             case .circle:
-                Circle()
-                    .strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    .background(shape.hasFill ? Circle().fill(fill) : nil)
+                ZStack {
+                    if shape.hasFill { Circle().fill(fill) }
+                    if shape.hasVisibleStroke {
+                        Circle().strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
+                    }
+                }
                     .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
             }
         }
@@ -298,17 +330,5 @@ private struct ThumbnailTextView: View {
 
 // MARK: - Color helper
 private func thumbColor(_ name: String) -> Color {
-    switch name {
-    case "blue":   return .blue
-    case "red":    return .red
-    case "green":  return .green
-    case "orange": return .orange
-    case "purple": return .purple
-    case "pink":   return .pink
-    case "teal":   return .teal
-    case "gray":   return .gray
-    case "indigo": return .indigo
-    case "yellow": return .yellow
-    default:       return .primary
-    }
+    ShapeColorPalette.color(named: name)
 }

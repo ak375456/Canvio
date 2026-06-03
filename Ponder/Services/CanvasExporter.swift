@@ -27,6 +27,9 @@ final class CanvasExporter {
         drawings:      [DrawingElementModel],
         connectors:    [ConnectorModel],
         colorScheme:   ColorScheme = .light,
+        gridStyle:     GridStyle = .dotted,
+        backgroundMode: CanvasBackgroundMode = .adaptive,
+        backgroundPalette: CanvasBackgroundPalette = .neutral,
         scale:         CGFloat = 2.0
     ) -> Data? {
 
@@ -46,14 +49,19 @@ final class CanvasExporter {
         guard exportRect.width > 0, exportRect.height > 0 else { return nil }
 
         let drawingImages = prerenderDrawings(
-            drawings:    drawings,
-            colorScheme: colorScheme,
-            scale:       scale
+            drawings:          drawings,
+            colorScheme:       colorScheme,
+            backgroundMode:    backgroundMode,
+            backgroundPalette: backgroundPalette,
+            scale:             scale
         )
 
         let view = CanvasExportView(
             exportRect:    exportRect,
             colorScheme:   colorScheme,
+            gridStyle:     gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette,
             textElements:  textElements,
             stickyNotes:   stickyNotes,
             todoLists:     todoLists,
@@ -95,11 +103,15 @@ final class CanvasExporter {
     // We composite each drawing over its correct background color explicitly.
 
     private static func prerenderDrawings(
-        drawings:    [DrawingElementModel],
-        colorScheme: ColorScheme,
-        scale:       CGFloat
+        drawings:          [DrawingElementModel],
+        colorScheme:       ColorScheme,
+        backgroundMode:    CanvasBackgroundMode,
+        backgroundPalette: CanvasBackgroundPalette,
+        scale:             CGFloat
     ) -> [UUID: PlatformImage] {
         var result: [UUID: PlatformImage] = [:]
+        let resolvedBackgroundScheme = backgroundMode.resolvedColorScheme(system: colorScheme)
+        let canvasBackground = backgroundPalette.appearance(for: resolvedBackgroundScheme).base
 
         for el in drawings {
             guard !el.pkDrawing.strokes.isEmpty else { continue }
@@ -109,9 +121,7 @@ final class CanvasExporter {
             #if os(iOS)
             let bgColor: UIColor
             if el.isCanvasDrawing {
-                bgColor = colorScheme == .dark
-                    ? UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1)
-                    : UIColor(red: 0.97, green: 0.97, blue: 0.98, alpha: 1)
+                bgColor = UIColor(canvasBackground)
             } else {
                 bgColor = colorScheme == .dark
                     ? UIColor(white: 0.12, alpha: 1)
@@ -141,9 +151,7 @@ final class CanvasExporter {
             }
 
             let bgNSColor: NSColor = el.isCanvasDrawing
-                ? (colorScheme == .dark
-                    ? NSColor(calibratedWhite: 0.11, alpha: 1)
-                    : NSColor(calibratedWhite: 0.97, alpha: 1))
+                ? NSColor(canvasBackground)
                 : (colorScheme == .dark
                     ? NSColor(calibratedWhite: 0.12, alpha: 1)
                     : NSColor.white)
@@ -239,6 +247,9 @@ final class CanvasExporter {
 struct CanvasExportView: View {
     let exportRect:    CGRect
     let colorScheme:   ColorScheme
+    let gridStyle:     GridStyle
+    let backgroundMode: CanvasBackgroundMode
+    let backgroundPalette: CanvasBackgroundPalette
     let textElements:  [TextElementModel]
     let stickyNotes:   [StickyNoteModel]
     let todoLists:     [TodoListModel]
@@ -257,6 +268,9 @@ struct CanvasExportView: View {
     init(
         exportRect:    CGRect,
         colorScheme:   ColorScheme,
+        gridStyle:     GridStyle,
+        backgroundMode: CanvasBackgroundMode,
+        backgroundPalette: CanvasBackgroundPalette,
         textElements:  [TextElementModel],
         stickyNotes:   [StickyNoteModel],
         todoLists:     [TodoListModel],
@@ -274,6 +288,9 @@ struct CanvasExportView: View {
     ) {
         self.exportRect    = exportRect
         self.colorScheme   = colorScheme
+        self.gridStyle     = gridStyle
+        self.backgroundMode = backgroundMode
+        self.backgroundPalette = backgroundPalette
         self.textElements  = textElements
         self.stickyNotes   = stickyNotes
         self.todoLists     = todoLists
@@ -288,12 +305,6 @@ struct CanvasExportView: View {
         self.drawingImages = drawingImages
         self.connectors    = connectors
         self.exportRect_   = exportRect_
-    }
-
-    private var canvasBackground: Color {
-        colorScheme == .dark
-            ? Color(red: 0.11, green: 0.11, blue: 0.12)
-            : Color(red: 0.97, green: 0.97, blue: 0.98)
     }
 
     private var cardBackground: Color {
@@ -331,7 +342,13 @@ struct CanvasExportView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            canvasBackground
+            CanvasGridView(
+                offset: CGSize(width: -exportRect.minX, height: -exportRect.minY),
+                scale: 1,
+                style: gridStyle,
+                backgroundMode: backgroundMode,
+                backgroundPalette: backgroundPalette
+            )
 
             // Connectors — SwiftUI Shape views, not Canvas{},
             // because Canvas{} closures may not execute in ImageRenderer on macOS
@@ -403,18 +420,10 @@ struct CanvasExportView: View {
     }
 
     private func shapeColor(_ name: String) -> Color {
-        switch name {
-        case "blue":   return .blue
-        case "red":    return .red
-        case "green":  return .green
-        case "orange": return .orange
-        case "purple": return .purple
-        case "pink":   return .pink
-        case "yellow": return .yellow
-        case "teal":   return .teal
-        case "gray":   return .gray
-        default:       return colorScheme == .dark ? .white : .black
-        }
+        ShapeColorPalette.color(
+            named: name,
+            fallback: colorScheme == .dark ? .white : .black
+        )
     }
 
     private func todoAccentColor(_ name: String) -> Color {
@@ -497,19 +506,39 @@ struct CanvasExportView: View {
         Group {
             switch el.shapeKind {
             case .line:
-                exportLine(stroke: sc, strokeWidth: el.strokeWidth, hasArrow: el.hasArrowHead)
+                if el.hasVisibleStroke {
+                    exportLine(stroke: sc, strokeWidth: el.strokeWidth, hasArrow: el.hasArrowHead)
+                } else {
+                    Color.clear
+                }
             case .rectangle:
-                RoundedRectangle(cornerRadius: 4).strokeBorder(sc, lineWidth: el.strokeWidth)
-                    .background(el.hasFill ? RoundedRectangle(cornerRadius: 4).fill(fc) : nil)
+                ZStack {
+                    if el.hasFill { RoundedRectangle(cornerRadius: 4).fill(fc) }
+                    if el.hasVisibleStroke {
+                        RoundedRectangle(cornerRadius: 4).strokeBorder(sc, lineWidth: el.strokeWidth)
+                    }
+                }
             case .triangle:
-                TriangleShape(variant: el.triangleVariant).stroke(sc, lineWidth: el.strokeWidth)
-                    .background(el.hasFill ? TriangleShape(variant: el.triangleVariant).fill(fc) : nil)
+                ZStack {
+                    if el.hasFill { TriangleShape(variant: el.triangleVariant).fill(fc) }
+                    if el.hasVisibleStroke {
+                        TriangleShape(variant: el.triangleVariant).stroke(sc, lineWidth: el.strokeWidth)
+                    }
+                }
             case .polygon:
-                PolygonShape(sides: el.polygonSides).stroke(sc, lineWidth: el.strokeWidth)
-                    .background(el.hasFill ? PolygonShape(sides: el.polygonSides).fill(fc) : nil)
+                ZStack {
+                    if el.hasFill { PolygonShape(sides: el.polygonSides).fill(fc) }
+                    if el.hasVisibleStroke {
+                        PolygonShape(sides: el.polygonSides).stroke(sc, lineWidth: el.strokeWidth)
+                    }
+                }
             case .circle:
-                Circle().strokeBorder(sc, lineWidth: el.strokeWidth)
-                    .background(el.hasFill ? Circle().fill(fc) : nil)
+                ZStack {
+                    if el.hasFill { Circle().fill(fc) }
+                    if el.hasVisibleStroke {
+                        Circle().strokeBorder(sc, lineWidth: el.strokeWidth)
+                    }
+                }
             }
         }
         .frame(width: el.width, height: el.height)
@@ -907,11 +936,24 @@ private struct ConnectorPathView: View {
         let lw     = CGFloat(connector.strokeWidth)
 
         ZStack {
-            ConnectorLinePath(from: fromPt, to: toPt, isCurved: connector.lineStyle == .curved)
+            ConnectorLinePath(
+                from: fromPt,
+                fromAnchor: connector.fromAnchor,
+                to: toPt,
+                toAnchor: connector.toAnchor,
+                style: connector.lineStyle
+            )
                 .stroke(strokeColor, style: StrokeStyle(lineWidth: lw, lineCap: .round))
 
             if connector.hasArrowHead {
-                ArrowHeadPath(from: fromPt, to: toPt, size: max(10, lw * 4))
+                ArrowHeadPath(
+                    from: fromPt,
+                    fromAnchor: connector.fromAnchor,
+                    to: toPt,
+                    toAnchor: connector.toAnchor,
+                    style: connector.lineStyle,
+                    size: max(10, lw * 4)
+                )
                     .stroke(strokeColor, style: StrokeStyle(lineWidth: lw, lineCap: .round))
             }
         }
@@ -919,32 +961,41 @@ private struct ConnectorPathView: View {
 }
 
 private struct ConnectorLinePath: Shape {
-    let from:     CGPoint
-    let to:       CGPoint
-    let isCurved: Bool
+    let from:       CGPoint
+    let fromAnchor: ConnectorAnchor
+    let to:         CGPoint
+    let toAnchor:   ConnectorAnchor
+    let style:      ConnectorLineStyle
 
     func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: from)
-        if isCurved {
-            let dx  = to.x - from.x
-            let cp1 = CGPoint(x: from.x + dx * 0.4, y: from.y)
-            let cp2 = CGPoint(x: to.x  - dx * 0.4, y: to.y)
-            p.addCurve(to: to, control1: cp1, control2: cp2)
-        } else {
-            p.addLine(to: to)
-        }
-        return p
+        ConnectorGeometry.path(
+            from: from,
+            fromAnchor: fromAnchor,
+            to: to,
+            toAnchor: toAnchor,
+            style: style
+        )
     }
 }
 
 private struct ArrowHeadPath: Shape {
-    let from: CGPoint
-    let to:   CGPoint
-    let size: CGFloat
+    let from:       CGPoint
+    let fromAnchor: ConnectorAnchor
+    let to:         CGPoint
+    let toAnchor:   ConnectorAnchor
+    let style:      ConnectorLineStyle
+    let size:       CGFloat
 
     func path(in rect: CGRect) -> Path {
-        let angle = atan2(to.y - from.y, to.x - from.x)
+        let start = ConnectorGeometry.pointBeforeEnd(
+            from: from,
+            fromAnchor: fromAnchor,
+            to: to,
+            toAnchor: toAnchor,
+            style: style,
+            distance: size
+        )
+        let angle = atan2(to.y - start.y, to.x - start.x)
         let aa: CGFloat = 0.4
         var p = Path()
         p.move(to: to)

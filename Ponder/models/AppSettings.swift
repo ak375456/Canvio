@@ -102,11 +102,170 @@ enum GridStyle: String, CaseIterable, Identifiable {
     }
 }
 
+enum CanvasBackgroundMode: String, CaseIterable, Identifiable {
+    case adaptive
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .adaptive: return "Auto"
+        case .light:    return "Light"
+        case .dark:     return "Dark"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .adaptive: return "circle.lefthalf.filled"
+        case .light:    return "sun.max"
+        case .dark:     return "moon"
+        }
+    }
+
+    func resolvedColorScheme(system: ColorScheme) -> ColorScheme {
+        switch self {
+        case .adaptive: return system
+        case .light:    return .light
+        case .dark:     return .dark
+        }
+    }
+}
+
+struct CanvasBackgroundAppearance {
+    let base: Color
+    let alternate: Color
+    let line: Color
+    let dot: Color
+}
+
+enum CanvasBackgroundPalette: String, CaseIterable, Identifiable {
+    case neutral
+    case paper
+    case slate
+    case sky
+    case mint
+    case rose
+    case lavender
+    case amber
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .neutral:  return "Default"
+        case .paper:    return "Paper"
+        case .slate:    return "Slate"
+        case .sky:      return "Sky"
+        case .mint:     return "Mint"
+        case .rose:     return "Rose"
+        case .lavender: return "Violet"
+        case .amber:    return "Amber"
+        }
+    }
+
+    func appearance(for colorScheme: ColorScheme) -> CanvasBackgroundAppearance {
+        switch (self, colorScheme) {
+        case (.neutral, .dark):
+            return .init(base: Color(red: 0.03, green: 0.03, blue: 0.04),
+                         alternate: Color(red: 0.08, green: 0.08, blue: 0.09),
+                         line: Color.white.opacity(0.12),
+                         dot: Color.white.opacity(0.28))
+        case (.neutral, _):
+            return .init(base: Color(red: 0.97, green: 0.97, blue: 0.98),
+                         alternate: Color(red: 0.91, green: 0.92, blue: 0.94),
+                         line: Color.black.opacity(0.12),
+                         dot: Color.black.opacity(0.28))
+
+        case (.paper, .dark):
+            return .init(base: Color(red: 0.10, green: 0.10, blue: 0.10),
+                         alternate: Color(red: 0.15, green: 0.15, blue: 0.14),
+                         line: Color.white.opacity(0.12),
+                         dot: Color.white.opacity(0.26))
+        case (.paper, _):
+            return .init(base: Color.white,
+                         alternate: Color(red: 0.94, green: 0.95, blue: 0.95),
+                         line: Color.black.opacity(0.10),
+                         dot: Color.black.opacity(0.24))
+
+        case (.slate, .dark):
+            return .init(base: Color(red: 0.06, green: 0.09, blue: 0.13),
+                         alternate: Color(red: 0.10, green: 0.14, blue: 0.20),
+                         line: Color.white.opacity(0.13),
+                         dot: Color.white.opacity(0.28))
+        case (.slate, _):
+            return .init(base: Color(red: 0.92, green: 0.95, blue: 0.98),
+                         alternate: Color(red: 0.84, green: 0.89, blue: 0.95),
+                         line: Color(red: 0.14, green: 0.20, blue: 0.28).opacity(0.14),
+                         dot: Color(red: 0.14, green: 0.20, blue: 0.28).opacity(0.30))
+
+        case (.sky, .dark):
+            return .init(base: Color(red: 0.04, green: 0.11, blue: 0.18),
+                         alternate: Color(red: 0.07, green: 0.17, blue: 0.27),
+                         line: Color(red: 0.72, green: 0.88, blue: 1.0).opacity(0.15),
+                         dot: Color(red: 0.72, green: 0.88, blue: 1.0).opacity(0.32))
+        case (.sky, _):
+            return .init(base: Color(red: 0.91, green: 0.97, blue: 1.0),
+                         alternate: Color(red: 0.80, green: 0.92, blue: 1.0),
+                         line: Color(red: 0.15, green: 0.39, blue: 0.60).opacity(0.14),
+                         dot: Color(red: 0.15, green: 0.39, blue: 0.60).opacity(0.30))
+
+        case (.mint, .dark):
+            return .init(base: Color(red: 0.04, green: 0.13, blue: 0.09),
+                         alternate: Color(red: 0.07, green: 0.20, blue: 0.14),
+                         line: Color(red: 0.70, green: 0.95, blue: 0.78).opacity(0.14),
+                         dot: Color(red: 0.70, green: 0.95, blue: 0.78).opacity(0.30))
+        case (.mint, _):
+            return .init(base: Color(red: 0.91, green: 1.0, blue: 0.96),
+                         alternate: Color(red: 0.80, green: 0.96, blue: 0.88),
+                         line: Color(red: 0.10, green: 0.45, blue: 0.26).opacity(0.14),
+                         dot: Color(red: 0.10, green: 0.45, blue: 0.26).opacity(0.30))
+
+        case (.rose, .dark):
+            return .init(base: Color(red: 0.15, green: 0.06, blue: 0.09),
+                         alternate: Color(red: 0.22, green: 0.09, blue: 0.13),
+                         line: Color(red: 1.0, green: 0.72, blue: 0.79).opacity(0.14),
+                         dot: Color(red: 1.0, green: 0.72, blue: 0.79).opacity(0.30))
+        case (.rose, _):
+            return .init(base: Color(red: 1.0, green: 0.94, blue: 0.96),
+                         alternate: Color(red: 1.0, green: 0.84, blue: 0.89),
+                         line: Color(red: 0.64, green: 0.16, blue: 0.27).opacity(0.14),
+                         dot: Color(red: 0.64, green: 0.16, blue: 0.27).opacity(0.30))
+
+        case (.lavender, .dark):
+            return .init(base: Color(red: 0.10, green: 0.07, blue: 0.16),
+                         alternate: Color(red: 0.16, green: 0.11, blue: 0.25),
+                         line: Color(red: 0.78, green: 0.68, blue: 1.0).opacity(0.14),
+                         dot: Color(red: 0.78, green: 0.68, blue: 1.0).opacity(0.30))
+        case (.lavender, _):
+            return .init(base: Color(red: 0.96, green: 0.94, blue: 1.0),
+                         alternate: Color(red: 0.88, green: 0.84, blue: 1.0),
+                         line: Color(red: 0.30, green: 0.18, blue: 0.58).opacity(0.14),
+                         dot: Color(red: 0.30, green: 0.18, blue: 0.58).opacity(0.30))
+
+        case (.amber, .dark):
+            return .init(base: Color(red: 0.15, green: 0.10, blue: 0.04),
+                         alternate: Color(red: 0.23, green: 0.16, blue: 0.07),
+                         line: Color(red: 1.0, green: 0.78, blue: 0.42).opacity(0.14),
+                         dot: Color(red: 1.0, green: 0.78, blue: 0.42).opacity(0.30))
+        case (.amber, _):
+            return .init(base: Color(red: 1.0, green: 0.97, blue: 0.90),
+                         alternate: Color(red: 1.0, green: 0.90, blue: 0.72),
+                         line: Color(red: 0.62, green: 0.36, blue: 0.08).opacity(0.14),
+                         dot: Color(red: 0.62, green: 0.36, blue: 0.08).opacity(0.30))
+        }
+    }
+}
+
 @MainActor
 class AppSettings: ObservableObject {
     @AppStorage("ponder.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("ponder.toolbarPosition") private var toolbarPositionRaw: String = ToolbarPosition.bottom.rawValue
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
+    @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
+    @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
     @AppStorage("isPro") private var isProRaw: Bool = false
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboardingRaw: Bool = false
 
@@ -123,6 +282,16 @@ class AppSettings: ObservableObject {
     var gridStyle: GridStyle {
         get { GridStyle(rawValue: gridStyleRaw) ?? .dotted }
         set { gridStyleRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var canvasBackgroundMode: CanvasBackgroundMode {
+        get { CanvasBackgroundMode(rawValue: canvasBackgroundModeRaw) ?? .adaptive }
+        set { canvasBackgroundModeRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var canvasBackgroundPalette: CanvasBackgroundPalette {
+        get { CanvasBackgroundPalette(rawValue: canvasBackgroundPaletteRaw) ?? .neutral }
+        set { canvasBackgroundPaletteRaw = newValue.rawValue; objectWillChange.send() }
     }
 
     var isPro: Bool {

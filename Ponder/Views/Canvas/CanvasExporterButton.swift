@@ -27,6 +27,7 @@ struct CanvasExportButton: View {
 
     // Read current color scheme so export matches what user sees
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var settings: AppSettings
 
     @State private var isExporting    = false
     @State private var exportedImage: ExportedImage? = nil
@@ -127,7 +128,10 @@ struct CanvasExportButton: View {
             audioElements: audioElements,
             drawings:      drawings,
             connectors:    connectors,
-            colorScheme:   colorScheme
+            colorScheme:   colorScheme,
+            gridStyle:     settings.effectiveGridStyle,
+            backgroundMode: settings.canvasBackgroundMode,
+            backgroundPalette: settings.canvasBackgroundPalette
         ) else { return }
 
         #if os(iOS)

@@ -43,19 +43,25 @@ struct ConnectorOverlayView: View {
                     let color      = paletteColor(connector.colorName)
                     let lineW      = CGFloat(connector.strokeWidth)
                     let hitWidth   = 44 / canvasScale
+                    let linePath   = ConnectorViewModel.path(
+                        from: start,
+                        fromAnchor: connector.fromAnchor,
+                        to: end,
+                        toAnchor: connector.toAnchor,
+                        style: connector.lineStyle
+                    )
 
-                    ConnectorViewModel.path(from: start, to: end, style: connector.lineStyle)
+                    linePath
                         .stroke(Color.clear, lineWidth: hitWidth)
                         .contentShape(
-                            ConnectorViewModel.path(from: start, to: end, style: connector.lineStyle)
-                                .stroke(lineWidth: hitWidth)
+                            linePath.stroke(lineWidth: hitWidth)
                         )
                         .onTapGesture {
                             vm.selectedConnectorID = (vm.selectedConnectorID == connector.id)
                                 ? nil : connector.id
                         }
 
-                    ConnectorViewModel.path(from: start, to: end, style: connector.lineStyle)
+                    linePath
                         .stroke(
                             isSelected ? Color.accentColor : color,
                             style: StrokeStyle(lineWidth: lineW, lineCap: .round, lineJoin: .round)
@@ -64,6 +70,8 @@ struct ConnectorOverlayView: View {
 
                     if connector.hasArrowHead {
                         let tipStart = tipStartPoint(start: start, end: end,
+                                                     fromAnchor: connector.fromAnchor,
+                                                     toAnchor: connector.toAnchor,
                                                      style: connector.lineStyle,
                                                      strokeWidth: connector.strokeWidth)
                         ConnectorViewModel.arrowPath(from: tipStart, to: end,
@@ -76,7 +84,11 @@ struct ConnectorOverlayView: View {
                     }
 
                     if isSelected {
-                        let mid = midPoint(start: start, end: end, style: connector.lineStyle)
+                        let mid = midPoint(start: start,
+                                           fromAnchor: connector.fromAnchor,
+                                           end: end,
+                                           toAnchor: connector.toAnchor,
+                                           style: connector.lineStyle)
                         connectorBadge(connector: connector, at: mid)
                     }
                 }
@@ -88,7 +100,7 @@ struct ConnectorOverlayView: View {
                 let start = fromAnchor.point(
                     cx: fromBounds.cx, cy: fromBounds.cy,
                     width: fromBounds.width, height: fromBounds.height)
-                ConnectorViewModel.path(from: start, to: previewPoint, style: .curved)
+                ConnectorViewModel.path(from: start, fromAnchor: fromAnchor, to: previewPoint, style: .curved)
                     .stroke(
                         Color.accentColor.opacity(0.8),
                         style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [7, 5])
@@ -170,34 +182,34 @@ struct ConnectorOverlayView: View {
 
     // MARK: - Geometry helpers
 
-    private func midPoint(start: CGPoint, end: CGPoint, style: ConnectorLineStyle) -> CGPoint {
-        switch style {
-        case .straight:
-            return CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
-        case .curved:
-            let dx = (end.x - start.x) * 0.5
-            let cp1 = CGPoint(x: start.x + dx, y: start.y)
-            let cp2 = CGPoint(x: end.x - dx,   y: end.y)
-            let t: CGFloat = 0.5
-            let x = pow(1-t,3)*start.x + 3*pow(1-t,2)*t*cp1.x + 3*(1-t)*t*t*cp2.x + t*t*t*end.x
-            let y = pow(1-t,3)*start.y + 3*pow(1-t,2)*t*cp1.y + 3*(1-t)*t*t*cp2.y + t*t*t*end.y
-            return CGPoint(x: x, y: y)
-        }
+    private func midPoint(start: CGPoint,
+                          fromAnchor: ConnectorAnchor,
+                          end: CGPoint,
+                          toAnchor: ConnectorAnchor,
+                          style: ConnectorLineStyle) -> CGPoint {
+        ConnectorViewModel.point(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            toAnchor: toAnchor,
+            style: style,
+            t: 0.5
+        )
     }
 
     private func tipStartPoint(start: CGPoint, end: CGPoint,
+                                fromAnchor: ConnectorAnchor,
+                                toAnchor: ConnectorAnchor,
                                 style: ConnectorLineStyle, strokeWidth: Double) -> CGPoint {
         let offset = CGFloat(strokeWidth * 5)
-        switch style {
-        case .straight:
-            let angle = atan2(end.y - start.y, end.x - start.x)
-            return CGPoint(x: end.x - offset * cos(angle), y: end.y - offset * sin(angle))
-        case .curved:
-            let dx = (end.x - start.x) * 0.5
-            let cp2 = CGPoint(x: end.x - dx, y: end.y)
-            let angle = atan2(end.y - cp2.y, end.x - cp2.x)
-            return CGPoint(x: end.x - offset * cos(angle), y: end.y - offset * sin(angle))
-        }
+        return ConnectorViewModel.pointBeforeEnd(
+            from: start,
+            fromAnchor: fromAnchor,
+            to: end,
+            toAnchor: toAnchor,
+            style: style,
+            distance: offset
+        )
     }
 
     private func paletteColor(_ name: String) -> Color {

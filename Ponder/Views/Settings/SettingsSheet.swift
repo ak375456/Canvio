@@ -17,6 +17,7 @@ struct SettingsSheet: View {
     @ObservedObject private var pro = ProManager.shared
     @ObservedObject private var auth = AuthService.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showPaywall = false
     @State private var showAuth = false
     
@@ -31,6 +32,7 @@ struct SettingsSheet: View {
                     themeSection
                     toolbarSection
                     canvasActionsSection
+                    canvasBackgroundSection
                     gridSection
                     exportSection
                 }
@@ -132,6 +134,96 @@ struct SettingsSheet: View {
         }
     }
 
+    // MARK: - Canvas background
+    private var canvasBackgroundSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("CANVAS BACKGROUND")
+            HStack(spacing: 10) {
+                ForEach(CanvasBackgroundMode.allCases) { mode in
+                    backgroundModeButton(mode)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104))], spacing: 10) {
+                ForEach(CanvasBackgroundPalette.allCases) { palette in
+                    backgroundPaletteCard(palette)
+                }
+            }
+        }
+    }
+
+    private func backgroundModeButton(_ mode: CanvasBackgroundMode) -> some View {
+        let selected = settings.canvasBackgroundMode == mode
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                settings.canvasBackgroundMode = mode
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: mode.icon)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(mode.title)
+                    .font(.caption.weight(.semibold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .foregroundStyle(selected ? .white : .primary)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(selected ? Color.accentColor : Color.secondary.opacity(0.12))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func backgroundPaletteCard(_ palette: CanvasBackgroundPalette) -> some View {
+        let selected = settings.canvasBackgroundPalette == palette
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                settings.canvasBackgroundPalette = palette
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                CanvasBackgroundSwatch(
+                    mode: settings.canvasBackgroundMode,
+                    palette: palette,
+                    systemColorScheme: colorScheme
+                )
+                .frame(height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+
+                HStack(spacing: 5) {
+                    Text(palette.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(selected ? .white : Color.primary.opacity(0.82))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(selected ? Color.accentColor : Color.secondary.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        selected ? Color.clear : Color.secondary.opacity(0.15),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Grid style
     private var gridSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -228,5 +320,37 @@ struct SettingsSheet: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct CanvasBackgroundSwatch: View {
+    let mode: CanvasBackgroundMode
+    let palette: CanvasBackgroundPalette
+    let systemColorScheme: ColorScheme
+
+    private var appearance: CanvasBackgroundAppearance {
+        palette.appearance(for: mode.resolvedColorScheme(system: systemColorScheme))
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(appearance.base))
+
+            let bandWidth = max(1, size.width / 4)
+            for index in 0..<4 where index.isMultiple(of: 2) {
+                let rect = CGRect(x: CGFloat(index) * bandWidth, y: 0,
+                                  width: bandWidth, height: size.height)
+                context.fill(Path(rect), with: .color(appearance.alternate))
+            }
+
+            var x = bandWidth
+            while x < size.width {
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(path, with: .color(appearance.line), lineWidth: 1)
+                x += bandWidth
+            }
+        }
     }
 }

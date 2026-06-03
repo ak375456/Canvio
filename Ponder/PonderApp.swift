@@ -20,14 +20,8 @@ struct PonderApp: App {
     }
 
     private func registerCustomFonts() {
-        guard let resourcePath = Bundle.main.resourcePath else { return }
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: resourcePath) else { return }
-        let ttfFiles = files.filter { $0.lowercased().hasSuffix(".ttf") }
-        for file in ttfFiles {
-            let url = URL(fileURLWithPath: resourcePath).appendingPathComponent(file)
-            var error: Unmanaged<CFError>?
-            _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
-        }
+        AppFontRegistry.registerBundledFonts()
+        AppFontRegistry.registerStoredCustomFonts()
     }
 
     var body: some Scene {
