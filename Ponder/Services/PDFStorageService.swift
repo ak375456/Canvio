@@ -60,6 +60,49 @@ enum PDFStorageService {
         return (pdfFileName, thumbName, originalName, pageCount)
     }
 
+    #if canImport(UIKit)
+    static func importScannedImages(_ images: [UIImage], originalName: String) throws -> (
+        pdfFileName: String,
+        thumbnailFileName: String,
+        originalName: String,
+        pageCount: Int
+    ) {
+        guard !images.isEmpty else { throw PDFError.noPages }
+
+        let pdfFileName = "\(UUID().uuidString).pdf"
+        let destURL = pdfsDirectory.appendingPathComponent(pdfFileName)
+        let pageBounds = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageBounds)
+
+        try renderer.writePDF(to: destURL) { context in
+            for image in images {
+                context.beginPage()
+                UIColor.white.setFill()
+                context.cgContext.fill(pageBounds)
+
+                let imageSize = image.size
+                let scale = min(pageBounds.width / max(1, imageSize.width),
+                                pageBounds.height / max(1, imageSize.height))
+                let drawSize = CGSize(width: imageSize.width * scale,
+                                      height: imageSize.height * scale)
+                let drawRect = CGRect(
+                    x: (pageBounds.width - drawSize.width) / 2,
+                    y: (pageBounds.height - drawSize.height) / 2,
+                    width: drawSize.width,
+                    height: drawSize.height
+                )
+                image.draw(in: drawRect)
+            }
+        }
+
+        guard let doc = PDFDocument(url: destURL) else {
+            throw PDFError.cannotOpen
+        }
+        let thumbName = try renderThumbnail(doc: doc, pdfFileName: pdfFileName)
+        return (pdfFileName, thumbName, originalName, doc.pageCount)
+    }
+    #endif
+
     // MARK: - Render thumbnail for page 1
     @discardableResult
     static func renderThumbnail(doc: PDFDocument, pdfFileName: String) throws -> String {

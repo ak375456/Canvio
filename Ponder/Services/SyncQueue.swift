@@ -48,6 +48,8 @@ enum SyncOperationType: String, Codable {
     case deletePDF
     case upsertAudio
     case deleteAudio
+    case upsertYouTube
+    case deleteYouTube
     case upsertSymbol       // ← NEW
     case deleteSymbol       // ← NEW
 }

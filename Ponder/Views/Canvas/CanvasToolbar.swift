@@ -11,9 +11,12 @@ struct CanvasToolbar: View {
     let onAddTodo:      () -> Void
     let onAddShape:     () -> Void
     let onAddImage:     () -> Void
+    let onScanOCR:      () -> Void
+    let onScanDocument: () -> Void
     let onAddPDF:       () -> Void
     let onAddTable:     () -> Void
     let onAddAudio:     () -> Void
+    let onAddYouTube:   () -> Void
     let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
     let onAddSymbol:    () -> Void          // ← NEW
@@ -35,9 +38,14 @@ struct CanvasToolbar: View {
                 toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
                 toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
                 toolButton(icon: "photo",                label: "Image",   tint: .cyan)   { onAddImage() }
+                #if os(iOS)
+                toolButton(icon: "doc.text.viewfinder",  label: "OCR",     tint: .teal)   { onScanOCR() }
+                toolButton(icon: "doc.viewfinder",       label: "Scan",    tint: .red)    { onScanDocument() }
+                #endif
                 toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
                 toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
                 toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
+                toolButton(icon: "play.rectangle.fill",   label: "YouTube", tint: .red)    { onAddYouTube() }
                 toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
                 toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
                 toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
@@ -57,9 +65,14 @@ struct CanvasToolbar: View {
             toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
             toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
             toolButton(icon: "photo",                label: "Image",   tint: .cyan)   { onAddImage() }
+            #if os(iOS)
+            toolButton(icon: "doc.text.viewfinder",  label: "OCR",     tint: .teal)   { onScanOCR() }
+            toolButton(icon: "doc.viewfinder",       label: "Scan",    tint: .red)    { onScanDocument() }
+            #endif
             toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
             toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
             toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
+            toolButton(icon: "play.rectangle.fill",   label: "YouTube", tint: .red)    { onAddYouTube() }
             toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
             toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
             toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }

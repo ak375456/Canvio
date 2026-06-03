@@ -55,6 +55,61 @@ class PDFElementViewModel: ObservableObject {
         } catch { print("⚠️ Failed to import PDF: \(error)") }
     }
 
+    #if canImport(UIKit)
+    @discardableResult
+    func addScannedDocument(canvasID: UUID, images: [UIImage], center: CGPoint,
+                            offset: CGSize, scale: CGFloat, zIndex: Int,
+                            context: ModelContext,
+                            undoManager: CanvasUndoManager? = nil) -> UUID? {
+        do {
+            let name = "Scanned Document \(Date().formatted(.dateTime.month().day().hour().minute()))"
+            let result = try PDFStorageService.importScannedImages(images, originalName: name)
+            let canvasX = (center.x - offset.width) / scale
+            let canvasY = (center.y - offset.height) / scale
+            let element = PDFElementModel(canvasID: canvasID,
+                                          pdfFileName: result.pdfFileName,
+                                          thumbnailFileName: result.thumbnailFileName,
+                                          originalName: result.originalName,
+                                          pageCount: result.pageCount,
+                                          x: canvasX, y: canvasY)
+            element.zIndex = zIndex
+            context.insert(element)
+            try? context.save()
+            editingID = element.id
+            Task { await PDFSyncService.shared.upsert(element) }
+
+            let id = element.id
+            undoManager?.push(CanvasAction(
+                undo: {
+                    if let el = try? context.fetch(FetchDescriptor<PDFElementModel>())
+                        .first(where: { $0.id == id }) {
+                        Task { await PDFSyncService.shared.delete(el) }
+                        context.delete(el)
+                        try? context.save()
+                    }
+                },
+                redo: {
+                    let el = PDFElementModel(canvasID: canvasID,
+                                             pdfFileName: result.pdfFileName,
+                                             thumbnailFileName: result.thumbnailFileName,
+                                             originalName: result.originalName,
+                                             pageCount: result.pageCount,
+                                             x: canvasX, y: canvasY)
+                    el.id = id
+                    el.zIndex = zIndex
+                    context.insert(el)
+                    try? context.save()
+                    Task { await PDFSyncService.shared.upsert(el) }
+                }
+            ))
+            return id
+        } catch {
+            print("⚠️ Failed to create scanned PDF: \(error)")
+            return nil
+        }
+    }
+    #endif
+
     func updatePosition(element: PDFElementModel, translation: CGSize,
                         scale: CGFloat = 1, boundary: CGSize = .zero,
                         context: ModelContext, undoManager: CanvasUndoManager? = nil) {

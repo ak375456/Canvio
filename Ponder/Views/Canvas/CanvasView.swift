@@ -3,6 +3,9 @@ import SwiftData
 import PhotosUI
 import UniformTypeIdentifiers
 import PencilKit
+#if os(iOS)
+import VisionKit
+#endif
 
 struct CanvasView: View {
     let canvas: CanvasModel
@@ -24,6 +27,7 @@ struct CanvasView: View {
     @Query private var allTables: [TableElementModel]
     @Query private var allTableCells: [TableCellModel]
     @Query private var allAudio: [AudioElementModel]
+    @Query private var allYouTube: [YouTubeElementModel]
     @Query private var allDrawings: [DrawingElementModel]
     @Query private var allConnectors: [ConnectorModel]
     @Query private var allSymbols: [SymbolElementModel]     // ← NEW
@@ -46,6 +50,9 @@ struct CanvasView: View {
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var canvasGestureSuppressionID = UUID()
+    @State private var isProcessingOCRScan = false
+    @State private var isProcessingDocumentScan = false
+    @State private var ocrScanAlertMessage: String?
     #if os(iOS)
     @State private var keyboardAvoidanceOffset: CGFloat = 0
     #endif
@@ -68,6 +75,7 @@ struct CanvasView: View {
         return allTableCells.filter { ids.contains($0.tableID) }
     }
     private var audioElements: [AudioElementModel] { allAudio.filter        { $0.canvasID == canvas.id } }
+    private var youtubeElements: [YouTubeElementModel] { allYouTube.filter  { $0.canvasID == canvas.id } }
     private var drawings: [DrawingElementModel]    { allDrawings.filter     { $0.canvasID == canvas.id } }
     private var connectors: [ConnectorModel]       { allConnectors.filter   { $0.canvasID == canvas.id } }
     private var symbols: [SymbolElementModel]      { allSymbols.filter      { $0.canvasID == canvas.id } }  // ← NEW
@@ -82,6 +90,7 @@ struct CanvasView: View {
         arr += pdfs            as [any LayerableElement]
         arr += tables          as [any LayerableElement]
         arr += audioElements   as [any LayerableElement]
+        arr += youtubeElements as [any LayerableElement]
         arr += drawings        as [any LayerableElement]
         arr += symbols         as [any LayerableElement]
         return arr
@@ -101,22 +110,25 @@ struct CanvasView: View {
         for el in pdfs           { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
         for el in tables         { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.totalWidth, height: el.totalHeight) }
         for el in audioElements  { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
+        for el in youtubeElements { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,     height: el.height)      }
         for el in drawings       { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
         for el in symbols        { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.fontSize,   height: el.fontSize)    }  // ← NEW
         return map
     }
 
     private var activeSelectedElementID: UUID? {
-        vm.textVM.editingID
-        ?? vm.stickyVM.editingID
-        ?? vm.todoVM.editingID
-        ?? vm.shapeVM.editingID
-        ?? vm.imageVM.editingID
-        ?? vm.pdfVM.editingID
-        ?? vm.tableVM.selectedTableID
-        ?? vm.audioVM.editingID
-        ?? vm.drawingVM.editingID
-        ?? vm.symbolVM.editingID
+        if let id = vm.textVM.editingID { return id }
+        if let id = vm.stickyVM.editingID { return id }
+        if let id = vm.todoVM.editingID { return id }
+        if let id = vm.shapeVM.editingID { return id }
+        if let id = vm.imageVM.editingID { return id }
+        if let id = vm.pdfVM.editingID { return id }
+        if let id = vm.tableVM.selectedTableID { return id }
+        if let id = vm.audioVM.editingID { return id }
+        if let id = vm.youtubeVM.editingID { return id }
+        if let id = vm.drawingVM.editingID { return id }
+        if let id = vm.symbolVM.editingID { return id }
+        return nil
     }
 
     private var selectedElementGestureFrame: CGRect? {
@@ -325,6 +337,23 @@ struct CanvasView: View {
                     .animation(.spring(duration: 0.3), value: selection.isMultiSelectActive)
                 }
 
+                if isProcessingOCRScan || isProcessingDocumentScan {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(isProcessingOCRScan ? "Extracting text..." : "Preparing scan...")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 16)
+                    .zIndex(95)
+                }
+
                 if let pos = vm.addMenuPosition {
                     Color.black.opacity(0.001).ignoresSafeArea().contentShape(Rectangle())
                         .onTapGesture { vm.hideAddMenu() }
@@ -425,6 +454,11 @@ struct CanvasView: View {
                 }
             }
             .onDisappear { generateThumbnail() }
+            .onReceive(NotificationCenter.default.publisher(for: .ocrCreatedTextElement)) { notification in
+                guard let textID = notification.object as? UUID else { return }
+                dismissEverything()
+                vm.textVM.editingID = textID
+            }
             #if os(iOS)
             .onReceive(NotificationCenter.default.publisher(
                 for: UIResponder.keyboardWillShowNotification)) { notif in
@@ -467,13 +501,19 @@ struct CanvasView: View {
                         textElements: textElements, stickyNotes: stickyNotes,
                         todoLists: todoLists, shapes: shapes, images: images,
                         pdfs: pdfs, tables: tables, audioElements: audioElements,
-                        drawings: drawings, viewportSize: geo.size,
+                        youtubeElements: youtubeElements, drawings: drawings,
+                        symbols: symbols, viewportSize: geo.size,
                         canvasOffset: vm.offset, canvasScale: vm.scale,
                         onTapElement: { vm.centerOn(canvasPoint: $0, viewportSize: geo.size) },
                         isExpanded: $vm.isMinimapExpanded
                     )
                     .padding(.trailing, 12).padding(.top, 12)
                 }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                youtubePlaybackControl
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 24)
             }
             .sheet(isPresented: $vm.showTextSheet) {
                 AddTextSheet(isPresented: $vm.showTextSheet) { style in
@@ -572,6 +612,27 @@ struct CanvasView: View {
                 }
                 .presentationDetents([.large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
+            .sheet(isPresented: $vm.showYouTubeLinkSheet) {
+                AddYouTubeLinkSheet(isPresented: $vm.showYouTubeLinkSheet) { urlString, title in
+                    let center = vm.pendingYouTubeLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
+                    let added = vm.youtubeVM.addVideo(
+                        canvasID: canvas.id,
+                        urlString: urlString,
+                        title: title,
+                        center: center,
+                        offset: vm.offset,
+                        scale: vm.scale,
+                        zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                        context: context,
+                        undoManager: vm.undoManager
+                    )
+                    if added { vm.pendingYouTubeLocation = nil }
+                    return added
+                }
+                .presentationDetents([.height(260)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
             #if os(iOS)
             .sheet(isPresented: $vm.showImageSourcePicker) {
                 ImageSourcePickerSheet(
@@ -591,6 +652,42 @@ struct CanvasView: View {
                     )
                     vm.pendingImageLocation = nil
                 }
+                .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $vm.showOCRScanner) {
+                OCRDocumentScannerView(
+                    onComplete: { images in
+                        vm.showOCRScanner = false
+                        createOCRTextFromScan(images: images, geo: geo)
+                    },
+                    onCancel: {
+                        vm.showOCRScanner = false
+                        vm.pendingOCRLocation = nil
+                    },
+                    onError: { _ in
+                        vm.showOCRScanner = false
+                        vm.pendingOCRLocation = nil
+                        ocrScanAlertMessage = "Could not scan this document."
+                    }
+                )
+                .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $vm.showDocumentScanner) {
+                OCRDocumentScannerView(
+                    onComplete: { images in
+                        vm.showDocumentScanner = false
+                        createDocumentFromScan(images: images, geo: geo)
+                    },
+                    onCancel: {
+                        vm.showDocumentScanner = false
+                        vm.pendingDocumentScanLocation = nil
+                    },
+                    onError: { _ in
+                        vm.showDocumentScanner = false
+                        vm.pendingDocumentScanLocation = nil
+                        ocrScanAlertMessage = "Could not scan this document."
+                    }
+                )
                 .ignoresSafeArea()
             }
             #endif
@@ -734,6 +831,14 @@ struct CanvasView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+        .alert("OCR Scan", isPresented: Binding(
+            get: { ocrScanAlertMessage != nil },
+            set: { if !$0 { ocrScanAlertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { ocrScanAlertMessage = nil }
+        } message: {
+            Text(ocrScanAlertMessage ?? "")
+        }
     }
 
     // MARK: - Gestures
@@ -804,6 +909,7 @@ struct CanvasView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            await YouTubeSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: context)  // ← NEW
         }
     }
@@ -818,6 +924,45 @@ struct CanvasView: View {
             backgroundPalette: settings.canvasBackgroundPalette,
             context: context
         )
+    }
+
+    @ViewBuilder
+    private var youtubePlaybackControl: some View {
+        if let activeID = vm.youtubeVM.activePlayingID,
+           let video = youtubeElements.first(where: { $0.id == activeID }) {
+            HStack(spacing: 10) {
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.red)
+
+                Text(video.title.isEmpty ? "YouTube playing" : video.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 180, alignment: .leading)
+
+                Button {
+                    vm.youtubeVM.requestStopPlayback(for: activeID)
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                        .font(.system(size: 12, weight: .bold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.red, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.14), radius: 10, x: 0, y: 4)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.spring(duration: 0.25), value: vm.youtubeVM.activePlayingID)
+        }
     }
 
     private var connectModeIcon: String {
@@ -911,6 +1056,8 @@ struct CanvasView: View {
             } else if let img = element as? ImageElementModel {
                 ImageElementView(element: img, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
+                                 ocrTextZIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                                 undoManager: vm.undoManager,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: isCanvasGestureActive)
@@ -943,6 +1090,12 @@ struct CanvasView: View {
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: isCanvasGestureActive)
+            } else if let youtube = element as? YouTubeElementModel {
+                YouTubeElementView(element: youtube, canvasScale: vm.scale, canvasBoundary: boundary,
+                                   vm: vm.youtubeVM, isMultiSelectMode: multiSelect,
+                                   isSelectedInMultiSelect: isElemSelected,
+                                   onExternalTap: { dismissEverything() },
+                                   isCanvasGestureActive: isCanvasGestureActive)
             } else if let drawing = element as? DrawingElementModel {
                 DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
@@ -990,9 +1143,12 @@ struct CanvasView: View {
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
@@ -1008,9 +1164,12 @@ struct CanvasView: View {
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
@@ -1029,9 +1188,12 @@ struct CanvasView: View {
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
@@ -1062,7 +1224,7 @@ struct CanvasView: View {
         vm.textVM.stopEditing()
         vm.stickyVM.stopEditing(); vm.todoVM.stopEditing()
         vm.shapeVM.stopEditing(); vm.imageVM.stopEditing(); vm.pdfVM.stopEditing()
-        vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.drawingVM.stopEditing()
+        vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.youtubeVM.stopEditing(); vm.drawingVM.stopEditing()
         vm.connectorVM.stopEditing(); vm.symbolVM.stopEditing()  // ← NEW
         vm.hideAddMenu()
         #if canImport(UIKit)
@@ -1081,6 +1243,7 @@ struct CanvasView: View {
         else if pdfs.contains(where:           { $0.id == id }) { vm.pdfVM.editingID = id }
         else if tables.contains(where:         { $0.id == id }) { vm.tableVM.selectTable(id: id) }
         else if audioElements.contains(where:  { $0.id == id }) { vm.audioVM.editingID = id }
+        else if youtubeElements.contains(where:{ $0.id == id }) { vm.youtubeVM.editingID = id }
         else if drawings.contains(where:       { $0.id == id }) {
             vm.drawingVM.editingID = id; vm.drawingVM.isDrawingModeActive = false
         }
@@ -1127,6 +1290,32 @@ struct CanvasView: View {
         vm.showImagePicker = true
         #endif
     }
+    private func openOCRScanner(at point: CGPoint) {
+        dismissEverything()
+        #if os(iOS)
+        guard VNDocumentCameraViewController.isSupported else {
+            ocrScanAlertMessage = "Document scanning is not available on this device."
+            return
+        }
+        vm.pendingOCRLocation = point
+        vm.showOCRScanner = true
+        #else
+        ocrScanAlertMessage = "Document scanning is available on iPhone and iPad."
+        #endif
+    }
+    private func openDocumentScanner(at point: CGPoint) {
+        dismissEverything()
+        #if os(iOS)
+        guard VNDocumentCameraViewController.isSupported else {
+            ocrScanAlertMessage = "Document scanning is not available on this device."
+            return
+        }
+        vm.pendingDocumentScanLocation = point
+        vm.showDocumentScanner = true
+        #else
+        ocrScanAlertMessage = "Document scanning is available on iPhone and iPad."
+        #endif
+    }
     private func openPDFPicker(at point: CGPoint) {
         vm.pendingPDFLocation = point
         #if canImport(AppKit)
@@ -1150,6 +1339,9 @@ struct CanvasView: View {
     private func openAudioPicker(at point: CGPoint) {
         dismissEverything(); vm.pendingAudioLocation = point; vm.showAudioPicker = true
     }
+    private func openYouTubeLinkSheet(at point: CGPoint) {
+        dismissEverything(); vm.pendingYouTubeLocation = point; vm.showYouTubeLinkSheet = true
+    }
 
     private func handleToolSelection(_ tool: CanvasTool, at screenPoint: CGPoint, geo: GeometryProxy) {
         vm.hideAddMenu(); lastMenuLocation = screenPoint
@@ -1166,9 +1358,12 @@ struct CanvasView: View {
                              context: context, undoManager: vm.undoManager)
         case .shape: openShapePicker(at: screenPoint)
         case .image: openImagePicker(at: screenPoint)
+        case .ocrScan: openOCRScanner(at: screenPoint)
+        case .documentScan: openDocumentScanner(at: screenPoint)
         case .pdf:   openPDFPicker(at: screenPoint)
         case .table: openTableSizePicker(at: screenPoint)
         case .audio: openAudioPicker(at: screenPoint)
+        case .youtube: openYouTubeLinkSheet(at: screenPoint)
         case .drawing:
             dismissEverything()
             vm.drawingVM.addDrawing(canvasID: canvas.id, center: screenPoint,
@@ -1176,6 +1371,85 @@ struct CanvasView: View {
                                    context: context, undoManager: vm.undoManager)
         }
     }
+
+    #if os(iOS)
+    private func createOCRTextFromScan(images: [UIImage], geo: GeometryProxy) {
+        guard !images.isEmpty else {
+            vm.pendingOCRLocation = nil
+            ocrScanAlertMessage = "No scanned pages were found."
+            return
+        }
+
+        isProcessingOCRScan = true
+        Task {
+            do {
+                let text = try await ImageOCRService.recognizeText(images: images)
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    isProcessingOCRScan = false
+                    vm.pendingOCRLocation = nil
+                    ocrScanAlertMessage = "No readable text was found in this scan."
+                    return
+                }
+
+                let screenPoint = vm.pendingOCRLocation ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+                let canvasPoint = CGPoint(
+                    x: (screenPoint.x - vm.offset.width) / vm.scale,
+                    y: (screenPoint.y - vm.offset.height) / vm.scale
+                )
+                dismissEverything()
+                let textID = vm.textVM.addOCRText(
+                    canvasID: canvas.id,
+                    text: trimmed,
+                    canvasPoint: canvasPoint,
+                    zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                    context: context,
+                    undoManager: vm.undoManager
+                )
+                vm.pendingOCRLocation = nil
+                isProcessingOCRScan = false
+                if let textID {
+                    vm.textVM.editingID = textID
+                }
+            } catch {
+                isProcessingOCRScan = false
+                vm.pendingOCRLocation = nil
+                ocrScanAlertMessage = "Could not extract text from this scan."
+            }
+        }
+    }
+
+    private func createDocumentFromScan(images: [UIImage], geo: GeometryProxy) {
+        guard !images.isEmpty else {
+            vm.pendingDocumentScanLocation = nil
+            ocrScanAlertMessage = "No scanned pages were found."
+            return
+        }
+
+        isProcessingDocumentScan = true
+        Task {
+            let screenPoint = vm.pendingDocumentScanLocation ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            dismissEverything()
+            let documentID = vm.pdfVM.addScannedDocument(
+                canvasID: canvas.id,
+                images: images,
+                center: screenPoint,
+                offset: vm.offset,
+                scale: vm.scale,
+                zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                context: context,
+                undoManager: vm.undoManager
+            )
+            vm.pendingDocumentScanLocation = nil
+            isProcessingDocumentScan = false
+            if let documentID {
+                vm.pdfVM.editingID = documentID
+            } else {
+                ocrScanAlertMessage = "Could not place this scan on the canvas."
+            }
+        }
+    }
+    #endif
 
     private func duplicateSelected() {
         var z = LayersViewModel.nextZ(among: allLayerableElements)
@@ -1240,6 +1514,11 @@ struct CanvasView: View {
             if let duplicatedID, selectCopy {
                 vm.audioVM.editingID = duplicatedID
             }
+        } else if let el = element as? YouTubeElementModel {
+            duplicatedID = vm.youtubeVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
+            if let duplicatedID, selectCopy {
+                vm.youtubeVM.editingID = duplicatedID
+            }
         } else if let el = element as? DrawingElementModel {
             duplicatedID = vm.drawingVM.duplicate(element: el, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
             if let duplicatedID, selectCopy {
@@ -1269,6 +1548,7 @@ struct CanvasView: View {
             else if let el = pdfs.first(where:          { $0.id == id }) { vm.pdfVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.delete(table: el, cells: tableCells.filter { $0.tableID == el.id }, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
+            else if let el = youtubeElements.first(where: { $0.id == id }) { vm.youtubeVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }  // ← NEW
         }

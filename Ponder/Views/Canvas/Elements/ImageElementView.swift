@@ -13,6 +13,8 @@ struct ImageElementView: View {
     let canvasBoundary: CGSize
     @ObservedObject var vm: ImageElementViewModel
     let isMultiSelectMode: Bool
+    let ocrTextZIndex: Int
+    let undoManager: CanvasUndoManager?
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
@@ -25,6 +27,8 @@ struct ImageElementView: View {
     @State private var displayImage: PlatformImage? = nil
     @State private var lastLoadedFileName: String = ""
     @State private var showOpacityControls = false
+    @State private var isExtractingText = false
+    @State private var ocrAlertMessage: String?
 
     private var isSelected: Bool { vm.editingID == element.id }
     private var currentWidth: CGFloat { max(40, element.width + resizeDelta.width) }
@@ -54,6 +58,14 @@ struct ImageElementView: View {
             loadDisplayImageIfNeeded()
         }
         .onChange(of: element.imageFileName) { _, _ in loadDisplayImageIfNeeded() }
+        .alert("Text Extraction", isPresented: Binding(
+            get: { ocrAlertMessage != nil },
+            set: { if !$0 { ocrAlertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { ocrAlertMessage = nil }
+        } message: {
+            Text(ocrAlertMessage ?? "")
+        }
     }
 
     // MARK: - Thumbnail loading
@@ -163,10 +175,69 @@ struct ImageElementView: View {
             .popover(isPresented: $showOpacityControls, arrowEdge: .top) {
                 opacityControls
             }
+            Divider().frame(height: 18)
+            Button {
+                extractText()
+            } label: {
+                HStack(spacing: 4) {
+                    if isExtractingText {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: "doc.text.viewfinder")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text("OCR").font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(Color.primary.opacity(0.75))
+                .padding(.horizontal, 6)
+                .frame(height: 26)
+            }
+            .buttonStyle(.plain)
+            .disabled(isExtractingText)
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2).fixedSize()
+    }
+
+    private func extractText() {
+        guard !isExtractingText else { return }
+        isExtractingText = true
+
+        Task {
+            do {
+                let text = try await ImageOCRService.recognizeText(fileName: element.imageFileName)
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    ocrAlertMessage = "No readable text was found in this image."
+                    isExtractingText = false
+                    return
+                }
+
+                if let textID = vm.createTextElementFromOCR(
+                    image: element,
+                    text: trimmed,
+                    zIndex: ocrTextZIndex,
+                    context: context,
+                    undoManager: undoManager
+                ) {
+                    onExternalTap?()
+                    vm.editingID = nil
+                    isExtractingText = false
+                    NotificationCenter.default.post(
+                        name: .ocrCreatedTextElement,
+                        object: textID
+                    )
+                } else {
+                    ocrAlertMessage = "No readable text was found in this image."
+                    isExtractingText = false
+                }
+            } catch {
+                ocrAlertMessage = "Could not read text from this image."
+                isExtractingText = false
+            }
+        }
     }
 
     private var opacityControls: some View {
@@ -277,4 +348,8 @@ private struct ImageElementClipModifier: ViewModifier {
             content.clipped()
         }
     }
+}
+
+extension Notification.Name {
+    static let ocrCreatedTextElement = Notification.Name("ocrCreatedTextElement")
 }

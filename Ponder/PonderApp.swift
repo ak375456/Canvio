@@ -44,6 +44,7 @@ struct PonderApp: App {
             TableElementModel.self,
             TableCellModel.self,
             AudioElementModel.self,
+            YouTubeElementModel.self,
             DrawingElementModel.self,
             ConnectorModel.self,
             SymbolElementModel.self
@@ -133,6 +134,7 @@ private struct SyncCoordinatorView: View {
         await ImageSyncService.shared.flushQueue()
         await PDFSyncService.shared.flushQueue()
         await AudioSyncService.shared.flushQueue()
+        await YouTubeSyncService.shared.flushQueue()
         await SymbolSyncService.shared.flushQueue()
 
         // Step 2 — push all local data that Supabase doesn't have yet
@@ -154,6 +156,7 @@ private struct SyncCoordinatorView: View {
             await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
+            await YouTubeSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
         }
     }

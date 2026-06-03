@@ -174,6 +174,61 @@ class ImageElementViewModel: ObservableObject {
         Task { await ImageSyncService.shared.upsert(element) }
     }
 
+    @discardableResult
+    func createTextElementFromOCR(image element: ImageElementModel, text: String,
+                                  zIndex: Int, context: ModelContext,
+                                  undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let textElement = TextElementModel(
+            canvasID: element.canvasID,
+            text: trimmed,
+            x: element.x + element.width / 2 + 140,
+            y: element.y
+        )
+        textElement.fontSize = 16
+        textElement.colorName = "primary"
+        textElement.bgColorName = "none"
+        textElement.strokeColorName = "none"
+        textElement.zIndex = zIndex
+        textElement.updatedAt = Date()
+        context.insert(textElement)
+        try? context.save()
+        Task { await TextSyncService.shared.upsert(textElement) }
+
+        let id = textElement.id
+        undoManager?.push(CanvasAction(
+            undo: {
+                if let el = try? context.fetch(FetchDescriptor<TextElementModel>()).first(where: { $0.id == id }) {
+                    Task { await TextSyncService.shared.delete(el) }
+                    context.delete(el)
+                    try? context.save()
+                }
+            },
+            redo: {
+                let el = TextElementModel(
+                    canvasID: element.canvasID,
+                    text: trimmed,
+                    x: element.x + element.width / 2 + 140,
+                    y: element.y
+                )
+                el.id = id
+                el.fontSize = 16
+                el.colorName = "primary"
+                el.bgColorName = "none"
+                el.strokeColorName = "none"
+                el.zIndex = zIndex
+                el.updatedAt = Date()
+                context.insert(el)
+                try? context.save()
+                Task { await TextSyncService.shared.upsert(el) }
+            }
+        ))
+
+        return id
+    }
+
     func delete(element: ImageElementModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: element.id, canvasID: element.canvasID,

@@ -122,6 +122,59 @@ class TextElementViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    func addOCRText(canvasID: UUID, text: String, canvasPoint: CGPoint,
+                    zIndex: Int, context: ModelContext,
+                    undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let element = TextElementModel(
+            canvasID: canvasID,
+            text: trimmed,
+            x: canvasPoint.x,
+            y: canvasPoint.y
+        )
+        element.fontSize = 16
+        element.colorName = "primary"
+        element.bgColorName = "none"
+        element.strokeColorName = "none"
+        element.zIndex = zIndex
+        element.updatedAt = Date()
+        context.insert(element)
+        try? context.save()
+        editingID = element.id
+        Task { await TextSyncService.shared.upsert(element) }
+
+        let id = element.id
+        undoManager?.push(CanvasAction(
+            undo: {
+                if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
+                    .first(where: { $0.id == id }) {
+                    context.delete(el)
+                    try? context.save()
+                    Task { await TextSyncService.shared.delete(el) }
+                }
+            },
+            redo: {
+                let el = TextElementModel(canvasID: canvasID, text: trimmed,
+                                          x: canvasPoint.x, y: canvasPoint.y)
+                el.id = id
+                el.fontSize = 16
+                el.colorName = "primary"
+                el.bgColorName = "none"
+                el.strokeColorName = "none"
+                el.zIndex = zIndex
+                el.updatedAt = Date()
+                context.insert(el)
+                try? context.save()
+                Task { await TextSyncService.shared.upsert(el) }
+            }
+        ))
+
+        return id
+    }
+
     // MARK: - Position
 
     func updatePosition(element: TextElementModel, translation: CGSize,

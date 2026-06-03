@@ -11,7 +11,11 @@ struct AddElementMenu: View {
     let onDismiss: () -> Void
 
     private var tools: [CanvasTool] {
-        CanvasTool.allCases
+        #if os(iOS)
+        return CanvasTool.allCases
+        #else
+        return CanvasTool.allCases.filter { $0 != .ocrScan }
+        #endif
     }
 
     var body: some View {
@@ -69,9 +73,12 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case todoList
     case shape
     case image
+    case ocrScan
+    case documentScan
     case pdf
     case table
     case audio
+    case youtube
     case drawing
 
     var id: String { rawValue }
@@ -83,9 +90,12 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .todoList:   return "Todo List"
         case .shape:      return "Shape"
         case .image:      return "Image"
+        case .ocrScan:    return "OCR Scan"
+        case .documentScan: return "Scan Document"
         case .pdf:        return "PDF"
         case .table:      return "Table"
         case .audio:      return "Audio"
+        case .youtube:    return "YouTube"
         case .drawing:    return "Drawing"
         }
     }
@@ -97,9 +107,12 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .todoList:   return "Add a task list"
         case .shape:      return "Lines, rectangles, polygons"
         case .image:      return "Add a photo from your library"
+        case .ocrScan:    return "Scan a page into editable text"
+        case .documentScan: return "Place scanned pages as a PDF"
         case .pdf:        return "Add a PDF document"
         case .table:      return "Spreadsheet with rows & columns"
         case .audio:      return "Record or import audio"
+        case .youtube:    return "Embed a video link"
         case .drawing:    return "Pen, pencil, marker, lasso"
         }
     }
@@ -111,9 +124,12 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .todoList:   return "checklist"
         case .shape:      return "square.on.circle"
         case .image:      return "photo"
+        case .ocrScan:    return "doc.text.viewfinder"
+        case .documentScan: return "doc.viewfinder"
         case .pdf:        return "doc.richtext"
         case .table:      return "tablecells"
         case .audio:      return "waveform"
+        case .youtube:    return "play.rectangle.fill"
         case .drawing:    return "pencil.and.scribble"
         }
     }
@@ -125,9 +141,12 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .todoList:   return .green
         case .shape:      return .purple
         case .image:      return .cyan
+        case .ocrScan:    return .teal
+        case .documentScan: return .red
         case .pdf:        return .red
         case .table:      return .indigo
         case .audio:      return .pink
+        case .youtube:    return .red
         case .drawing:    return .orange
         }
     }

@@ -281,6 +281,11 @@ final class CanvasSyncService {
             } ?? []
             for el in audio { await AudioSyncService.shared.upsert(el) }
 
+            let youtube = (try? context.fetch(FetchDescriptor<YouTubeElementModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for el in youtube { await YouTubeSyncService.shared.upsert(el) }
+
             let drawings = (try? context.fetch(FetchDescriptor<DrawingElementModel>()))?.filter {
                 $0.canvasID == canvasID
             } ?? []
