@@ -10,13 +10,8 @@ struct AddElementMenu: View {
     let onSelect: (CanvasTool) -> Void
     let onDismiss: () -> Void
 
-    // Filter out drawing tools on macOS
     private var tools: [CanvasTool] {
-        #if os(iOS)
-        return CanvasTool.allCases
-        #else
-        return CanvasTool.allCases.filter { $0 != .drawing }
-        #endif
+        CanvasTool.allCases
     }
 
     var body: some View {

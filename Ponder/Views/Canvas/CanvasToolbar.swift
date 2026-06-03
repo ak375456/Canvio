@@ -39,10 +39,8 @@ struct CanvasToolbar: View {
                 toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
                 toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
                 toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
-                #if os(iOS)
                 toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
                 toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
-                #endif
                 connectButton
             }
             .padding(.horizontal, 8)
@@ -63,10 +61,8 @@ struct CanvasToolbar: View {
             toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
             toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
             toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }  // ← NEW
-            #if os(iOS)
             toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
             toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) { onDrawOnCanvas() }
-            #endif
             connectButton
         }
         .padding(.vertical, 8)

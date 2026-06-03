@@ -177,9 +177,14 @@ struct SettingsSheet: View {
 
     private func backgroundPaletteCard(_ palette: CanvasBackgroundPalette) -> some View {
         let selected = settings.canvasBackgroundPalette == palette
+        let locked = isPremiumBackgroundPalette(palette) && !pro.isPro
         return Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                settings.canvasBackgroundPalette = palette
+            if locked {
+                showPaywall = true
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    settings.canvasBackgroundPalette = palette
+                }
             }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
@@ -201,7 +206,15 @@ struct SettingsSheet: View {
                         .foregroundStyle(selected ? .white : Color.primary.opacity(0.82))
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if selected {
+                    if locked {
+                        Text("PRO")
+                            .font(.system(size: 7, weight: .bold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor)
+                            .foregroundStyle(Color.white)
+                            .clipShape(Capsule())
+                    } else if selected {
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white)
@@ -222,6 +235,15 @@ struct SettingsSheet: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private func isPremiumBackgroundPalette(_ palette: CanvasBackgroundPalette) -> Bool {
+        switch palette {
+        case .neutral, .amber:
+            return false
+        case .paper, .slate, .sky, .mint, .rose, .lavender:
+            return true
+        }
     }
 
     // MARK: - Grid style

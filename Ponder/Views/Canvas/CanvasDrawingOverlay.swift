@@ -358,7 +358,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
 #else
 
-// MARK: - macOS stub
+// MARK: - macOS
 
 struct CanvasDrawingOverlay: View {
     @Binding var isActive:    Bool
@@ -369,16 +369,86 @@ struct CanvasDrawingOverlay: View {
     @Binding var liveOffset:  CGSize
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
+    @State private var drawing = PKDrawing()
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "applepencil")
-                .font(.system(size: 44, weight: .ultraLight)).foregroundStyle(.secondary)
-            Text("Canvas drawing is available on iPad & iPhone")
-                .font(.subheadline).foregroundStyle(.secondary)
-            Button("Close") { isActive = false }
+        ZStack {
+            Color.black.opacity(0.01)
+                .ignoresSafeArea()
+
+            MacDrawingEditor(drawing: drawing) { newDrawing in
+                drawing = newDrawing
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            VStack {
+                overlayToolbar
+                    .padding(.top, 12)
+                    .padding(.horizontal, 16)
+                Spacer()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.regularMaterial)
+        .onAppear { isDrawingInputActive = true }
+    }
+
+    private var overlayToolbar: some View {
+        HStack(spacing: 12) {
+            Button { saveAndDismiss() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                    Text("Done")
+                        .font(.subheadline.weight(.bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(Color.orange, in: Capsule())
+                .shadow(color: .orange.opacity(0.35), radius: 6, x: 0, y: 2)
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                drawing = PKDrawing()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Clear")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(drawing.strokes.isEmpty)
+            .opacity(drawing.strokes.isEmpty ? 0.55 : 1)
+
+            Spacer(minLength: 12)
+
+            Button {
+                isDrawingInputActive = true
+                isActive = false
+            } label: {
+                Text("Cancel")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func saveAndDismiss() {
+        onSave(drawing, liveScale, liveOffset)
+        isDrawingInputActive = true
+        isActive = false
     }
 }
 

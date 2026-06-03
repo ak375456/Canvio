@@ -44,7 +44,6 @@ struct DrawingElementView: View {
             selectionRing
 
             if isSelected && !isEditing && !isMultiSelectMode {
-                // Toolbar — macOS shows simplified version (no Draw button)
                 selectionToolbar
                     .offset(y: -(CGFloat(element.height) / 2) - 30)
 
@@ -59,12 +58,9 @@ struct DrawingElementView: View {
                             y:  CGFloat(element.height) / 2)
             }
 
-            // Done button — iOS only (editing only possible on iOS)
-            #if os(iOS)
             if isEditing {
                 doneButton.offset(y: -(CGFloat(element.height) / 2) - 30)
             }
-            #endif
         }
         .frame(width: CGFloat(element.width), height: CGFloat(element.height))
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
@@ -125,8 +121,6 @@ struct DrawingElementView: View {
                                   style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             }
 
-            // Empty state placeholder — only on iOS (macOS is view-only)
-            #if os(iOS)
             if !element.isCanvasDrawing && !hasStrokes && !isEditing {
                 VStack(spacing: 8) {
                     Image(systemName: "pencil.and.scribble")
@@ -137,19 +131,6 @@ struct DrawingElementView: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            #else
-            // macOS: show placeholder only when empty AND not selected
-            if !element.isCanvasDrawing && !hasStrokes && !isSelected {
-                VStack(spacing: 8) {
-                    Image(systemName: "pencil.and.scribble")
-                        .font(.system(size: 28, weight: .ultraLight))
-                        .foregroundStyle(.secondary.opacity(0.3))
-                    Text("Drawing from iPhone/iPad")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            #endif
         }
         .contentShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))
         .onTapGesture {
@@ -183,12 +164,9 @@ struct DrawingElementView: View {
     }
 
     // MARK: - Toolbar
-    // macOS: only shows clear-drawing trash (when strokes exist) — no Draw button
-    // iOS: shows Draw button + clear trash
 
     @ViewBuilder
     private var selectionToolbar: some View {
-        #if os(iOS)
         HStack(spacing: 4) {
             Button { vm.isDrawingModeActive = true } label: {
                 HStack(spacing: 5) {
@@ -207,18 +185,6 @@ struct DrawingElementView: View {
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2).fixedSize()
-
-        #else
-        // macOS — only show clear button if drawing has strokes
-        if hasStrokes {
-            HStack(spacing: 4) {
-                clearDrawingButton
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2).fixedSize()
-        }
-        #endif
     }
 
     private var clearDrawingButton: some View {
@@ -232,7 +198,6 @@ struct DrawingElementView: View {
         }.buttonStyle(.plain)
     }
 
-    #if os(iOS)
     private var doneButton: some View {
         Button { vm.isDrawingModeActive = false } label: {
             HStack(spacing: 5) {
@@ -244,7 +209,6 @@ struct DrawingElementView: View {
             .shadow(color: .orange.opacity(0.4), radius: 6, x: 0, y: 2)
         }.buttonStyle(.plain).fixedSize()
     }
-    #endif
 
     private var moveDragGesture: some Gesture {
         DragGesture()
