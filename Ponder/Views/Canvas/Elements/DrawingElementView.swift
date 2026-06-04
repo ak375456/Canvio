@@ -17,6 +17,7 @@ struct DrawingElementView: View {
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
+    var onContinueCanvasDrawing: ((DrawingElementModel) -> Void)? = nil
     var isCanvasGestureActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
@@ -168,7 +169,13 @@ struct DrawingElementView: View {
     @ViewBuilder
     private var selectionToolbar: some View {
         HStack(spacing: 4) {
-            Button { vm.isDrawingModeActive = true } label: {
+            Button {
+                if element.isCanvasDrawing {
+                    onContinueCanvasDrawing?(element)
+                } else {
+                    vm.isDrawingModeActive = true
+                }
+            } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "pencil.tip").font(.system(size: 13, weight: .semibold))
                     Text("Draw").font(.caption.weight(.semibold))

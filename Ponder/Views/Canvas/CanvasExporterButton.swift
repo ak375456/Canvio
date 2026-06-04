@@ -19,7 +19,9 @@ struct CanvasExportButton: View {
     let tables:        [TableElementModel]
     let tableCells:    [TableCellModel]
     let audioElements: [AudioElementModel]
+    let youtubeElements: [YouTubeElementModel]
     let drawings:      [DrawingElementModel]
+    let symbols:       [SymbolElementModel]
     let connectors:    [ConnectorModel]
 
     @ObservedObject private var pro = ProManager.shared
@@ -114,6 +116,8 @@ struct CanvasExportButton: View {
         isExporting = true
         defer { isExporting = false }
 
+        let youtubeThumbnails = await CanvasExporter.loadYouTubeThumbnails(for: youtubeElements)
+
         guard let pngData = CanvasExporter.exportPNG(
             canvas:        canvas,
             textElements:  textElements,
@@ -126,7 +130,10 @@ struct CanvasExportButton: View {
             tables:        tables,
             tableCells:    tableCells,
             audioElements: audioElements,
+            youtubeElements: youtubeElements,
             drawings:      drawings,
+            symbols:       symbols,
+            youtubeThumbnails: youtubeThumbnails,
             connectors:    connectors,
             colorScheme:   colorScheme,
             gridStyle:     settings.effectiveGridStyle,

@@ -30,7 +30,7 @@ struct CanvasDrawingOverlay: View {
     @Binding var liveScale:  CGFloat
     @Binding var liveOffset: CGSize
 
-    @State private var drawing             = PKDrawing()
+    @State private var drawing: PKDrawing
     @State private var isDrawingModeActive = true
 
     /// The scale / offset that match the coordinate space of the current
@@ -56,6 +56,7 @@ struct CanvasDrawingOverlay: View {
         startOffset: CGSize,
         liveScale:   Binding<CGFloat>,
         liveOffset:  Binding<CGSize>,
+        initialDrawing: PKDrawing = PKDrawing(),
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
         self._isActive       = isActive
@@ -65,6 +66,7 @@ struct CanvasDrawingOverlay: View {
         self._liveScale      = liveScale
         self._liveOffset     = liveOffset
         self.onSave          = onSave
+        self._drawing         = State(initialValue: initialDrawing)
         self._effectiveScale  = State(initialValue: startScale)
         self._effectiveOffset = State(initialValue: startOffset)
     }
@@ -369,7 +371,27 @@ struct CanvasDrawingOverlay: View {
     @Binding var liveOffset:  CGSize
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
-    @State private var drawing = PKDrawing()
+    @State private var drawing: PKDrawing
+
+    init(
+        isActive: Binding<Bool>,
+        isDrawingInputActive: Binding<Bool>,
+        startScale: CGFloat,
+        startOffset: CGSize,
+        liveScale: Binding<CGFloat>,
+        liveOffset: Binding<CGSize>,
+        initialDrawing: PKDrawing = PKDrawing(),
+        onSave: @escaping (PKDrawing, CGFloat, CGSize) -> Void
+    ) {
+        self._isActive = isActive
+        self._isDrawingInputActive = isDrawingInputActive
+        self.startScale = startScale
+        self.startOffset = startOffset
+        self._liveScale = liveScale
+        self._liveOffset = liveOffset
+        self.onSave = onSave
+        self._drawing = State(initialValue: initialDrawing)
+    }
 
     var body: some View {
         ZStack {

@@ -6,6 +6,7 @@
 import SwiftUI
 import SwiftData
 import PencilKit
+import Foundation
 
 // MARK: - CanvasExporter
 
@@ -24,7 +25,10 @@ final class CanvasExporter {
         tables:        [TableElementModel],
         tableCells:    [TableCellModel],
         audioElements: [AudioElementModel],
+        youtubeElements: [YouTubeElementModel],
         drawings:      [DrawingElementModel],
+        symbols:       [SymbolElementModel],
+        youtubeThumbnails: [UUID: PlatformImage] = [:],
         connectors:    [ConnectorModel],
         colorScheme:   ColorScheme = .light,
         gridStyle:     GridStyle = .dotted,
@@ -43,7 +47,9 @@ final class CanvasExporter {
             pdfs:          pdfs,
             tables:        tables,
             audioElements: audioElements,
-            drawings:      drawings
+            youtubeElements: youtubeElements,
+            drawings:      drawings,
+            symbols:       symbols
         )
 
         guard exportRect.width > 0, exportRect.height > 0 else { return nil }
@@ -72,8 +78,11 @@ final class CanvasExporter {
             tables:        tables,
             tableCells:    tableCells,
             audioElements: audioElements,
+            youtubeElements: youtubeElements,
             drawings:      drawings,
             drawingImages: drawingImages,
+            youtubeThumbnails: youtubeThumbnails,
+            symbols:       symbols,
             connectors:    connectors,
             exportRect_:   exportRect
         )
@@ -110,8 +119,6 @@ final class CanvasExporter {
         scale:             CGFloat
     ) -> [UUID: PlatformImage] {
         var result: [UUID: PlatformImage] = [:]
-        let resolvedBackgroundScheme = backgroundMode.resolvedColorScheme(system: colorScheme)
-        let canvasBackground = backgroundPalette.appearance(for: resolvedBackgroundScheme).base
 
         for el in drawings {
             guard !el.pkDrawing.strokes.isEmpty else { continue }
@@ -119,21 +126,18 @@ final class CanvasExporter {
             let rect = CGRect(origin: .zero, size: size)
 
             #if os(iOS)
-            let bgColor: UIColor
-            if el.isCanvasDrawing {
-                bgColor = UIColor(canvasBackground)
-            } else {
-                bgColor = colorScheme == .dark
-                    ? UIColor(white: 0.12, alpha: 1)
-                    : UIColor.white
-            }
-
             let rawImage = el.pkDrawing.image(from: rect, scale: scale)
             let format   = UIGraphicsImageRendererFormat()
             format.scale = scale
+            format.opaque = false
             let composed = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-                bgColor.setFill()
-                ctx.fill(CGRect(origin: .zero, size: size))
+                if !el.isCanvasDrawing {
+                    let bgColor = colorScheme == .dark
+                        ? UIColor(white: 0.12, alpha: 1)
+                        : UIColor.white
+                    bgColor.setFill()
+                    ctx.fill(CGRect(origin: .zero, size: size))
+                }
                 rawImage.draw(in: CGRect(origin: .zero, size: size))
             }
             result[el.id] = composed
@@ -149,12 +153,6 @@ final class CanvasExporter {
             targetAppearance.performAsCurrentDrawingAppearance {
                 rawImage = el.pkDrawing.image(from: rect, scale: scale2)
             }
-
-            let bgNSColor: NSColor = el.isCanvasDrawing
-                ? NSColor(canvasBackground)
-                : (colorScheme == .dark
-                    ? NSColor(calibratedWhite: 0.12, alpha: 1)
-                    : NSColor.white)
 
             let rep = NSBitmapImageRep(
                 bitmapDataPlanes: nil,
@@ -172,8 +170,13 @@ final class CanvasExporter {
 
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-            bgNSColor.setFill()
-            NSRect(origin: .zero, size: size).fill()
+            if !el.isCanvasDrawing {
+                let bgNSColor = colorScheme == .dark
+                    ? NSColor(calibratedWhite: 0.12, alpha: 1)
+                    : NSColor.white
+                bgNSColor.setFill()
+                NSRect(origin: .zero, size: size).fill()
+            }
             rawImage.draw(in: NSRect(origin: .zero, size: size))
             NSGraphicsContext.restoreGraphicsState()
 
@@ -181,6 +184,34 @@ final class CanvasExporter {
             composed.addRepresentation(rep)
             result[el.id] = composed
             #endif
+        }
+
+        return result
+    }
+
+    static func loadYouTubeThumbnails(for elements: [YouTubeElementModel]) async -> [UUID: PlatformImage] {
+        var result: [UUID: PlatformImage] = [:]
+
+        for element in elements {
+            guard let url = URL(string: element.thumbnailURL) else { continue }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if let http = response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    continue
+                }
+                #if canImport(UIKit)
+                if let image = UIImage(data: data) {
+                    result[element.id] = image
+                }
+                #else
+                if let image = NSImage(data: data) {
+                    result[element.id] = image
+                }
+                #endif
+            } catch {
+                continue
+            }
         }
 
         return result
@@ -198,7 +229,9 @@ final class CanvasExporter {
         pdfs:          [PDFElementModel],
         tables:        [TableElementModel],
         audioElements: [AudioElementModel],
-        drawings:      [DrawingElementModel]
+        youtubeElements: [YouTubeElementModel],
+        drawings:      [DrawingElementModel],
+        symbols:       [SymbolElementModel]
     ) -> CGRect {
 
         if !canvas.isInfinite {
@@ -215,14 +248,22 @@ final class CanvasExporter {
             maxY = max(maxY, CGFloat(cy + h / 2))
         }
 
-        for el in textElements  { expand(cx: el.x, cy: el.y, w: 220,     h: 50) }
+        for el in textElements  {
+            let size = estimatedTextSize(for: el)
+            expand(cx: el.x, cy: el.y, w: Double(size.width), h: Double(size.height))
+        }
         for el in stickyNotes   { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in todoLists     { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in shapes        { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in images        { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in pdfs          { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in audioElements { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
+        for el in youtubeElements { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in drawings      { expand(cx: el.x, cy: el.y, w: el.width, h: el.height) }
+        for el in symbols       {
+            let size = el.fontSize + 24
+            expand(cx: el.x, cy: el.y, w: size, h: size)
+        }
         for el in tables {
             let rh = el.showRowHeaders ? 36.0 : 0.0
             let ch = el.showColHeaders ? max(28.0, el.cellHeight * 0.6) : 0.0
@@ -239,6 +280,17 @@ final class CanvasExporter {
         return CGRect(x: minX - pad, y: minY - pad,
                       width:  maxX - minX + pad * 2,
                       height: maxY - minY + pad * 2)
+    }
+
+    fileprivate static func estimatedTextSize(for element: TextElementModel) -> CGSize {
+        let fontSize = CGFloat(max(10, min(72, element.fontSize)))
+        let lines = element.text.split(separator: "\n", omittingEmptySubsequences: false)
+        let longestLineLength = max(lines.map(\.count).max() ?? 0, 1)
+        let lineCount = max(lines.count, 1)
+        let padding: CGFloat = element.hasCard ? 32 : 20
+        let width = min(900, max(80, CGFloat(longestLineLength) * fontSize * 0.62 + padding))
+        let height = max(36, CGFloat(lineCount) * fontSize * 1.25 + padding)
+        return CGSize(width: width, height: height)
     }
 }
 
@@ -260,8 +312,11 @@ struct CanvasExportView: View {
     let tables:        [TableElementModel]
     let tableCells:    [TableCellModel]
     let audioElements: [AudioElementModel]
+    let youtubeElements: [YouTubeElementModel]
     let drawings:      [DrawingElementModel]
     let drawingImages: [UUID: PlatformImage]
+    let youtubeThumbnails: [UUID: PlatformImage]
+    let symbols:       [SymbolElementModel]
     let connectors:    [ConnectorModel]
     let exportRect_:   CGRect
 
@@ -281,8 +336,11 @@ struct CanvasExportView: View {
         tables:        [TableElementModel],
         tableCells:    [TableCellModel],
         audioElements: [AudioElementModel],
+        youtubeElements: [YouTubeElementModel],
         drawings:      [DrawingElementModel],
         drawingImages: [UUID: PlatformImage],
+        youtubeThumbnails: [UUID: PlatformImage],
+        symbols:       [SymbolElementModel],
         connectors:    [ConnectorModel],
         exportRect_:   CGRect
     ) {
@@ -301,14 +359,33 @@ struct CanvasExportView: View {
         self.tables        = tables
         self.tableCells    = tableCells
         self.audioElements = audioElements
+        self.youtubeElements = youtubeElements
         self.drawings      = drawings
         self.drawingImages = drawingImages
+        self.youtubeThumbnails = youtubeThumbnails
+        self.symbols       = symbols
         self.connectors    = connectors
         self.exportRect_   = exportRect_
     }
 
     private var cardBackground: Color {
         colorScheme == .dark ? Color(white: 0.12) : Color.white
+    }
+
+    private var sortedElements: [any LayerableElement] {
+        var elements: [any LayerableElement] = []
+        elements += textElements as [any LayerableElement]
+        elements += stickyNotes as [any LayerableElement]
+        elements += todoLists as [any LayerableElement]
+        elements += shapes as [any LayerableElement]
+        elements += images as [any LayerableElement]
+        elements += pdfs as [any LayerableElement]
+        elements += drawings as [any LayerableElement]
+        elements += tables as [any LayerableElement]
+        elements += audioElements as [any LayerableElement]
+        elements += youtubeElements as [any LayerableElement]
+        elements += symbols as [any LayerableElement]
+        return elements.sorted { $0.zIndex < $1.zIndex }
     }
 
     private var boundsMap: [UUID: CGRect] {
@@ -322,14 +399,22 @@ struct CanvasExportView: View {
                    width: CGFloat(w), height: CGFloat(h))
         }
 
-        for el in textElements  { map[el.id] = makeRect(cx: el.x, cy: el.y, w: 220,     h: 50) }
+        for el in textElements  {
+            let size = CanvasExporter.estimatedTextSize(for: el)
+            map[el.id] = makeRect(cx: el.x, cy: el.y, w: Double(size.width), h: Double(size.height))
+        }
         for el in stickyNotes   { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in todoLists     { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in shapes        { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in images        { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in pdfs          { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in audioElements { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
+        for el in youtubeElements { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
         for el in drawings      { map[el.id] = makeRect(cx: el.x, cy: el.y, w: el.width, h: el.height) }
+        for el in symbols {
+            let size = el.fontSize + 24
+            map[el.id] = makeRect(cx: el.x, cy: el.y, w: size, h: size)
+        }
         for el in tables {
             let rh = el.showRowHeaders ? 36.0 : 0.0
             let ch = el.showColHeaders ? max(28.0, el.cellHeight * 0.6) : 0.0
@@ -360,16 +445,9 @@ struct CanvasExportView: View {
                 height:      exportRect.height
             )
 
-            ForEach(drawings.filter  { $0.isCanvasDrawing },  id: \.id) { exportDrawing($0) }
-            ForEach(shapes,           id: \.id) { exportShape($0) }
-            ForEach(images,           id: \.id) { exportImage($0) }
-            ForEach(pdfs,             id: \.id) { exportPDF($0) }
-            ForEach(drawings.filter  { !$0.isCanvasDrawing }, id: \.id) { exportDrawing($0) }
-            ForEach(stickyNotes,      id: \.id) { exportStickyNote($0) }
-            ForEach(todoLists,        id: \.id) { exportTodoList($0) }
-            ForEach(tables,           id: \.id) { exportTable($0) }
-            ForEach(audioElements,    id: \.id) { exportAudio($0) }
-            ForEach(textElements,     id: \.id) { exportText($0) }
+            ForEach(sortedElements, id: \.id) { element in
+                exportElement(element)
+            }
         }
         .frame(width: exportRect.width, height: exportRect.height)
         .colorScheme(colorScheme)
@@ -402,20 +480,65 @@ struct CanvasExportView: View {
 
     private func textColor(_ name: String) -> Color {
         switch name {
+        case "primary": return colorScheme == .dark ? .white : .black
+        case "black":  return .black
+        case "gray":   return .gray
         case "blue":   return .blue
+        case "indigo": return .indigo
+        case "cyan":   return .cyan
+        case "teal":   return .teal
+        case "mint":   return .mint
         case "red":    return .red
         case "green":  return .green
         case "orange": return .orange
         case "purple": return .purple
         case "pink":   return .pink
-        case "teal":   return .teal
-        case "gray":   return .gray
+        case "brown":  return .brown
         case "yellow": return colorScheme == .dark
             ? Color(red: 1.0, green: 0.9, blue: 0.3)
             : Color(red: 0.6, green: 0.5, blue: 0)
         case "white":  return colorScheme == .dark ? .white : Color(white: 0.1)
-        case "black":  return colorScheme == .dark ? Color(white: 0.9) : .black
         default:       return colorScheme == .dark ? .white : .black
+        }
+    }
+
+    private func textCardColor(_ name: String) -> Color? {
+        switch name {
+        case "none":   return nil
+        case "red":    return .red
+        case "orange": return .orange
+        case "yellow": return Color(red: 1, green: 0.85, blue: 0)
+        case "green":  return .green
+        case "blue":   return .blue
+        case "purple": return .purple
+        case "pink":   return .pink
+        case "teal":   return .teal
+        case "white":  return .white
+        case "black":  return Color(white: 0.1)
+        case "gray":   return Color(white: 0.5)
+        default:       return nil
+        }
+    }
+
+    private func symbolColor(_ name: String) -> Color {
+        switch name {
+        case "primary": return colorScheme == .dark ? .white : .black
+        case "blue":    return .blue
+        case "red":     return .red
+        case "green":   return .green
+        case "orange":  return .orange
+        case "purple":  return .purple
+        case "pink":    return .pink
+        case "teal":    return .teal
+        case "yellow":  return .yellow
+        case "indigo":  return .indigo
+        case "mint":    return .mint
+        case "cyan":    return .cyan
+        case "brown":   return .brown
+        case "gray":    return .gray
+        case "black":   return Color(white: 0.1)
+        case "white":   return .white
+        default:        return colorScheme == .dark ? .white : .black
         }
     }
 
@@ -448,7 +571,10 @@ struct CanvasExportView: View {
         let p   = pos(el.x, el.y)
         let fnt = makeFont(el)
         let col = textColor(el.colorName)
-        Group {
+        let hasBg = el.bgColorName != "none"
+        let hasStroke = el.strokeColorName != "none"
+        let hasCard = hasBg || hasStroke
+        let textView = Group {
             if el.isUnderline {
                 Text(underlinedString(el.text)).font(fnt).foregroundStyle(col)
                     .multilineTextAlignment(el.textAlignment)
@@ -457,8 +583,26 @@ struct CanvasExportView: View {
                     .multilineTextAlignment(el.textAlignment)
             }
         }
-        .padding(10)
+        textView
+        .lineLimit(nil)
+        .padding(hasCard ? 16 : 10)
         .fixedSize()
+        .background {
+            if hasCard {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(hasBg ? (textCardColor(el.bgColorName) ?? Color.clear) : Color.clear)
+                    .overlay {
+                        if hasStroke {
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(
+                                    textCardColor(el.strokeColorName) ?? Color.clear,
+                                    lineWidth: el.strokeWidth
+                                )
+                        }
+                    }
+                    .shadow(color: .black.opacity(hasBg ? 0.12 : 0), radius: 6, x: 0, y: 3)
+            }
+        }
         .position(x: p.x, y: p.y)
     }
 
@@ -837,6 +981,129 @@ struct CanvasExportView: View {
 
     private func formattedDuration(_ s: Double) -> String {
         let t = Int(s); return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    // MARK: - YouTube
+
+    @ViewBuilder
+    private func exportYouTube(_ el: YouTubeElementModel) -> some View {
+        let p = pos(el.x, el.y)
+        ZStack {
+            if let thumbnail = youtubeThumbnails[el.id] {
+                #if canImport(UIKit)
+                Image(uiImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+                #else
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .scaledToFill()
+                #endif
+            } else {
+                youtubeFallbackThumbnail
+            }
+
+            LinearGradient(
+                colors: [.black.opacity(0.45), .black.opacity(0.05), .black.opacity(0.65)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack {
+                HStack {
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .background(.black.opacity(0.35), in: Circle())
+                }
+                .padding(10)
+
+                Spacer()
+
+                ZStack {
+                    Circle().fill(Color.red).frame(width: 48, height: 48)
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(.white)
+                        .offset(x: 2)
+                }
+
+                Spacer()
+
+                Text(el.title.isEmpty ? "YouTube Video" : el.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+        }
+        .frame(width: el.width, height: el.height)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.1), radius: 9, x: 0, y: 3)
+        .position(x: p.x, y: p.y)
+    }
+
+    private var youtubeFallbackThumbnail: some View {
+        ZStack {
+            Rectangle().fill(Color(red: 0.12, green: 0.12, blue: 0.13))
+            Image(systemName: "play.rectangle.fill")
+                .font(.system(size: 42, weight: .semibold))
+                .foregroundStyle(.red)
+        }
+    }
+
+    // MARK: - Symbol
+
+    @ViewBuilder
+    private func exportSymbol(_ el: SymbolElementModel) -> some View {
+        let p = pos(el.x, el.y)
+        let size = CGFloat(el.fontSize)
+        Image(systemName: el.symbolName)
+            .font(.system(size: size))
+            .foregroundStyle(symbolColor(el.colorName))
+            .frame(width: size + 24, height: size + 24)
+            .position(x: p.x, y: p.y)
+    }
+
+    // MARK: - Layered element dispatch
+
+    @ViewBuilder
+    private func exportElement(_ element: any LayerableElement) -> some View {
+        if let el = element as? TextElementModel {
+            exportText(el)
+        } else if let el = element as? StickyNoteModel {
+            exportStickyNote(el)
+        } else if let el = element as? TodoListModel {
+            exportTodoList(el)
+        } else if let el = element as? ShapeElementModel {
+            exportShape(el)
+        } else if let el = element as? ImageElementModel {
+            exportImage(el)
+        } else if let el = element as? PDFElementModel {
+            exportPDF(el)
+        } else if let el = element as? DrawingElementModel {
+            exportDrawing(el)
+        } else if let el = element as? TableElementModel {
+            exportTable(el)
+        } else if let el = element as? AudioElementModel {
+            exportAudio(el)
+        } else if let el = element as? YouTubeElementModel {
+            exportYouTube(el)
+        } else if let el = element as? SymbolElementModel {
+            exportSymbol(el)
+        }
     }
 
     // MARK: - Drawing

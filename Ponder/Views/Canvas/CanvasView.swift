@@ -66,6 +66,8 @@ struct CanvasView: View {
     @State private var showPDFImporter = false
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
+    @State private var canvasDrawingInitialDrawing = PKDrawing()
+    @State private var continuingCanvasDrawingID: UUID?
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var canvasGestureSuppressionID = UUID()
@@ -408,29 +410,10 @@ struct CanvasView: View {
                         startScale:   drawingStartScale,
                         startOffset:  drawingStartOffset,
                         liveScale:    $vm.scale,
-                        liveOffset:   $vm.offset
+                        liveOffset:   $vm.offset,
+                        initialDrawing: canvasDrawingInitialDrawing
                     ) { pkDrawing, effectiveScale, effectiveOffset in
-                        let strokeBounds = pkDrawing.bounds
-                        guard !pkDrawing.strokes.isEmpty,
-                              strokeBounds.width > 0, strokeBounds.height > 0 else { return }
-                        let padding: CGFloat = 20
-                        let paddedBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
-                        let canvasX = (paddedBounds.midX - effectiveOffset.width) / effectiveScale
-                        let canvasY = (paddedBounds.midY - effectiveOffset.height) / effectiveScale
-                        let elemW = paddedBounds.width  / effectiveScale
-                        let elemH = paddedBounds.height / effectiveScale
-                        let s  = 1.0 / effectiveScale
-                        let tx = -paddedBounds.minX * s
-                        let ty = -paddedBounds.minY * s
-                        let transform = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tx, ty: ty)
-                        let element = DrawingElementModel(
-                            canvasID: canvas.id, x: canvasX, y: canvasY,
-                            width: Double(elemW), height: Double(elemH), isCanvasDrawing: true
-                        )
-                        element.pkDrawing = pkDrawing.transformed(using: transform)
-                        element.zIndex = LayersViewModel.nextZ(among: allLayerableElements)
-                        context.insert(element); try? context.save()
-                        Task { await DrawingSyncService.shared.upsert(element) }
+                        saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
                     }
                     .zIndex(200).transition(.opacity)
                 }
@@ -620,7 +603,9 @@ struct CanvasView: View {
                         tables:        tables,
                         tableCells:    tableCells,
                         audioElements: audioElements,
+                        youtubeElements: youtubeElements,
                         drawings:      drawings,
+                        symbols:       symbols,
                         connectors:    connectors
                     )
                 ))
@@ -1188,10 +1173,108 @@ struct CanvasView: View {
 
     private func startCanvasDrawing() {
         dismissEverything()
+        continuingCanvasDrawingID = nil
+        canvasDrawingInitialDrawing = PKDrawing()
         drawingStartScale  = vm.scale
         drawingStartOffset = vm.offset
         isCanvasDrawingInputActive = true
         vm.showCanvasDrawingOverlay = true
+    }
+
+    private func continueCanvasDrawing(_ element: DrawingElementModel) {
+        guard element.isCanvasDrawing else {
+            vm.drawingVM.isDrawingModeActive = true
+            return
+        }
+
+        let initialDrawing = viewportDrawing(for: element)
+        dismissEverything()
+        continuingCanvasDrawingID = element.id
+        canvasDrawingInitialDrawing = initialDrawing
+        drawingStartScale = vm.scale
+        drawingStartOffset = vm.offset
+        isCanvasDrawingInputActive = true
+        vm.showCanvasDrawingOverlay = true
+    }
+
+    private func viewportDrawing(for element: DrawingElementModel) -> PKDrawing {
+        let width = CGFloat(element.width)
+        let height = CGFloat(element.height)
+        let angle = CGFloat(element.rotation) * .pi / 180
+        let cosA = cos(angle)
+        let sinA = sin(angle)
+        let scale = vm.scale
+
+        let tx = vm.offset.width + scale * (CGFloat(element.x) - cosA * width / 2 + sinA * height / 2)
+        let ty = vm.offset.height + scale * (CGFloat(element.y) - sinA * width / 2 - cosA * height / 2)
+
+        let transform = CGAffineTransform(
+            a: scale * cosA,
+            b: scale * sinA,
+            c: -scale * sinA,
+            d: scale * cosA,
+            tx: tx,
+            ty: ty
+        )
+        return element.pkDrawing.transformed(using: transform)
+    }
+
+    private func saveCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {
+        let strokeBounds = pkDrawing.bounds
+        guard !pkDrawing.strokes.isEmpty,
+              strokeBounds.width > 0, strokeBounds.height > 0 else {
+            continuingCanvasDrawingID = nil
+            canvasDrawingInitialDrawing = PKDrawing()
+            return
+        }
+
+        let padding: CGFloat = 20
+        let paddedBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
+        let canvasX = (paddedBounds.midX - effectiveOffset.width) / effectiveScale
+        let canvasY = (paddedBounds.midY - effectiveOffset.height) / effectiveScale
+        let elemW = paddedBounds.width / effectiveScale
+        let elemH = paddedBounds.height / effectiveScale
+        let inverseScale = 1.0 / effectiveScale
+        let transform = CGAffineTransform(
+            a: inverseScale,
+            b: 0,
+            c: 0,
+            d: inverseScale,
+            tx: -paddedBounds.minX * inverseScale,
+            ty: -paddedBounds.minY * inverseScale
+        )
+        let localDrawing = pkDrawing.transformed(using: transform)
+
+        if let id = continuingCanvasDrawingID,
+           let element = drawings.first(where: { $0.id == id }) {
+            element.x = Double(canvasX)
+            element.y = Double(canvasY)
+            element.width = Double(elemW)
+            element.height = Double(elemH)
+            element.rotation = 0
+            element.isCanvasDrawing = true
+            element.pkDrawing = localDrawing
+            element.updatedAt = Date()
+            try? context.save()
+            Task { await DrawingSyncService.shared.upsert(element) }
+        } else {
+            let element = DrawingElementModel(
+                canvasID: canvas.id,
+                x: Double(canvasX),
+                y: Double(canvasY),
+                width: Double(elemW),
+                height: Double(elemH),
+                isCanvasDrawing: true
+            )
+            element.pkDrawing = localDrawing
+            element.zIndex = LayersViewModel.nextZ(among: allLayerableElements)
+            context.insert(element)
+            try? context.save()
+            Task { await DrawingSyncService.shared.upsert(element) }
+        }
+
+        continuingCanvasDrawingID = nil
+        canvasDrawingInitialDrawing = PKDrawing()
     }
 
     // MARK: - Sync
@@ -1400,6 +1483,7 @@ struct CanvasView: View {
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },
+                                   onContinueCanvasDrawing: { continueCanvasDrawing($0) },
                                    isCanvasGestureActive: isCanvasGestureActive)
             } else if let symbol = element as? SymbolElementModel {
                 // ── NEW ────────────────────────────────────────────────────────
@@ -1410,7 +1494,9 @@ struct CanvasView: View {
                                   isCanvasGestureActive: isCanvasGestureActive)
             }
         }
-        .opacity(layersVM.highlightedID == element.id ? 0.5 : 1)
+        .opacity(vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
+                 ? 0
+                 : layersVM.highlightedID == element.id ? 0.5 : 1)
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
