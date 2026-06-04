@@ -32,6 +32,7 @@ struct SettingsSheet: View {
                     themeSection
                     toolbarSection
                     canvasActionsSection
+                    selectionSection
                     canvasBackgroundSection
                     gridSection
                     exportSection
@@ -130,6 +131,38 @@ struct SettingsSheet: View {
                 instructionRow(icon: "doc.on.doc", text: "Hold any item on the canvas to duplicate it.")
                 instructionRow(icon: "checkmark.circle", text: "To duplicate multiple items, hold the canvas, select items, then tap Duplicate.")
                 instructionRow(icon: "text.cursor", text: "Double tap on the canvas to start typing directly.")
+            }
+        }
+    }
+
+    // MARK: - Selection
+    private var selectionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("SELECTION")
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { settings.overlapStackPickerEnabled },
+                    set: { settings.overlapStackPickerEnabled = $0 }
+                )) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "square.3.layers.3d")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 18, height: 18)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Overlapping item picker")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("When several items overlap, tapping that spot can show a small picker so you can choose the item behind the front one. It only checks the stack while this is enabled.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .toggleStyle(.switch)
+                .padding(12)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }

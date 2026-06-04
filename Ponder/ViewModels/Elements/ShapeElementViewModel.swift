@@ -110,7 +110,7 @@ class ShapeElementViewModel: ObservableObject {
         if shape.shapeKind == .line {
             shape.width = max(40, width); shape.height = max(2, min(40, height))
         } else {
-            shape.width = max(40, min(600, width)); shape.height = max(40, min(600, height))
+            shape.width = max(40, width); shape.height = max(40, height)
         }
         shape.updatedAt = Date(); try? context.save()
         Task { await ShapeSyncService.shared.upsert(shape) }

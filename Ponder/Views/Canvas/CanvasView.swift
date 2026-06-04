@@ -7,6 +7,24 @@ import PencilKit
 import VisionKit
 #endif
 
+private let canvasViewportCoordinateSpace = "CanvasViewport"
+
+private struct CanvasStackPickerItem: Identifiable {
+    let id: UUID
+    let title: String
+    let icon: String
+    let tint: Color
+    let zIndex: Int
+}
+
+private struct CanvasStackPickerState: Identifiable {
+    let id = UUID()
+    let position: CGPoint
+    let width: CGFloat
+    let maxHeight: CGFloat
+    let items: [CanvasStackPickerItem]
+}
+
 struct CanvasView: View {
     let canvas: CanvasModel
     var onDelete: () -> Void
@@ -41,6 +59,7 @@ struct CanvasView: View {
     @State private var showCSVExporter = false
     @State private var csvExportString = ""
     @State private var csvExportFilename = "table"
+    @State private var stackPicker: CanvasStackPickerState?
     @State private var newName: String = ""
     @State private var lastMenuLocation: CGPoint? = nil
     @State private var openPDFElement: PDFElementModel? = nil
@@ -164,6 +183,7 @@ struct CanvasView: View {
                 )
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        stackPicker = nil
                         guard !isCanvasGestureActive else { return }
                         if selection.isMultiSelectActive || vm.connectorVM.isConnectModeActive {
                         } else {
@@ -238,6 +258,12 @@ struct CanvasView: View {
                 .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
                 .offset(vm.offset)
+                .simultaneousGesture(
+                    SpatialTapGesture(count: 1, coordinateSpace: .named(canvasViewportCoordinateSpace))
+                        .onEnded { tap in
+                            handleElementStackTap(at: tap.location, viewportSize: geo.size)
+                        }
+                )
                 #if os(macOS)
                 .gesture(canvasPanGesture(geo: geo))
                 .simultaneousGesture(canvasMagnifyGesture(geo: geo))
@@ -337,6 +363,18 @@ struct CanvasView: View {
                     .animation(.spring(duration: 0.3), value: selection.isMultiSelectActive)
                 }
 
+                if let picker = stackPicker {
+                    Color.black.opacity(0.001)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { stackPicker = nil }
+                        .zIndex(118)
+
+                    stackPickerView(picker)
+                        .zIndex(119)
+                        .transition(.scale(scale: 0.96).combined(with: .opacity))
+                }
+
                 if isProcessingOCRScan || isProcessingDocumentScan {
                     HStack(spacing: 10) {
                         ProgressView()
@@ -398,6 +436,7 @@ struct CanvasView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+            .coordinateSpace(name: canvasViewportCoordinateSpace)
             .clipped()
             #if os(macOS)
             .overlay(
@@ -454,6 +493,9 @@ struct CanvasView: View {
                 }
             }
             .onDisappear { generateThumbnail() }
+            .onChange(of: settings.overlapStackPickerEnabled) { _, isEnabled in
+                if !isEnabled { stackPicker = nil }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .ocrCreatedTextElement)) { notification in
                 guard let textID = notification.object as? UUID else { return }
                 dismissEverything()
@@ -841,6 +883,263 @@ struct CanvasView: View {
         }
     }
 
+    @ViewBuilder
+    private func stackPickerView(_ picker: CanvasStackPickerState) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.3.layers.3d")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(picker.items.count) items here")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Button {
+                    withAnimation(.spring(duration: 0.2)) { stackPicker = nil }
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(picker.items.enumerated()), id: \.element.id) { index, item in
+                        stackPickerRow(
+                            item,
+                            isFront: index == 0,
+                            isSelected: item.id == activeSelectedElementID
+                        )
+                    }
+                }
+            }
+            .frame(maxHeight: max(44, picker.maxHeight - 45))
+        }
+        .frame(width: picker.width)
+        .frame(maxHeight: picker.maxHeight)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 6)
+        .position(picker.position)
+    }
+
+    private func stackPickerRow(_ item: CanvasStackPickerItem,
+                                isFront: Bool,
+                                isSelected: Bool) -> some View {
+        Button {
+            selectStackItem(item.id)
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(item.tint.opacity(0.16))
+                    Image(systemName: item.icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(item.tint)
+                }
+                .frame(width: 30, height: 30)
+
+                Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                if isFront {
+                    Text("Front")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.10), in: Capsule())
+                }
+
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .background(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func handleElementStackTap(at screenPoint: CGPoint, viewportSize: CGSize) {
+        guard settings.overlapStackPickerEnabled else {
+            stackPicker = nil
+            return
+        }
+
+        guard !selection.isMultiSelectActive,
+              !vm.showCanvasDrawingOverlay,
+              !vm.connectorVM.isConnectModeActive,
+              !isCanvasGestureActive else {
+            stackPicker = nil
+            return
+        }
+
+        let items = stackItems(at: screenPoint)
+        DispatchQueue.main.async {
+            guard items.count > 1 else {
+                stackPicker = nil
+                return
+            }
+
+            withAnimation(.spring(duration: 0.22)) {
+                stackPicker = makeStackPicker(
+                    items: items,
+                    near: screenPoint,
+                    viewportSize: viewportSize
+                )
+            }
+        }
+    }
+
+    private func stackItems(at screenPoint: CGPoint) -> [CanvasStackPickerItem] {
+        let canvasPoint = CGPoint(
+            x: (screenPoint.x - vm.offset.width) / vm.scale,
+            y: (screenPoint.y - vm.offset.height) / vm.scale
+        )
+        let hitSlop = max(2, 8 / max(vm.scale, 0.01))
+        var items: [CanvasStackPickerItem] = []
+
+        appendStackItems((try? context.fetch(FetchDescriptor<TextElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: 160, height: 40)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<StickyNoteModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<TodoListModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<ShapeElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<ImageElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<TableElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.totalWidth, height: $0.totalHeight)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<AudioElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<YouTubeElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<DrawingElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
+        appendStackItems((try? context.fetch(FetchDescriptor<SymbolElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.fontSize, height: $0.fontSize)
+        }
+
+        return items.sorted {
+            if $0.zIndex == $1.zIndex { return $0.title < $1.title }
+            return $0.zIndex > $1.zIndex
+        }
+    }
+
+    private func appendStackItems<Element: LayerableElement>(
+        _ elements: [Element],
+        canvasPoint: CGPoint,
+        hitSlop: CGFloat,
+        into items: inout [CanvasStackPickerItem],
+        bounds: (Element) -> ElementBounds
+    ) {
+        for element in elements where element.canvasID == canvas.id {
+            guard bounds(element).contains(canvasPoint: canvasPoint, hitSlop: hitSlop) else { continue }
+            items.append(CanvasStackPickerItem(
+                id: element.id,
+                title: element.layerTitle,
+                icon: element.layerIcon,
+                tint: element.layerTint,
+                zIndex: element.zIndex
+            ))
+        }
+    }
+
+    private func makeStackPicker(items: [CanvasStackPickerItem],
+                                 near screenPoint: CGPoint,
+                                 viewportSize: CGSize) -> CanvasStackPickerState {
+        let width = max(180, min(280, viewportSize.width - 24))
+        let visibleRows = min(CGFloat(items.count), 6)
+        let maxHeight = min(45 + visibleRows * 44, max(160, viewportSize.height - 24))
+        let position = stackPickerPosition(
+            near: screenPoint,
+            pickerSize: CGSize(width: width, height: maxHeight),
+            viewportSize: viewportSize
+        )
+
+        return CanvasStackPickerState(
+            position: position,
+            width: width,
+            maxHeight: maxHeight,
+            items: items
+        )
+    }
+
+    private func stackPickerPosition(near point: CGPoint,
+                                     pickerSize: CGSize,
+                                     viewportSize: CGSize) -> CGPoint {
+        let margin: CGFloat = 12
+        let gap: CGFloat = 14
+
+        var x = point.x + pickerSize.width / 2 + gap
+        if x + pickerSize.width / 2 > viewportSize.width - margin {
+            x = point.x - pickerSize.width / 2 - gap
+        }
+        x = min(max(margin + pickerSize.width / 2, x),
+                viewportSize.width - margin - pickerSize.width / 2)
+
+        var y = point.y + pickerSize.height / 2 + gap
+        if y + pickerSize.height / 2 > viewportSize.height - margin {
+            y = point.y - pickerSize.height / 2 - gap
+        }
+        y = min(max(margin + pickerSize.height / 2, y),
+                viewportSize.height - margin - pickerSize.height / 2)
+
+        return CGPoint(x: x, y: y)
+    }
+
+    private func selectStackItem(_ id: UUID) {
+        withAnimation(.spring(duration: 0.2)) { stackPicker = nil }
+        layersVM.highlight(id)
+        selectElement(id: id)
+    }
+
     // MARK: - Gestures
 
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
@@ -1215,6 +1514,7 @@ struct CanvasView: View {
     }
 
     private func dismissEverything() {
+        stackPicker = nil
         if let inlineID = vm.textVM.inlineEditingID,
            let el = textElements.first(where: { $0.id == inlineID }),
            el.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1553,6 +1853,18 @@ struct CanvasView: View {
             else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }  // ← NEW
         }
         withAnimation(.spring(duration: 0.3)) { selection.exit() }
+    }
+}
+
+private extension ElementBounds {
+    func contains(canvasPoint point: CGPoint, hitSlop: CGFloat) -> Bool {
+        let rect = CGRect(
+            x: CGFloat(cx - width / 2),
+            y: CGFloat(cy - height / 2),
+            width: CGFloat(width),
+            height: CGFloat(height)
+        )
+        return rect.insetBy(dx: -hitSlop, dy: -hitSlop).contains(point)
     }
 }
 

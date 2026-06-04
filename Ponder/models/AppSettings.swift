@@ -125,6 +125,22 @@ enum CanvasBackgroundMode: String, CaseIterable, Identifiable {
         }
     }
 
+    static func matching(theme: AppTheme) -> CanvasBackgroundMode {
+        switch theme {
+        case .system: return .adaptive
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+
+    var matchingTheme: AppTheme {
+        switch self {
+        case .adaptive: return .system
+        case .light:    return .light
+        case .dark:     return .dark
+        }
+    }
+
     func resolvedColorScheme(system: ColorScheme) -> ColorScheme {
         switch self {
         case .adaptive: return system
@@ -266,12 +282,17 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
+    @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
     @AppStorage("isPro") private var isProRaw: Bool = false
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboardingRaw: Bool = false
 
     var theme: AppTheme {
         get { AppTheme(rawValue: themeRaw) ?? .system }
-        set { themeRaw = newValue.rawValue; objectWillChange.send() }
+        set {
+            themeRaw = newValue.rawValue
+            canvasBackgroundModeRaw = CanvasBackgroundMode.matching(theme: newValue).rawValue
+            objectWillChange.send()
+        }
     }
 
     var toolbarPosition: ToolbarPosition {
@@ -285,13 +306,22 @@ class AppSettings: ObservableObject {
     }
 
     var canvasBackgroundMode: CanvasBackgroundMode {
-        get { CanvasBackgroundMode(rawValue: canvasBackgroundModeRaw) ?? .adaptive }
-        set { canvasBackgroundModeRaw = newValue.rawValue; objectWillChange.send() }
+        get { CanvasBackgroundMode.matching(theme: theme) }
+        set {
+            canvasBackgroundModeRaw = newValue.rawValue
+            themeRaw = newValue.matchingTheme.rawValue
+            objectWillChange.send()
+        }
     }
 
     var canvasBackgroundPalette: CanvasBackgroundPalette {
         get { CanvasBackgroundPalette(rawValue: canvasBackgroundPaletteRaw) ?? .neutral }
         set { canvasBackgroundPaletteRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var overlapStackPickerEnabled: Bool {
+        get { overlapStackPickerEnabledRaw }
+        set { overlapStackPickerEnabledRaw = newValue; objectWillChange.send() }
     }
 
     var isPro: Bool {
