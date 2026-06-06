@@ -10,6 +10,11 @@ import Foundation
 
 // MARK: - CanvasExporter
 
+enum CanvasExportScope {
+    case allContent
+    case currentViewport(CGRect)
+}
+
 @MainActor
 final class CanvasExporter {
 
@@ -34,10 +39,12 @@ final class CanvasExporter {
         gridStyle:     GridStyle = .dotted,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
+        exportScope:   CanvasExportScope = .allContent,
         scale:         CGFloat = 2.0
     ) -> Data? {
 
-        let exportRect = computeExportRect(
+        let exportRect = resolvedExportRect(
+            scope:         exportScope,
             canvas:        canvas,
             textElements:  textElements,
             stickyNotes:   stickyNotes,
@@ -53,6 +60,133 @@ final class CanvasExporter {
         )
 
         guard exportRect.width > 0, exportRect.height > 0 else { return nil }
+
+        guard let image = renderExportImage(
+            exportRect:    exportRect,
+            textElements:  textElements,
+            stickyNotes:   stickyNotes,
+            todoLists:     todoLists,
+            todoTasks:     todoTasks,
+            shapes:        shapes,
+            images:        images,
+            pdfs:          pdfs,
+            tables:        tables,
+            tableCells:    tableCells,
+            audioElements: audioElements,
+            youtubeElements: youtubeElements,
+            drawings:      drawings,
+            symbols:       symbols,
+            youtubeThumbnails: youtubeThumbnails,
+            connectors:    connectors,
+            colorScheme:   colorScheme,
+            gridStyle:     gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette,
+            scale:         scale
+        ) else { return nil }
+
+        #if os(iOS)
+        return image.pngData()
+        #else
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
+        return bitmapRep.representation(using: .png, properties: [:])
+        #endif
+    }
+
+    static func exportPDF(
+        canvas:        CanvasModel,
+        textElements:  [TextElementModel],
+        stickyNotes:   [StickyNoteModel],
+        todoLists:     [TodoListModel],
+        todoTasks:     [TodoTaskModel],
+        shapes:        [ShapeElementModel],
+        images:        [ImageElementModel],
+        pdfs:          [PDFElementModel],
+        tables:        [TableElementModel],
+        tableCells:    [TableCellModel],
+        audioElements: [AudioElementModel],
+        youtubeElements: [YouTubeElementModel],
+        drawings:      [DrawingElementModel],
+        symbols:       [SymbolElementModel],
+        youtubeThumbnails: [UUID: PlatformImage] = [:],
+        connectors:    [ConnectorModel],
+        colorScheme:   ColorScheme = .light,
+        gridStyle:     GridStyle = .dotted,
+        backgroundMode: CanvasBackgroundMode = .adaptive,
+        backgroundPalette: CanvasBackgroundPalette = .neutral,
+        exportScope:   CanvasExportScope = .allContent,
+        scale:         CGFloat = 2.0
+    ) -> Data? {
+
+        let exportRect = resolvedExportRect(
+            scope:         exportScope,
+            canvas:        canvas,
+            textElements:  textElements,
+            stickyNotes:   stickyNotes,
+            todoLists:     todoLists,
+            shapes:        shapes,
+            images:        images,
+            pdfs:          pdfs,
+            tables:        tables,
+            audioElements: audioElements,
+            youtubeElements: youtubeElements,
+            drawings:      drawings,
+            symbols:       symbols
+        )
+
+        guard exportRect.width > 0, exportRect.height > 0 else { return nil }
+
+        guard let image = renderExportImage(
+            exportRect:    exportRect,
+            textElements:  textElements,
+            stickyNotes:   stickyNotes,
+            todoLists:     todoLists,
+            todoTasks:     todoTasks,
+            shapes:        shapes,
+            images:        images,
+            pdfs:          pdfs,
+            tables:        tables,
+            tableCells:    tableCells,
+            audioElements: audioElements,
+            youtubeElements: youtubeElements,
+            drawings:      drawings,
+            symbols:       symbols,
+            youtubeThumbnails: youtubeThumbnails,
+            connectors:    connectors,
+            colorScheme:   colorScheme,
+            gridStyle:     gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette,
+            scale:         scale
+        ) else { return nil }
+
+        return makeSinglePagePDF(image: image, pageSize: exportRect.size)
+    }
+
+    private static func renderExportImage(
+        exportRect:    CGRect,
+        textElements:  [TextElementModel],
+        stickyNotes:   [StickyNoteModel],
+        todoLists:     [TodoListModel],
+        todoTasks:     [TodoTaskModel],
+        shapes:        [ShapeElementModel],
+        images:        [ImageElementModel],
+        pdfs:          [PDFElementModel],
+        tables:        [TableElementModel],
+        tableCells:    [TableCellModel],
+        audioElements: [AudioElementModel],
+        youtubeElements: [YouTubeElementModel],
+        drawings:      [DrawingElementModel],
+        symbols:       [SymbolElementModel],
+        youtubeThumbnails: [UUID: PlatformImage],
+        connectors:    [ConnectorModel],
+        colorScheme:   ColorScheme,
+        gridStyle:     GridStyle,
+        backgroundMode: CanvasBackgroundMode,
+        backgroundPalette: CanvasBackgroundPalette,
+        scale:         CGFloat
+    ) -> PlatformImage? {
 
         let drawingImages = prerenderDrawings(
             drawings:          drawings,
@@ -95,13 +229,37 @@ final class CanvasExporter {
         )
 
         #if os(iOS)
-        guard let uiImage = renderer.uiImage else { return nil }
-        return uiImage.pngData()
+        return renderer.uiImage
         #else
-        guard let nsImage = renderer.nsImage else { return nil }
-        guard let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
-        return bitmapRep.representation(using: .png, properties: [:])
+        return renderer.nsImage
+        #endif
+    }
+
+    private static func makeSinglePagePDF(image: PlatformImage, pageSize: CGSize) -> Data? {
+        guard pageSize.width > 0, pageSize.height > 0 else { return nil }
+
+        #if os(iOS)
+        let bounds = CGRect(origin: .zero, size: pageSize)
+        let renderer = UIGraphicsPDFRenderer(bounds: bounds)
+        return renderer.pdfData { context in
+            context.beginPage()
+            image.draw(in: bounds)
+        }
+        #else
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+        let data = NSMutableData()
+        guard let consumer = CGDataConsumer(data: data as CFMutableData) else { return nil }
+        var mediaBox = CGRect(origin: .zero, size: pageSize)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+
+        context.beginPDFPage(nil)
+        context.draw(cgImage, in: CGRect(origin: .zero, size: pageSize))
+        context.endPDFPage()
+        context.closePDF()
+
+        return data as Data
         #endif
     }
 
@@ -218,6 +376,55 @@ final class CanvasExporter {
     }
 
     // MARK: - Bounding box
+
+    private static func resolvedExportRect(
+        scope:         CanvasExportScope,
+        canvas:        CanvasModel,
+        textElements:  [TextElementModel],
+        stickyNotes:   [StickyNoteModel],
+        todoLists:     [TodoListModel],
+        shapes:        [ShapeElementModel],
+        images:        [ImageElementModel],
+        pdfs:          [PDFElementModel],
+        tables:        [TableElementModel],
+        audioElements: [AudioElementModel],
+        youtubeElements: [YouTubeElementModel],
+        drawings:      [DrawingElementModel],
+        symbols:       [SymbolElementModel]
+    ) -> CGRect {
+        let allContentRect = computeExportRect(
+            canvas:        canvas,
+            textElements:  textElements,
+            stickyNotes:   stickyNotes,
+            todoLists:     todoLists,
+            shapes:        shapes,
+            images:        images,
+            pdfs:          pdfs,
+            tables:        tables,
+            audioElements: audioElements,
+            youtubeElements: youtubeElements,
+            drawings:      drawings,
+            symbols:       symbols
+        )
+
+        switch scope {
+        case .allContent:
+            return allContentRect
+        case .currentViewport(let rect):
+            let normalized = rect.standardized
+            guard normalized.width > 0, normalized.height > 0 else {
+                return allContentRect
+            }
+
+            if canvas.isInfinite {
+                return normalized
+            }
+
+            let boundaryRect = CGRect(origin: .zero, size: canvas.boundarySize)
+            let clipped = normalized.intersection(boundaryRect)
+            return clipped.isNull || clipped.isEmpty ? boundaryRect : clipped
+        }
+    }
 
     static func computeExportRect(
         canvas:        CanvasModel,

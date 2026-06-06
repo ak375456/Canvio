@@ -126,6 +126,29 @@ struct SettingsSheet: View {
                     }
                 }
             }
+            Toggle(isOn: Binding(
+                get: { settings.toolbarStyle == .compactButtons },
+                set: { settings.toolbarStyle = $0 ? .compactButtons : .floatingBar }
+            )) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "square.grid.3x3")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 18, height: 18)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Compact floating buttons")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Use small icon-only buttons around the canvas instead of the wide toolbar.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .toggleStyle(.switch)
+            .padding(12)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 

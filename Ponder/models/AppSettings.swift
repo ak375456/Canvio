@@ -72,6 +72,27 @@ enum ToolbarPosition: String, CaseIterable, Identifiable {
     }
 }
 
+enum ToolbarStyle: String, CaseIterable, Identifiable {
+    case floatingBar
+    case compactButtons
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .floatingBar: return "Floating Bar"
+        case .compactButtons: return "Compact Buttons"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .floatingBar: return "capsule"
+        case .compactButtons: return "square.grid.3x3"
+        }
+    }
+}
+
 enum GridStyle: String, CaseIterable, Identifiable {
     case dotted
     case squares
@@ -279,6 +300,7 @@ enum CanvasBackgroundPalette: String, CaseIterable, Identifiable {
 class AppSettings: ObservableObject {
     @AppStorage("ponder.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("ponder.toolbarPosition") private var toolbarPositionRaw: String = ToolbarPosition.bottom.rawValue
+    @AppStorage("ponder.toolbarStyle") private var toolbarStyleRaw: String = ToolbarStyle.floatingBar.rawValue
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
@@ -298,6 +320,11 @@ class AppSettings: ObservableObject {
     var toolbarPosition: ToolbarPosition {
         get { ToolbarPosition(rawValue: toolbarPositionRaw) ?? .bottom }
         set { toolbarPositionRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var toolbarStyle: ToolbarStyle {
+        get { ToolbarStyle(rawValue: toolbarStyleRaw) ?? .floatingBar }
+        set { toolbarStyleRaw = newValue.rawValue; objectWillChange.send() }
     }
 
     var gridStyle: GridStyle {

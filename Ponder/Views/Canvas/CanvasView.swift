@@ -8,6 +8,7 @@ import VisionKit
 #endif
 
 private let canvasViewportCoordinateSpace = "CanvasViewport"
+private let freeMediaElementLimit = 2
 
 private struct CanvasStackPickerItem: Identifiable {
     let id: UUID
@@ -32,6 +33,7 @@ struct CanvasView: View {
 
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var vm = CanvasViewModel()
+    @ObservedObject private var pro = ProManager.shared
     @ObservedObject private var selection: SelectionViewModel = SelectionViewModel()
     @StateObject private var layersVM = LayersViewModel()
     @Environment(\.modelContext) private var context
@@ -52,6 +54,7 @@ struct CanvasView: View {
 
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
+    @State private var showPaywall = false
     @State private var showSettings = false
     @State private var showLayers = false
     @State private var showPDFReader = false
@@ -313,94 +316,23 @@ struct CanvasView: View {
                 }
 
                 if vm.connectorVM.isConnectModeActive {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            Image(systemName: connectModeIcon)
-                                .font(.system(size: 13, weight: .medium))
-                            Text(connectModeHint)
-                                .font(.caption.weight(.semibold))
-                            Spacer()
-                            Button("Done") { vm.connectorVM.exitConnectMode() }
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 10)
-                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14))
-                        .shadow(color: .accentColor.opacity(0.4), radius: 8, x: 0, y: 3)
-                        .padding(.horizontal, 16).padding(.top, 16)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity)
-                    .zIndex(90)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .animation(.spring(duration: 0.3), value: vm.connectorVM.isConnectModeActive)
+                    connectModeOverlay
                 }
 
                 if selection.isMultiSelectActive {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "hand.tap").font(.system(size: 13, weight: .medium))
-                            Text(selection.count == 0 ? "Tap elements to select" : "\(selection.count) selected")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(Color.blue, in: Capsule())
-                        .shadow(color: .blue.opacity(0.4), radius: 8, x: 0, y: 3)
-                        .padding(.top, 16)
-                        Spacer()
-                        MultiSelectBar(
-                            count: selection.count,
-                            onDuplicate: { duplicateSelected() },
-                            onDelete: { deleteSelected() },
-                            onDone: {
-                                withAnimation(.spring(duration: 0.3)) { selection.exit() }
-                                dismissEverything()
-                            }
-                        )
-                        .padding(.bottom, 24)
-                    }
-                    .frame(maxWidth: .infinity).zIndex(90).transition(.opacity)
-                    .animation(.spring(duration: 0.3), value: selection.isMultiSelectActive)
+                    multiSelectOverlay
                 }
 
                 if let picker = stackPicker {
-                    Color.black.opacity(0.001)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture { stackPicker = nil }
-                        .zIndex(118)
-
-                    stackPickerView(picker)
-                        .zIndex(119)
-                        .transition(.scale(scale: 0.96).combined(with: .opacity))
+                    stackPickerOverlay(picker)
                 }
 
                 if isProcessingOCRScan || isProcessingDocumentScan {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(isProcessingOCRScan ? "Extracting text..." : "Preparing scan...")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 16)
-                    .zIndex(95)
+                    processingOverlay
                 }
 
                 if let pos = vm.addMenuPosition {
-                    Color.black.opacity(0.001).ignoresSafeArea().contentShape(Rectangle())
-                        .onTapGesture { vm.hideAddMenu() }
-                    AddElementMenu(position: pos) { tool in
-                        handleToolSelection(tool, at: pos, geo: geo)
-                    } onDismiss: { vm.hideAddMenu() }
-                    .zIndex(100)
+                    addMenuOverlay(at: pos, geo: geo)
                 }
 
                 if vm.showCanvasDrawingOverlay {
@@ -487,36 +419,12 @@ struct CanvasView: View {
             #if os(iOS)
             .onReceive(NotificationCenter.default.publisher(
                 for: UIResponder.keyboardWillShowNotification)) { notif in
-                guard vm.textVM.inlineEditingID != nil else { return }
-                guard let kbFrame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
-                      let duration = notif.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
-                else { return }
-                let kbHeight = kbFrame.height
-                let safeBottom = geo.safeAreaInsets.bottom
-                let availableHeight = geo.size.height - kbHeight + safeBottom
-                if let editID = vm.textVM.inlineEditingID,
-                   let el = textElements.first(where: { $0.id == editID }) {
-                    let elementScreenY = CGFloat(el.y) * vm.scale + vm.offset.height
-                    let targetY = availableHeight - 80
-                    if elementScreenY > targetY {
-                        let delta = elementScreenY - targetY
-                        keyboardAvoidanceOffset = delta
-                        withAnimation(.easeOut(duration: duration)) {
-                            vm.offset.height -= delta
-                            vm.lastOffset = vm.offset
-                        }
-                    }
-                }
+                handleKeyboardWillShow(notif, viewportSize: geo.size,
+                                       safeBottom: geo.safeAreaInsets.bottom)
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: UIResponder.keyboardWillHideNotification)) { notif in
-                guard keyboardAvoidanceOffset != 0 else { return }
-                let duration = (notif.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
-                withAnimation(.easeOut(duration: duration)) {
-                    vm.offset.height += keyboardAvoidanceOffset
-                    vm.lastOffset = vm.offset
-                }
-                keyboardAvoidanceOffset = 0
+                handleKeyboardWillHide(notif)
             }
             #endif
             .overlay(alignment: .topTrailing) {
@@ -590,26 +498,13 @@ struct CanvasView: View {
                 .presentationDetents([.height(600)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $showSettings) {
-                SettingsSheet(settings: settings, exportButton: AnyView(
-                    CanvasExportButton(
-                        canvas:        canvas,
-                        textElements:  textElements,
-                        stickyNotes:   stickyNotes,
-                        todoLists:     todoLists,
-                        todoTasks:     todoTasks,
-                        shapes:        shapes,
-                        images:        images,
-                        pdfs:          pdfs,
-                        tables:        tables,
-                        tableCells:    tableCells,
-                        audioElements: audioElements,
-                        youtubeElements: youtubeElements,
-                        drawings:      drawings,
-                        symbols:       symbols,
-                        connectors:    connectors
-                    )
-                ))
-                    .presentationDetents([.height(680), .large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
+                settingsSheet(viewportSize: geo.size)
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallSheet()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(24)
             }
             .sheet(isPresented: $showLayers) {
                 LayersSheet(allElements: allLayerableElements, vm: layersVM) { id in
@@ -736,16 +631,7 @@ struct CanvasView: View {
             .fileImporter(isPresented: $vm.showTableCSVImporter,
                          allowedContentTypes: [UTType.commaSeparatedText, UTType.plainText],
                          allowsMultipleSelection: false) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                    if let csv = try? String(contentsOf: url, encoding: .utf8),
-                       let tableID = vm.pendingCSVTableID,
-                       let table = tables.first(where: { $0.id == tableID }) {
-                        vm.tableVM.importCSV(csv, into: table, cells: tableCells, context: context)
-                    }
-                    vm.pendingCSVTableID = nil
-                }
+                handleCSVImportResult(result)
             }
             .fileImporter(isPresented: $vm.showAudioImporter,
                          allowedContentTypes: [UTType.mp3, UTType.mpeg4Audio, UTType.aiff, UTType.wav],
@@ -866,6 +752,153 @@ struct CanvasView: View {
         } message: {
             Text(ocrScanAlertMessage ?? "")
         }
+    }
+
+    private var connectModeOverlay: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: connectModeIcon)
+                    .font(.system(size: 13, weight: .medium))
+                Text(connectModeHint)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Done") { vm.connectorVM.exitConnectMode() }
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14))
+            .shadow(color: .accentColor.opacity(0.4), radius: 8, x: 0, y: 3)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .zIndex(90)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .animation(.spring(duration: 0.3), value: vm.connectorVM.isConnectModeActive)
+    }
+
+    private var multiSelectOverlay: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.tap")
+                    .font(.system(size: 13, weight: .medium))
+                Text(multiSelectStatusText)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.blue, in: Capsule())
+            .shadow(color: .blue.opacity(0.4), radius: 8, x: 0, y: 3)
+            .padding(.top, 16)
+
+            Spacer()
+
+            MultiSelectBar(
+                count: selection.count,
+                onDuplicate: { duplicateSelected() },
+                onDelete: { deleteSelected() },
+                onDone: {
+                    withAnimation(.spring(duration: 0.3)) { selection.exit() }
+                    dismissEverything()
+                }
+            )
+            .padding(.bottom, 24)
+        }
+        .frame(maxWidth: .infinity)
+        .zIndex(90)
+        .transition(.opacity)
+        .animation(.spring(duration: 0.3), value: selection.isMultiSelectActive)
+    }
+
+    private var multiSelectStatusText: String {
+        selection.count == 0 ? "Tap elements to select" : "\(selection.count) selected"
+    }
+
+    @ViewBuilder
+    private func stackPickerOverlay(_ picker: CanvasStackPickerState) -> some View {
+        Color.black.opacity(0.001)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { stackPicker = nil }
+            .zIndex(118)
+
+        stackPickerView(picker)
+            .zIndex(119)
+            .transition(.scale(scale: 0.96).combined(with: .opacity))
+    }
+
+    private var processingOverlay: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text(processingStatusText)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, 16)
+        .zIndex(95)
+    }
+
+    private var processingStatusText: String {
+        isProcessingOCRScan ? "Extracting text..." : "Preparing scan..."
+    }
+
+    @ViewBuilder
+    private func addMenuOverlay(at position: CGPoint, geo: GeometryProxy) -> some View {
+        Color.black.opacity(0.001)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { vm.hideAddMenu() }
+
+        AddElementMenu(position: position) { tool in
+            handleToolSelection(tool, at: position, geo: geo)
+        } onDismiss: {
+            vm.hideAddMenu()
+        }
+        .zIndex(100)
+    }
+
+    private func settingsSheet(viewportSize: CGSize) -> some View {
+        SettingsSheet(
+            settings: settings,
+            exportButton: canvasExportButton(viewportSize: viewportSize)
+        )
+        .presentationDetents([.height(680), .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(24)
+    }
+
+    private func canvasExportButton(viewportSize: CGSize) -> AnyView {
+        AnyView(
+            CanvasExportButton(
+                canvas:        canvas,
+                textElements:  textElements,
+                stickyNotes:   stickyNotes,
+                todoLists:     todoLists,
+                todoTasks:     todoTasks,
+                shapes:        shapes,
+                images:        images,
+                pdfs:          pdfs,
+                tables:        tables,
+                tableCells:    tableCells,
+                audioElements: audioElements,
+                youtubeElements: youtubeElements,
+                drawings:      drawings,
+                symbols:       symbols,
+                connectors:    connectors,
+                currentViewportRect: currentViewportExportRect(viewportSize: viewportSize)
+            )
+        )
     }
 
     @ViewBuilder
@@ -1517,12 +1550,35 @@ struct CanvasView: View {
     @ViewBuilder
     private func toolbarLayer(geo: GeometryProxy) -> some View {
         let connectActive = vm.connectorVM.isConnectModeActive
-        switch settings.toolbarPosition {
-        case .hidden: EmptyView()
-        case .bottom:
-            VStack {
-                Spacer()
-                CanvasToolbar(
+        if settings.toolbarPosition == .hidden {
+            EmptyView()
+        } else if settings.toolbarStyle == .compactButtons {
+            CompactCanvasToolbar(
+                showTextSheet:  $vm.showTextSheet,
+                onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
+                onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
+                onDrawOnCanvas: { startCanvasDrawing() },
+                onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onConnect:      { toggleConnectMode() },
+                isConnectModeActive: connectActive
+            )
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+        } else {
+            switch settings.toolbarPosition {
+            case .hidden: EmptyView()
+            case .bottom:
+                VStack {
+                    Spacer()
+                    CanvasToolbar(
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
@@ -1540,10 +1596,12 @@ struct CanvasView: View {
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive, isVertical: false
                 )
+                .padding(.horizontal, 16)
+                .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 12)
             }
-        case .left:
-            HStack {
-                CanvasToolbar(
+            case .left:
+                HStack {
+                    CanvasToolbar(
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
@@ -1564,10 +1622,10 @@ struct CanvasView: View {
                 .padding(.leading, 16)
                 Spacer()
             }
-        case .right:
-            HStack {
-                Spacer()
-                CanvasToolbar(
+            case .right:
+                HStack {
+                    Spacer()
+                    CanvasToolbar(
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
@@ -1587,6 +1645,7 @@ struct CanvasView: View {
                 )
                 .padding(.trailing, 16)
             }
+            }
         }
     }
 
@@ -1598,6 +1657,68 @@ struct CanvasView: View {
             vm.connectorVM.enterConnectMode()
         }
     }
+
+    private func currentViewportExportRect(viewportSize: CGSize) -> CGRect? {
+        guard vm.scale > 0, viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+        return CGRect(
+            x: -vm.offset.width / vm.scale,
+            y: -vm.offset.height / vm.scale,
+            width: viewportSize.width / vm.scale,
+            height: viewportSize.height / vm.scale
+        )
+    }
+
+    private func handleCSVImportResult(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessing { url.stopAccessingSecurityScopedResource() }
+            vm.pendingCSVTableID = nil
+        }
+
+        guard let csv = try? String(contentsOf: url, encoding: .utf8),
+              let tableID = vm.pendingCSVTableID else { return }
+
+        guard let table = tables.first(where: { $0.id == tableID }) else { return }
+        vm.tableVM.importCSV(csv, into: table, cells: tableCells, context: context)
+    }
+
+    #if os(iOS)
+    private func handleKeyboardWillShow(
+        _ notification: Notification,
+        viewportSize: CGSize,
+        safeBottom: CGFloat
+    ) {
+        guard let editID = vm.textVM.inlineEditingID else { return }
+        guard let kbFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double
+        else { return }
+        guard let element = textElements.first(where: { $0.id == editID }) else { return }
+
+        let availableHeight = viewportSize.height - kbFrame.height + safeBottom
+        let elementScreenY = CGFloat(element.y) * vm.scale + vm.offset.height
+        let targetY = availableHeight - 80
+        guard elementScreenY > targetY else { return }
+
+        let delta = elementScreenY - targetY
+        keyboardAvoidanceOffset = delta
+        withAnimation(.easeOut(duration: duration)) {
+            vm.offset.height -= delta
+            vm.lastOffset = vm.offset
+        }
+    }
+
+    private func handleKeyboardWillHide(_ notification: Notification) {
+        guard keyboardAvoidanceOffset != 0 else { return }
+        let duration = (notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        withAnimation(.easeOut(duration: duration)) {
+            vm.offset.height += keyboardAvoidanceOffset
+            vm.lastOffset = vm.offset
+        }
+        keyboardAvoidanceOffset = 0
+    }
+    #endif
 
     private func dismissEverything() {
         stackPicker = nil
@@ -1667,7 +1788,14 @@ struct CanvasView: View {
     private func openSymbolPicker(at point: CGPoint) {
         dismissEverything(); vm.pendingSymbolLocation = point; vm.showSymbolPicker = true
     }
+    private func canAddLimitedMediaElement(currentCount: Int) -> Bool {
+        guard !pro.isPro, currentCount >= freeMediaElementLimit else { return true }
+        dismissEverything()
+        showPaywall = true
+        return false
+    }
     private func openImagePicker(at point: CGPoint) {
+        guard canAddLimitedMediaElement(currentCount: images.count) else { return }
         dismissEverything(); vm.pendingImageLocation = point
         #if os(iOS)
         if UIImagePickerController.isSourceTypeAvailable(.camera) { vm.showImageSourcePicker = true }
@@ -1720,9 +1848,11 @@ struct CanvasView: View {
         #endif
     }
     private func openTableSizePicker(at point: CGPoint) {
+        guard canAddLimitedMediaElement(currentCount: tables.count) else { return }
         dismissEverything(); vm.pendingTableLocation = point; showTableSizePicker = true
     }
     private func openAudioPicker(at point: CGPoint) {
+        guard canAddLimitedMediaElement(currentCount: audioElements.count) else { return }
         dismissEverything(); vm.pendingAudioLocation = point; vm.showAudioPicker = true
     }
     private func openYouTubeLinkSheet(at point: CGPoint) {
