@@ -18,10 +18,12 @@ struct SettingsSheet: View {
     @ObservedObject private var auth = AuthService.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openURL) private var openURL
     @State private var showPaywall = false
     @State private var showAuth = false
     
     var exportButton: AnyView? = nil
+    private let communityURL = URL(string: "https://www.reddit.com/r/Canvio/")!
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -32,6 +34,7 @@ struct SettingsSheet: View {
                     themeSection
                     toolbarSection
                     canvasActionsSection
+                    communitySection
                     selectionSection
                     canvasBackgroundSection
                     gridSection
@@ -56,7 +59,10 @@ struct SettingsSheet: View {
         .sheet(isPresented: $showAuth) {
             AuthView(
                 title: "Sign in for Sync",
-                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices.",
+                onSignedIn: {
+                    showAuth = false
+                }
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -132,6 +138,48 @@ struct SettingsSheet: View {
                 instructionRow(icon: "checkmark.circle", text: "To duplicate multiple items, hold the canvas, select items, then tap Duplicate.")
                 instructionRow(icon: "text.cursor", text: "Double tap on the canvas to start typing directly.")
             }
+        }
+    }
+
+    // MARK: - Community
+    private var communitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("COMMUNITY")
+            Button {
+                openURL(communityURL)
+            } label: {
+                HStack(alignment: .center, spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.accentColor.opacity(0.14))
+                            .frame(width: 38, height: 38)
+                        Image(systemName: "person.3.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Canvio Community")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Showcase your canvas, report a bug, or request a feature on Reddit.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the Canvio Reddit community in your browser.")
         }
     }
 

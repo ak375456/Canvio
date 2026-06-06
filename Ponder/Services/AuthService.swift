@@ -173,6 +173,9 @@ final class AuthService: NSObject, ObservableObject {
     // MARK: - Sign out
 
     func signOut() async {
+        isLoading = true
+        defer { isLoading = false }
+
         do {
             try await supabase.auth.signOut()
         } catch {

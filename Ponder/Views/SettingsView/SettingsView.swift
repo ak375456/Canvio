@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var showSignOutConfirm: Bool = false
     @State private var showPaywall: Bool = false
     @State private var showAuth: Bool = false
+    @State private var isSigningOut: Bool = false
     @State private var isDeleting: Bool = false
     @State private var deleteError: String? = nil
     @FocusState private var nameFocused: Bool
@@ -247,7 +248,11 @@ struct SettingsView: View {
         .sheet(isPresented: $showAuth) {
             AuthView(
                 title: "Sign in for Sync",
-                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices.",
+                onSignedIn: {
+                    showAuth = false
+                    Task { await loadProfile() }
+                }
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -255,7 +260,7 @@ struct SettingsView: View {
         }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
             Button("Sign Out", role: .destructive) {
-                Task { await AuthService.shared.signOut(); dismiss() }
+                Task { await performSignOut() }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -270,14 +275,14 @@ struct SettingsView: View {
             Text("This permanently deletes your account and all canvases across all devices. This cannot be undone.")
         }
         .overlay {
-            if isDeleting {
+            if isSigningOut || isDeleting {
                 ZStack {
                     Color.black.opacity(0.4).ignoresSafeArea()
                     VStack(spacing: 16) {
                         ProgressView()
                             .scaleEffect(1.3)
                             .tint(.white)
-                        Text("Deleting account…")
+                        Text(isSigningOut ? "Signing out..." : "Deleting account...")
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.white)
                     }
@@ -322,6 +327,13 @@ struct SettingsView: View {
         } else {
             showPaywall = true
         }
+    }
+
+    private func performSignOut() async {
+        isSigningOut = true
+        await AuthService.shared.signOut()
+        isSigningOut = false
+        dismiss()
     }
 
     private func performDelete() async {

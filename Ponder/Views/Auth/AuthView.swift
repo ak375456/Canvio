@@ -5,15 +5,19 @@
 
 import SwiftUI
 import AuthenticationServices
+import Auth
 
 struct AuthView: View {
     var title: String = "Canvio"
     var subtitle: String = "Sign in to sync across devices. Local canvases stay on this device until sync is enabled."
     var showsGuestButton: Bool = false
+    var onSignedIn: () -> Void = { }
 
     @ObservedObject var auth = AuthService.shared
 
     @Environment(\.authorizationController) private var authorizationController
+    @Environment(\.dismiss) private var dismiss
+    @State private var didCompleteSignIn = false
 
     var body: some View {
         ZStack {
@@ -79,6 +83,7 @@ struct AuthView: View {
                             switch result {
                             case .success(let authorization):
                                 await auth.handleAuthorization(authorization)
+                                completeSignInPresentationIfNeeded()
                             case .failure(let error):
                                 auth.handleAuthError(error)
                             }
@@ -132,6 +137,17 @@ struct AuthView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: auth.errorMessage)
+        .onChange(of: auth.currentUser?.id.uuidString) { _, userID in
+            guard userID != nil else { return }
+            completeSignInPresentationIfNeeded()
+        }
+    }
+
+    private func completeSignInPresentationIfNeeded() {
+        guard auth.currentUser != nil, !didCompleteSignIn else { return }
+        didCompleteSignIn = true
+        onSignedIn()
+        dismiss()
     }
 }
 

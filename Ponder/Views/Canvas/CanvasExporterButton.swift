@@ -97,7 +97,10 @@ struct CanvasExportButton: View {
         .sheet(isPresented: $showAuth) {
             AuthView(
                 title: "Sign in for Sync",
-                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices."
+                subtitle: "Sign in to restore your canvases and sync Canvio Pro across all your devices.",
+                onSignedIn: {
+                    showAuth = false
+                }
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
