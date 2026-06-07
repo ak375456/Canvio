@@ -9,6 +9,7 @@ struct CanvasToolbar: View {
     @Binding var showTextSheet: Bool
     let onAddSticky:    () -> Void
     let onAddTodo:      () -> Void
+    let onAddTemplate:  () -> Void
     let onAddShape:     () -> Void
     let onAddImage:     () -> Void
     let onScanOCR:      () -> Void
@@ -22,6 +23,7 @@ struct CanvasToolbar: View {
     let onAddSymbol:    () -> Void          // ← NEW
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
+    var lockedTools: Set<CanvasTool> = []
     let isVertical: Bool
 
     @State private var isCollapsed = false
@@ -99,15 +101,16 @@ struct CanvasToolbar: View {
         toolButton(icon: "textformat",           label: "Text",    tint: .blue)   { showTextSheet = true }
         toolButton(icon: "note.text",            label: "Sticky",  tint: .orange) { onAddSticky() }
         toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
+        toolButton(icon: "square.grid.2x2",      label: "Templates", tint: .indigo) { onAddTemplate() }
         toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
-        toolButton(icon: "photo",                label: "Image",   tint: .cyan)   { onAddImage() }
+        toolButton(icon: "photo",                label: "Image",   tint: .cyan, isLocked: lockedTools.contains(.image))   { onAddImage() }
         #if os(iOS)
         toolButton(icon: "doc.text.viewfinder",  label: "OCR",     tint: .teal)   { onScanOCR() }
         toolButton(icon: "doc.viewfinder",       label: "Scan",    tint: .red)    { onScanDocument() }
         #endif
         toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
-        toolButton(icon: "tablecells",           label: "Table",   tint: .indigo) { onAddTable() }
-        toolButton(icon: "waveform",             label: "Audio",   tint: .pink)   { onAddAudio() }
+        toolButton(icon: "tablecells",           label: "Table",   tint: .indigo, isLocked: lockedTools.contains(.table)) { onAddTable() }
+        toolButton(icon: "waveform",             label: "Audio",   tint: .pink, isLocked: lockedTools.contains(.audio))   { onAddAudio() }
         toolButton(icon: "play.rectangle.fill",  label: "YouTube", tint: .red)    { onAddYouTube() }
         toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }
         toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
@@ -173,21 +176,46 @@ struct CanvasToolbar: View {
     }
 
     private func toolButton(icon: String, label: String, tint: Color,
+                            isLocked: Bool = false,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(tint)
-                    .frame(width: 28, height: 28)
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 5) {
+                    Image(systemName: icon)
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(tint)
+                        .frame(width: 28, height: 28)
+                    Text(label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .opacity(isLocked ? 0.42 : 1)
+
+                if isLocked {
+                    lockedScrim(cornerRadius: 10)
+                    lockBadge(size: 22, iconSize: 10)
+                        .offset(x: -4, y: 3)
+                }
             }
             .frame(width: 66, height: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(isLocked ? "\(label), Pro required" : label)
+    }
+
+    private func lockedScrim(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius)
+            .fill(Color.black.opacity(0.34))
+    }
+
+    private func lockBadge(size: CGFloat, iconSize: CGFloat) -> some View {
+        Image(systemName: "lock.fill")
+            .font(.system(size: iconSize, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Color.black.opacity(0.78), in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.34), lineWidth: 0.7))
     }
 }
 
@@ -195,6 +223,7 @@ struct CompactCanvasToolbar: View {
     @Binding var showTextSheet: Bool
     let onAddSticky:    () -> Void
     let onAddTodo:      () -> Void
+    let onAddTemplate:  () -> Void
     let onAddShape:     () -> Void
     let onAddImage:     () -> Void
     let onScanOCR:      () -> Void
@@ -208,6 +237,7 @@ struct CompactCanvasToolbar: View {
     let onAddSymbol:    () -> Void
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
+    var lockedTools: Set<CanvasTool> = []
 
     @State private var isCollapsed = false
 
@@ -278,8 +308,9 @@ struct CompactCanvasToolbar: View {
                 compactButton(icon: "textformat", label: "Text", tint: .blue) { showTextSheet = true }
                 compactButton(icon: "note.text", label: "Sticky Note", tint: .orange, action: onAddSticky)
                 compactButton(icon: "checklist", label: "Todo List", tint: .green, action: onAddTodo)
+                compactButton(icon: "square.grid.2x2", label: "Templates", tint: .indigo, action: onAddTemplate)
                 compactButton(icon: "square.on.circle", label: "Shape", tint: .purple, action: onAddShape)
-                compactButton(icon: "photo", label: "Image", tint: .cyan, action: onAddImage)
+                compactButton(icon: "photo", label: "Image", tint: .cyan, isLocked: lockedTools.contains(.image), action: onAddImage)
                 compactButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange, action: onAddDrawing)
                 compactButton(
                     icon: "scribble.variable",
@@ -308,8 +339,8 @@ struct CompactCanvasToolbar: View {
                 compactButton(icon: "doc.viewfinder", label: "Scan Document", tint: .red, action: onScanDocument)
                 #endif
                 compactButton(icon: "doc.richtext", label: "PDF", tint: .red, action: onAddPDF)
-                compactButton(icon: "tablecells", label: "Table", tint: .indigo, action: onAddTable)
-                compactButton(icon: "waveform", label: "Audio", tint: .pink, action: onAddAudio)
+                compactButton(icon: "tablecells", label: "Table", tint: .indigo, isLocked: lockedTools.contains(.table), action: onAddTable)
+                compactButton(icon: "waveform", label: "Audio", tint: .pink, isLocked: lockedTools.contains(.audio), action: onAddAudio)
                 compactButton(icon: "play.rectangle.fill", label: "YouTube", tint: .red, action: onAddYouTube)
                 compactButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint, action: onAddSymbol)
                 compactButton(
@@ -334,27 +365,49 @@ struct CompactCanvasToolbar: View {
         label: String,
         tint: Color,
         isActive: Bool = false,
+        isLocked: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: buttonSize, height: buttonSize, alignment: .center)
-                .background(
-                    isActive ? Color.accentColor : Color.primary.opacity(0.045),
-                    in: RoundedRectangle(cornerRadius: buttonCornerRadius)
-                )
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: buttonCornerRadius))
-                .overlay(
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: buttonSize, height: buttonSize, alignment: .center)
+                    .background(
+                        isActive ? Color.accentColor : Color.primary.opacity(0.045),
+                        in: RoundedRectangle(cornerRadius: buttonCornerRadius)
+                    )
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: buttonCornerRadius))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: buttonCornerRadius)
+                            .strokeBorder(isActive ? Color.accentColor : Color.primary.opacity(0.82), lineWidth: 2.4)
+                    )
+                    .opacity(isLocked ? 0.52 : 1)
+
+                if isLocked {
                     RoundedRectangle(cornerRadius: buttonCornerRadius)
-                        .strokeBorder(isActive ? Color.accentColor : Color.primary.opacity(0.82), lineWidth: 2.4)
-                )
-                .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 5)
-                .contentShape(RoundedRectangle(cornerRadius: buttonCornerRadius))
+                        .fill(Color.black.opacity(0.48))
+                        .frame(width: buttonSize, height: buttonSize)
+                    lockBadge(size: 18, iconSize: 8)
+                        .offset(x: -3, y: 3)
+                }
+            }
+            .frame(width: buttonSize, height: buttonSize, alignment: .center)
+            .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 5)
+            .contentShape(RoundedRectangle(cornerRadius: buttonCornerRadius))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        .accessibilityLabel(isLocked ? "\(label), Pro required" : label)
+    }
+
+    private func lockBadge(size: CGFloat, iconSize: CGFloat) -> some View {
+        Image(systemName: "lock.fill")
+            .font(.system(size: iconSize, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(Color.black.opacity(0.78), in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.34), lineWidth: 0.7))
     }
 
     private func compactCollapseButton(

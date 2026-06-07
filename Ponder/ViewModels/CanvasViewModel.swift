@@ -24,6 +24,7 @@ class CanvasViewModel: ObservableObject {
     @Published var showPDFPicker: Bool = false
     @Published var showAudioPicker: Bool = false
     @Published var showYouTubeLinkSheet: Bool = false
+    @Published var showTemplatePicker: Bool = false
     @Published var showAudioRecorder: Bool = false
     @Published var showAudioImporter: Bool = false
     @Published var showCanvasDrawingOverlay: Bool = false
@@ -35,6 +36,7 @@ class CanvasViewModel: ObservableObject {
     @Published var pendingPDFLocation: CGPoint? = nil
     @Published var pendingAudioLocation: CGPoint? = nil
     @Published var pendingYouTubeLocation: CGPoint? = nil
+    @Published var pendingTemplateLocation: CGPoint? = nil
     @Published var pendingDrawingLocation: CGPoint? = nil
     @Published var addMenuPosition: CGPoint? = nil
     @Published var isMinimapExpanded: Bool = true

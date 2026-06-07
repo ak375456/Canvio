@@ -41,6 +41,9 @@ struct CanvasExportButton: View {
         VStack(spacing: 10) {
             pngExportButton
             pdfExportControl
+            if !pro.isPro {
+                watermarkUpsellButton
+            }
         }
         .disabled(isExporting)
         .sheet(item: $exportedFile) { file in
@@ -78,15 +81,13 @@ struct CanvasExportButton: View {
 
     private var pngExportButton: some View {
         Button {
-            if pro.isPro {
-                Task { await export(.png) }
-            } else {
-                showPaywall = true
-            }
+            Task { await export(.png) }
         } label: {
             exportRow(
                 title: "Export as PNG",
-                subtitle: "Save a high-quality image of your canvas to share with others.",
+                subtitle: pro.isPro
+                    ? "Save a high-quality image of your canvas to share with others."
+                    : "Free PNG exports include a small Canvio watermark.",
                 icon: "photo",
                 showsProgress: isExporting
             )
@@ -96,44 +97,60 @@ struct CanvasExportButton: View {
 
     @ViewBuilder
     private var pdfExportControl: some View {
-        if pro.isPro {
-            Menu {
-                Button {
-                    Task { await export(.pdf(.allContent)) }
-                } label: {
-                    Label("All Content", systemImage: "rectangle.expand.vertical")
-                }
-
-                Button {
-                    if let currentViewportRect {
-                        Task { await export(.pdf(.currentViewport(currentViewportRect))) }
-                    }
-                } label: {
-                    Label("Current View", systemImage: "viewfinder")
-                }
-                .disabled(currentViewportRect == nil)
-            } label: {
-                exportRow(
-                    title: "Export as PDF",
-                    subtitle: "Create a single-page PDF from all content or the current view.",
-                    icon: "doc.richtext",
-                    showsProgress: isExporting
-                )
-            }
-            .buttonStyle(.plain)
-        } else {
+        Menu {
             Button {
-                showPaywall = true
+                Task { await export(.pdf(.allContent)) }
             } label: {
-                exportRow(
-                    title: "Export as PDF",
-                    subtitle: "Create a single-page PDF from all content or the current view.",
-                    icon: "doc.richtext",
-                    showsProgress: isExporting
-                )
+                Label("All Content", systemImage: "rectangle.expand.vertical")
             }
-            .buttonStyle(.plain)
+
+            Button {
+                if let currentViewportRect {
+                    Task { await export(.pdf(.currentViewport(currentViewportRect))) }
+                }
+            } label: {
+                Label("Current View", systemImage: "viewfinder")
+            }
+            .disabled(currentViewportRect == nil)
+        } label: {
+            exportRow(
+                title: "Export as PDF",
+                subtitle: pro.isPro
+                    ? "Create a single-page PDF from all content or the current view."
+                    : "Choose all content or current view. Free PDFs include a small Canvio watermark.",
+                icon: "doc.richtext",
+                showsProgress: isExporting
+            )
         }
+        .buttonStyle(.plain)
+    }
+
+    private var watermarkUpsellButton: some View {
+        Button {
+            showPaywall = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.open")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 20, height: 20)
+
+                Text("Upgrade to remove the export watermark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.18), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private func export(_ request: ExportRequest) async {
@@ -165,7 +182,8 @@ struct CanvasExportButton: View {
                 colorScheme:   colorScheme,
                 gridStyle:     settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
-                backgroundPalette: settings.canvasBackgroundPalette
+                backgroundPalette: settings.canvasBackgroundPalette,
+                showsWatermark: !pro.isPro
             ) else { return }
             result = ExportResult(
                 data: data,
@@ -196,7 +214,8 @@ struct CanvasExportButton: View {
                 gridStyle:     settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
-                exportScope:   scope
+                exportScope:   scope,
+                showsWatermark: !pro.isPro
             ) else { return }
             result = ExportResult(
                 data: data,
@@ -235,11 +254,11 @@ struct CanvasExportButton: View {
                         .foregroundStyle(Color.primary)
 
                     if !pro.isPro {
-                        Text("PRO")
+                        Text("WATERMARK")
                             .font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor)
+                            .background(Color.black.opacity(0.72))
                             .foregroundStyle(Color.white)
                             .clipShape(Capsule())
                     }

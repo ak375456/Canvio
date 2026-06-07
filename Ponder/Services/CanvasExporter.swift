@@ -40,6 +40,7 @@ final class CanvasExporter {
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         exportScope:   CanvasExportScope = .allContent,
+        showsWatermark: Bool = false,
         scale:         CGFloat = 2.0
     ) -> Data? {
 
@@ -82,6 +83,7 @@ final class CanvasExporter {
             gridStyle:     gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            showsWatermark: showsWatermark,
             scale:         scale
         ) else { return nil }
 
@@ -116,6 +118,7 @@ final class CanvasExporter {
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         exportScope:   CanvasExportScope = .allContent,
+        showsWatermark: Bool = false,
         scale:         CGFloat = 2.0
     ) -> Data? {
 
@@ -158,6 +161,7 @@ final class CanvasExporter {
             gridStyle:     gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            showsWatermark: showsWatermark,
             scale:         scale
         ) else { return nil }
 
@@ -185,6 +189,7 @@ final class CanvasExporter {
         gridStyle:     GridStyle,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
+        showsWatermark: Bool,
         scale:         CGFloat
     ) -> PlatformImage? {
 
@@ -218,6 +223,7 @@ final class CanvasExporter {
             youtubeThumbnails: youtubeThumbnails,
             symbols:       symbols,
             connectors:    connectors,
+            showsWatermark: showsWatermark,
             exportRect_:   exportRect
         )
 
@@ -525,6 +531,7 @@ struct CanvasExportView: View {
     let youtubeThumbnails: [UUID: PlatformImage]
     let symbols:       [SymbolElementModel]
     let connectors:    [ConnectorModel]
+    let showsWatermark: Bool
     let exportRect_:   CGRect
 
     init(
@@ -549,6 +556,7 @@ struct CanvasExportView: View {
         youtubeThumbnails: [UUID: PlatformImage],
         symbols:       [SymbolElementModel],
         connectors:    [ConnectorModel],
+        showsWatermark: Bool,
         exportRect_:   CGRect
     ) {
         self.exportRect    = exportRect
@@ -572,6 +580,7 @@ struct CanvasExportView: View {
         self.youtubeThumbnails = youtubeThumbnails
         self.symbols       = symbols
         self.connectors    = connectors
+        self.showsWatermark = showsWatermark
         self.exportRect_   = exportRect_
     }
 
@@ -656,8 +665,48 @@ struct CanvasExportView: View {
                 exportElement(element)
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if showsWatermark {
+                exportWatermark
+                    .padding(watermarkPadding)
+            }
+        }
         .frame(width: exportRect.width, height: exportRect.height)
         .colorScheme(colorScheme)
+    }
+
+    private var exportWatermark: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: watermarkFontSize, weight: .semibold))
+            Text("Made with Canvio")
+                .font(.system(size: watermarkFontSize, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, watermarkHorizontalPadding)
+        .padding(.vertical, watermarkVerticalPadding)
+        .background(Color.black.opacity(0.62), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.24), lineWidth: 0.8))
+        .shadow(color: .black.opacity(0.18), radius: 5, x: 0, y: 2)
+        .frame(maxWidth: max(70, exportRect.width - watermarkPadding * 2), alignment: .trailing)
+    }
+
+    private var watermarkFontSize: CGFloat {
+        min(12, max(8, exportRect.width * 0.018))
+    }
+
+    private var watermarkHorizontalPadding: CGFloat {
+        min(12, max(7, exportRect.width * 0.014))
+    }
+
+    private var watermarkVerticalPadding: CGFloat {
+        min(7, max(4, exportRect.height * 0.008))
+    }
+
+    private var watermarkPadding: CGFloat {
+        min(22, max(8, min(exportRect.width, exportRect.height) * 0.035))
     }
 
     // MARK: - Coordinate helper

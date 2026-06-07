@@ -21,8 +21,6 @@ struct SettingsSheet: View {
     @Environment(\.openURL) private var openURL
     @State private var showPaywall = false
     @State private var showAuth = false
-    
-    var exportButton: AnyView? = nil
     private let communityURL = URL(string: "https://www.reddit.com/r/Canvio/")!
 
     var body: some View {
@@ -38,7 +36,6 @@ struct SettingsSheet: View {
                     selectionSection
                     canvasBackgroundSection
                     gridSection
-                    exportSection
                 }
                 .padding(24)
             }
@@ -371,17 +368,6 @@ struct SettingsSheet: View {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    // MARK: - Export
-    @ViewBuilder
-    private var exportSection: some View {
-        if let exportButton {
-            VStack(alignment: .leading, spacing: 12) {
-                label("EXPORT")
-                exportButton
             }
         }
     }

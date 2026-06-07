@@ -26,6 +26,54 @@ private struct CanvasStackPickerState: Identifiable {
     let items: [CanvasStackPickerItem]
 }
 
+private struct CanvasExportSheet<Content: View>: View {
+    @Environment(\.dismiss) private var dismiss
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Export Canvas")
+                        .font(.title3.weight(.bold))
+                    Text("Save the canvas as PNG or PDF.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close export")
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 20)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("SAVE AS")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .tracking(1)
+                content
+            }
+            .padding(24)
+        }
+    }
+}
+
 struct CanvasView: View {
     let canvas: CanvasModel
     var onDelete: () -> Void
@@ -56,6 +104,7 @@ struct CanvasView: View {
     @State private var showRenameAlert = false
     @State private var showPaywall = false
     @State private var showSettings = false
+    @State private var showExportSheet = false
     @State private var showLayers = false
     @State private var showPDFReader = false
     @State private var showTableSizePicker = false
@@ -118,6 +167,27 @@ struct CanvasView: View {
         arr += drawings        as [any LayerableElement]
         arr += symbols         as [any LayerableElement]
         return arr
+    }
+
+    private var lockedCanvasTools: Set<CanvasTool> {
+        guard !pro.isPro else { return [] }
+        var tools = Set<CanvasTool>()
+        if images.count >= freeMediaElementLimit { tools.insert(.image) }
+        if tables.count >= freeMediaElementLimit { tools.insert(.table) }
+        if audioElements.count >= freeMediaElementLimit { tools.insert(.audio) }
+        return tools
+    }
+
+    private var lockedTemplateIDs: Set<String> {
+        guard !pro.isPro else { return [] }
+        return Set(
+            CanvasTemplateService.templates
+                .filter { template in
+                    template.tableCount > 0
+                    && tables.count + template.tableCount > freeMediaElementLimit
+                }
+                .map(\.id)
+        )
     }
 
     private var sortedElements: [any LayerableElement] {
@@ -497,8 +567,22 @@ struct CanvasView: View {
                 }
                 .presentationDetents([.height(600)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
+            .sheet(isPresented: $vm.showTemplatePicker) {
+                CanvasTemplateSheet(
+                    templates: CanvasTemplateService.templates,
+                    lockedTemplateIDs: lockedTemplateIDs
+                ) { template in
+                    insertTemplate(template, viewportSize: geo.size)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
             .sheet(isPresented: $showSettings) {
-                settingsSheet(viewportSize: geo.size)
+                settingsSheet()
+            }
+            .sheet(isPresented: $showExportSheet) {
+                exportSheet(viewportSize: geo.size)
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallSheet()
@@ -695,6 +779,8 @@ struct CanvasView: View {
                             .foregroundStyle(selection.isMultiSelectActive ? .blue : .primary)
                     }
                     Button { showLayers = true } label: { Image(systemName: "square.3.layers.3d") }
+                    Button { showExportSheet = true } label: { Image(systemName: "square.and.arrow.up") }
+                        .accessibilityLabel("Export canvas")
                     Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
                     Menu {
                         Button { newName = canvas.name; showRenameAlert = true } label: {
@@ -860,7 +946,7 @@ struct CanvasView: View {
             .contentShape(Rectangle())
             .onTapGesture { vm.hideAddMenu() }
 
-        AddElementMenu(position: position) { tool in
+        AddElementMenu(position: position, lockedTools: lockedCanvasTools) { tool in
             handleToolSelection(tool, at: position, geo: geo)
         } onDismiss: {
             vm.hideAddMenu()
@@ -868,12 +954,18 @@ struct CanvasView: View {
         .zIndex(100)
     }
 
-    private func settingsSheet(viewportSize: CGSize) -> some View {
-        SettingsSheet(
-            settings: settings,
-            exportButton: canvasExportButton(viewportSize: viewportSize)
-        )
+    private func settingsSheet() -> some View {
+        SettingsSheet(settings: settings)
         .presentationDetents([.height(680), .large])
+        .presentationDragIndicator(.visible)
+        .presentationCornerRadius(24)
+    }
+
+    private func exportSheet(viewportSize: CGSize) -> some View {
+        CanvasExportSheet {
+            canvasExportButton(viewportSize: viewportSize)
+        }
+        .presentationDetents([.height(300), .medium])
         .presentationDragIndicator(.visible)
         .presentationCornerRadius(24)
     }
@@ -1557,6 +1649,7 @@ struct CanvasView: View {
                 showTextSheet:  $vm.showTextSheet,
                 onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                 onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
@@ -1569,7 +1662,8 @@ struct CanvasView: View {
                 onDrawOnCanvas: { startCanvasDrawing() },
                 onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onConnect:      { toggleConnectMode() },
-                isConnectModeActive: connectActive
+                isConnectModeActive: connectActive,
+                lockedTools: lockedCanvasTools
             )
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else {
@@ -1582,6 +1676,7 @@ struct CanvasView: View {
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
@@ -1594,7 +1689,9 @@ struct CanvasView: View {
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
-                    isConnectModeActive: connectActive, isVertical: false
+                    isConnectModeActive: connectActive,
+                    lockedTools: lockedCanvasTools,
+                    isVertical: false
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 12)
@@ -1605,6 +1702,7 @@ struct CanvasView: View {
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
@@ -1617,7 +1715,9 @@ struct CanvasView: View {
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
-                    isConnectModeActive: connectActive, isVertical: true
+                    isConnectModeActive: connectActive,
+                    lockedTools: lockedCanvasTools,
+                    isVertical: true
                 )
                 .padding(.leading, 16)
                 Spacer()
@@ -1629,6 +1729,7 @@ struct CanvasView: View {
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
+                    onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
@@ -1641,7 +1742,9 @@ struct CanvasView: View {
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
-                    isConnectModeActive: connectActive, isVertical: true
+                    isConnectModeActive: connectActive,
+                    lockedTools: lockedCanvasTools,
+                    isVertical: true
                 )
                 .padding(.trailing, 16)
             }
@@ -1734,6 +1837,7 @@ struct CanvasView: View {
         vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.youtubeVM.stopEditing(); vm.drawingVM.stopEditing()
         vm.connectorVM.stopEditing(); vm.symbolVM.stopEditing()  // ← NEW
         vm.hideAddMenu()
+        vm.showTemplatePicker = false
         #if canImport(UIKit)
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                         to: nil, from: nil, for: nil)
@@ -1780,6 +1884,40 @@ struct CanvasView: View {
                                 offset: vm.offset, scale: vm.scale,
                                 zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                 context: context, undoManager: vm.undoManager)
+    }
+    private func openTemplatePicker(at point: CGPoint) {
+        dismissEverything()
+        vm.pendingTemplateLocation = point
+        vm.showTemplatePicker = true
+    }
+    private func insertTemplate(_ template: CanvasTemplate, viewportSize: CGSize) {
+        guard vm.scale > 0 else { return }
+
+        if !pro.isPro,
+           template.tableCount > 0,
+           tables.count + template.tableCount > freeMediaElementLimit {
+            vm.pendingTemplateLocation = nil
+            showPaywall = true
+            return
+        }
+
+        dismissEverything()
+        let screenPoint = vm.pendingTemplateLocation
+            ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let canvasPoint = CGPoint(
+            x: (screenPoint.x - vm.offset.width) / vm.scale,
+            y: (screenPoint.y - vm.offset.height) / vm.scale
+        )
+        vm.pendingTemplateLocation = nil
+
+        CanvasTemplateService.insert(
+            template,
+            canvasID: canvas.id,
+            at: canvasPoint,
+            startZIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            context: context,
+            undoManager: vm.undoManager
+        )
     }
     private func openShapePicker(at point: CGPoint) {
         dismissEverything(); vm.pendingShapeLocation = point; vm.showShapePicker = true
@@ -1872,6 +2010,7 @@ struct CanvasView: View {
             vm.todoVM.addList(canvasID: canvas.id, center: screenPoint,
                              offset: vm.offset, scale: vm.scale, zIndex: nextZ,
                              context: context, undoManager: vm.undoManager)
+        case .templates: openTemplatePicker(at: screenPoint)
         case .shape: openShapePicker(at: screenPoint)
         case .image: openImagePicker(at: screenPoint)
         case .ocrScan: openOCRScanner(at: screenPoint)

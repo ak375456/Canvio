@@ -7,6 +7,7 @@ import SwiftUI
 
 struct AddElementMenu: View {
     let position: CGPoint
+    var lockedTools: Set<CanvasTool> = []
     let onSelect: (CanvasTool) -> Void
     let onDismiss: () -> Void
 
@@ -21,30 +22,53 @@ struct AddElementMenu: View {
     var body: some View {
         VStack(spacing: 0) {
             ForEach(tools) { tool in
+                let isLocked = lockedTools.contains(tool)
                 Button { onSelect(tool) } label: {
                     HStack(spacing: 12) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(tool.tint.opacity(0.15))
+                                .fill(tool.tint.opacity(isLocked ? 0.08 : 0.15))
                                 .frame(width: 34, height: 34)
                             Image(systemName: tool.icon)
                                 .font(.system(size: 16, weight: .medium))
                                 .foregroundStyle(tool.tint)
+                                .opacity(isLocked ? 0.45 : 1)
+
+                            if isLocked {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.black.opacity(0.48))
+                                    .frame(width: 34, height: 34)
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 16, height: 16)
+                                    .background(Color.black.opacity(0.78), in: Circle())
+                                    .offset(x: 9, y: -9)
+                            }
                         }
                         VStack(alignment: .leading, spacing: 1) {
                             Text(tool.title)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                            Text(tool.subtitle)
+                            Text(isLocked ? "Free limit reached" : tool.subtitle)
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(isLocked ? Color.accentColor : Color.secondary)
                         }
                         Spacer()
+
+                        if isLocked {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 26, height: 22)
+                                .background(Color.black.opacity(0.76), in: Capsule())
+                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(isLocked ? "\(tool.title), Pro required" : tool.title)
 
                 if tool != tools.last {
                     Divider().padding(.leading, 58)
@@ -71,6 +95,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case text
     case stickyNote
     case todoList
+    case templates
     case shape
     case image
     case ocrScan
@@ -88,6 +113,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .text:       return "Text"
         case .stickyNote: return "Sticky Note"
         case .todoList:   return "Todo List"
+        case .templates:  return "Templates"
         case .shape:      return "Shape"
         case .image:      return "Image"
         case .ocrScan:    return "OCR Scan"
@@ -105,6 +131,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .text:       return "Add formatted text"
         case .stickyNote: return "Add a colored note"
         case .todoList:   return "Add a task list"
+        case .templates:  return "Add a ready-made layout"
         case .shape:      return "Lines, rectangles, polygons"
         case .image:      return "Add a photo from your library"
         case .ocrScan:    return "Scan a page into editable text"
@@ -122,6 +149,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .text:       return "textformat"
         case .stickyNote: return "note.text"
         case .todoList:   return "checklist"
+        case .templates:  return "square.grid.2x2"
         case .shape:      return "square.on.circle"
         case .image:      return "photo"
         case .ocrScan:    return "doc.text.viewfinder"
@@ -139,6 +167,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .text:       return .blue
         case .stickyNote: return .orange
         case .todoList:   return .green
+        case .templates:  return .indigo
         case .shape:      return .purple
         case .image:      return .cyan
         case .ocrScan:    return .teal
