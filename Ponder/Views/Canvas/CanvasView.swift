@@ -196,18 +196,84 @@ struct CanvasView: View {
 
     private var boundsMap: [UUID: ElementBounds] {
         var map: [UUID: ElementBounds] = [:]
-        for el in textElements   { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: 160,           height: 40)            }
-        for el in stickyNotes    { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in todoLists      { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in shapes         { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in images         { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in pdfs           { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in tables         { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.totalWidth, height: el.totalHeight) }
-        for el in audioElements  { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in youtubeElements { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,     height: el.height)      }
-        for el in drawings       { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.width,      height: el.height)      }
-        for el in symbols        { map[el.id] = ElementBounds(id: el.id, cx: el.x, cy: el.y, width: el.fontSize,   height: el.fontSize)    }  // ← NEW
+        for element in allLayerableElements {
+            map[element.id] = elementBounds(for: element)
+        }
         return map
+    }
+
+    private var alwaysRenderedElementIDs: Set<UUID> {
+        var ids = selection.selectedIDs
+        if let activeSelectedElementID {
+            ids.insert(activeSelectedElementID)
+        }
+        if case .pickingTo(let fromID, _, _) = vm.connectorVM.connectState {
+            ids.insert(fromID)
+        }
+        return ids
+    }
+
+    private func visibleSortedElements(viewportSize: CGSize) -> [any LayerableElement] {
+        let viewportRect = visibleCanvasRect(viewportSize: viewportSize)
+        let pinnedIDs = alwaysRenderedElementIDs
+
+        return allLayerableElements.filter { element in
+            pinnedIDs.contains(element.id)
+            || elementBounds(for: element).intersects(canvasRect: viewportRect)
+        }
+        .sorted { $0.zIndex < $1.zIndex }
+    }
+
+    private func visibleCanvasRect(viewportSize: CGSize) -> CGRect {
+        guard vm.scale > 0, viewportSize.width > 0, viewportSize.height > 0 else {
+            return CGRect(origin: .zero, size: viewportSize)
+        }
+
+        let width = viewportSize.width / vm.scale
+        let height = viewportSize.height / vm.scale
+        let rect = CGRect(
+            x: -vm.offset.width / vm.scale,
+            y: -vm.offset.height / vm.scale,
+            width: width,
+            height: height
+        )
+
+        let padX = max(220, width * 0.85)
+        let padY = max(220, height * 0.85)
+        return rect.insetBy(dx: -padX, dy: -padY)
+    }
+
+    private func elementBounds(for element: any LayerableElement) -> ElementBounds {
+        if let text = element as? TextElementModel {
+            let lines = text.text.split(separator: "\n", omittingEmptySubsequences: false)
+            let longestLine = lines.map(\.count).max() ?? 4
+            let width = max(160, min(1200, Double(longestLine) * Double(text.fontSize) * 0.62 + 32))
+            let height = max(40, Double(max(lines.count, 1)) * Double(text.fontSize) * 1.35 + 24)
+            return ElementBounds(id: text.id, cx: text.x, cy: text.y, width: width, height: height)
+        } else if let sticky = element as? StickyNoteModel {
+            return ElementBounds(id: sticky.id, cx: sticky.x, cy: sticky.y, width: sticky.width, height: sticky.height)
+        } else if let todo = element as? TodoListModel {
+            return ElementBounds(id: todo.id, cx: todo.x, cy: todo.y, width: todo.width, height: todo.height)
+        } else if let shape = element as? ShapeElementModel {
+            return ElementBounds(id: shape.id, cx: shape.x, cy: shape.y, width: shape.width, height: shape.height)
+        } else if let image = element as? ImageElementModel {
+            return ElementBounds(id: image.id, cx: image.x, cy: image.y, width: image.width, height: image.height)
+        } else if let pdf = element as? PDFElementModel {
+            return ElementBounds(id: pdf.id, cx: pdf.x, cy: pdf.y, width: pdf.width, height: pdf.height)
+        } else if let table = element as? TableElementModel {
+            return ElementBounds(id: table.id, cx: table.x, cy: table.y, width: table.totalWidth, height: table.totalHeight)
+        } else if let audio = element as? AudioElementModel {
+            return ElementBounds(id: audio.id, cx: audio.x, cy: audio.y, width: audio.width, height: audio.height)
+        } else if let youtube = element as? YouTubeElementModel {
+            return ElementBounds(id: youtube.id, cx: youtube.x, cy: youtube.y, width: youtube.width, height: youtube.height)
+        } else if let drawing = element as? DrawingElementModel {
+            return ElementBounds(id: drawing.id, cx: drawing.x, cy: drawing.y, width: drawing.width, height: drawing.height)
+        } else if let symbol = element as? SymbolElementModel {
+            let size = symbol.fontSize + 24
+            return ElementBounds(id: symbol.id, cx: symbol.x, cy: symbol.y, width: size, height: size)
+        }
+
+        return ElementBounds(id: element.id, cx: 0, cy: 0, width: 80, height: 80)
     }
 
     private var activeSelectedElementID: UUID? {
@@ -325,8 +391,11 @@ struct CanvasView: View {
                     )
                     .zIndex(9999)
 
-                    ForEach(sortedElements, id: \.id) { element in
-                        renderElement(element)
+                    let visibleElements = visibleSortedElements(viewportSize: geo.size)
+                    let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
+
+                    ForEach(visibleElements, id: \.id) { element in
+                        renderElement(element, nextZIndex: nextZIndex)
                     }
                 }
                 .opacity(vm.showCanvasDrawingOverlay ? 0.82 : 1.0)
@@ -348,6 +417,10 @@ struct CanvasView: View {
                 CanvasGestureBridge(
                     isEnabled: !vm.showCanvasDrawingOverlay || !isCanvasDrawingInputActive,
                     selectedElementFrame: selectedElementGestureFrame,
+                    onPanBegan: {
+                        beginCanvasGestureSuppression()
+                        vm.lastOffset = vm.offset
+                    },
                     onPanChanged: { translation in
                         vm.offset = CGSize(
                             width: vm.lastOffset.width + translation.width,
@@ -359,6 +432,7 @@ struct CanvasView: View {
                         if !canvas.isInfinite {
                             vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                         }
+                        endCanvasGestureSuppression()
                     },
                     onPinchBegan: {
                         beginCanvasGestureSuppression()
@@ -366,7 +440,6 @@ struct CanvasView: View {
                         vm.lastOffset = vm.offset
                     },
                     onPinchChanged: { magnification, focal in
-                        beginCanvasGestureSuppression()
                         vm.handleMagnification(magnification, focalPoint: focal)
                     },
                     onPinchEnded: {
@@ -508,7 +581,8 @@ struct CanvasView: View {
                         symbols: symbols, viewportSize: geo.size,
                         canvasOffset: vm.offset, canvasScale: vm.scale,
                         onTapElement: { vm.centerOn(canvasPoint: $0, viewportSize: geo.size) },
-                        isExpanded: $vm.isMinimapExpanded
+                        isExpanded: $vm.isMinimapExpanded,
+                        isNavigationActive: isCanvasGestureActive
                     )
                     .padding(.trailing, 12).padding(.top, 12)
                 }
@@ -1254,12 +1328,16 @@ struct CanvasView: View {
 
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 5)
-            .onChanged { value in vm.handleDragChange(value) }
+            .onChanged { value in
+                beginCanvasGestureSuppression()
+                vm.handleDragChange(value)
+            }
             .onEnded { _ in
                 vm.handleDragEnd()
                 if !canvas.isInfinite {
                     vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
                 }
+                endCanvasGestureSuppression()
             }
     }
 
@@ -1281,6 +1359,7 @@ struct CanvasView: View {
     }
 
     private func beginCanvasGestureSuppression() {
+        if isCanvasGestureActive { return }
         canvasGestureSuppressionID = UUID()
         isCanvasGestureActive = true
     }
@@ -1529,7 +1608,7 @@ struct CanvasView: View {
     }
 
     @ViewBuilder
-    private func renderElement(_ element: any LayerableElement) -> some View {
+    private func renderElement(_ element: any LayerableElement, nextZIndex: Int) -> some View {
         let boundary       = canvas.boundarySize
         let multiSelect    = selection.isMultiSelectActive
         let isElemSelected = selection.isSelected(element.id)
@@ -1563,7 +1642,7 @@ struct CanvasView: View {
             } else if let img = element as? ImageElementModel {
                 ImageElementView(element: img, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
-                                 ocrTextZIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                                 ocrTextZIndex: nextZIndex,
                                  undoManager: vm.undoManager,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
@@ -2212,13 +2291,20 @@ struct CanvasView: View {
 }
 
 private extension ElementBounds {
-    func contains(canvasPoint point: CGPoint, hitSlop: CGFloat) -> Bool {
-        let rect = CGRect(
+    var rect: CGRect {
+        CGRect(
             x: CGFloat(cx - width / 2),
             y: CGFloat(cy - height / 2),
             width: CGFloat(width),
             height: CGFloat(height)
         )
+    }
+
+    func intersects(canvasRect: CGRect) -> Bool {
+        rect.insetBy(dx: -24, dy: -24).intersects(canvasRect)
+    }
+
+    func contains(canvasPoint point: CGPoint, hitSlop: CGFloat) -> Bool {
         return rect.insetBy(dx: -hitSlop, dy: -hitSlop).contains(point)
     }
 }

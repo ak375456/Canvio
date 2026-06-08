@@ -22,6 +22,7 @@ struct Minimap: View {
     let canvasScale: CGFloat
     let onTapElement: (CGPoint) -> Void
     @Binding var isExpanded: Bool
+    var isNavigationActive: Bool = false
 
     private let mapSize = CGSize(width: 130, height: 95)
     private let hitTargetSize: CGFloat = 22
@@ -32,7 +33,13 @@ struct Minimap: View {
         VStack(alignment: .trailing, spacing: 6) {
             toggleButton
             if isExpanded {
-                mapBody
+                Group {
+                    if isNavigationActive {
+                        restingMapBody
+                    } else {
+                        mapBody
+                    }
+                }
                     .frame(width: mapSize.width, height: mapSize.height)
                     .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
                     .overlay(RoundedRectangle(cornerRadius: 10)
@@ -41,6 +48,17 @@ struct Minimap: View {
                     .transition(.scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity))
             }
         }
+    }
+
+    private var restingMapBody: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.primary.opacity(0.035))
+            Image(systemName: "map.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.primary.opacity(0.22))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var toggleButton: some View {
