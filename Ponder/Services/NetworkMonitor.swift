@@ -36,6 +36,9 @@ final class NetworkMonitor: ObservableObject {
                     await ImageSyncService.shared.flushQueue()
                     await PDFSyncService.shared.flushQueue()
                     await AudioSyncService.shared.flushQueue()
+                    await YouTubeSyncService.shared.flushQueue()
+                    await SymbolSyncService.shared.flushQueue()
+                    await ElementGroupSyncService.shared.flushQueue()
                 }
             }
         }

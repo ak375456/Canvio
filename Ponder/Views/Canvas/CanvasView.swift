@@ -99,6 +99,7 @@ struct CanvasView: View {
     @Query private var allDrawings: [DrawingElementModel]
     @Query private var allConnectors: [ConnectorModel]
     @Query private var allSymbols: [SymbolElementModel]     // ← NEW
+    @Query private var allElementGroups: [CanvasElementGroupModel]
 
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
@@ -123,6 +124,9 @@ struct CanvasView: View {
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var canvasGestureSuppressionID = UUID()
+    @State private var selectedGroupID: UUID?
+    @State private var draggingGroupID: UUID?
+    @State private var groupDragOffset: CGSize = .zero
     @State private var isProcessingOCRScan = false
     @State private var isProcessingDocumentScan = false
     @State private var ocrScanAlertMessage: String?
@@ -152,6 +156,9 @@ struct CanvasView: View {
     private var drawings: [DrawingElementModel]    { allDrawings.filter     { $0.canvasID == canvas.id } }
     private var connectors: [ConnectorModel]       { allConnectors.filter   { $0.canvasID == canvas.id } }
     private var symbols: [SymbolElementModel]      { allSymbols.filter      { $0.canvasID == canvas.id } }  // ← NEW
+    private var elementGroups: [CanvasElementGroupModel] {
+        allElementGroups.filter { $0.canvasID == canvas.id }
+    }
 
     private var allLayerableElements: [any LayerableElement] {
         var arr: [any LayerableElement] = []
@@ -206,6 +213,12 @@ struct CanvasView: View {
         var ids = selection.selectedIDs
         if let activeSelectedElementID {
             ids.insert(activeSelectedElementID)
+        }
+        if let selectedGroupID {
+            ids.formUnion(groupMembers(for: selectedGroupID).map(\.id))
+        }
+        if let draggingGroupID {
+            ids.formUnion(groupMembers(for: draggingGroupID).map(\.id))
         }
         if case .pickingTo(let fromID, _, _) = vm.connectorVM.connectState {
             ids.insert(fromID)
@@ -292,16 +305,38 @@ struct CanvasView: View {
     }
 
     private var selectedElementGestureFrame: CGRect? {
+        if let selectedGroupID,
+           let bounds = groupBounds(for: selectedGroupID) {
+            return screenRect(for: bounds)
+                .insetBy(dx: -44, dy: -80)
+        }
+
         guard let id = activeSelectedElementID,
               let bounds = boundsMap[id] else { return nil }
 
-        let width  = CGFloat(bounds.width) * vm.scale
-        let height = CGFloat(bounds.height) * vm.scale
-        let x = CGFloat(bounds.cx) * vm.scale + vm.offset.width - width / 2
-        let y = CGFloat(bounds.cy) * vm.scale + vm.offset.height - height / 2
-
-        return CGRect(x: x, y: y, width: width, height: height)
+        return screenRect(for: bounds.rect)
             .insetBy(dx: -44, dy: -80)
+    }
+
+    private var selectedGroupForUngroup: UUID? {
+        let selectedElements = selection.selectedIDs.compactMap { layerableElement(withID: $0) }
+        guard selectedElements.count == selection.count,
+              !selectedElements.isEmpty,
+              selectedElements.allSatisfy({ $0.groupID != nil }) else { return nil }
+        let groupIDs = Set(selectedElements.compactMap(\.groupID))
+        return groupIDs.count == 1 ? groupIDs.first : nil
+    }
+
+    private var canUseGroupAction: Bool {
+        selectedGroupForUngroup != nil || selection.count >= 2
+    }
+
+    private var groupActionTitle: String {
+        selectedGroupForUngroup == nil ? "Group" : "Ungroup"
+    }
+
+    private var groupActionIcon: String {
+        selectedGroupForUngroup == nil ? "square.stack.3d.up.fill" : "square.stack.3d.down.right"
     }
 
     init(canvas: CanvasModel, onDelete: @escaping () -> Void, onRename: @escaping (String) -> Void) {
@@ -396,6 +431,10 @@ struct CanvasView: View {
 
                     ForEach(visibleElements, id: \.id) { element in
                         renderElement(element, nextZIndex: nextZIndex)
+                    }
+
+                    if !selection.isMultiSelectActive {
+                        groupSelectionLayer
                     }
                 }
                 .opacity(vm.showCanvasDrawingOverlay ? 0.82 : 1.0)
@@ -958,15 +997,22 @@ struct CanvasView: View {
 
             Spacer()
 
-            MultiSelectBar(
-                count: selection.count,
-                onDuplicate: { duplicateSelected() },
-                onDelete: { deleteSelected() },
-                onDone: {
-                    withAnimation(.spring(duration: 0.3)) { selection.exit() }
-                    dismissEverything()
-                }
-            )
+            ScrollView(.horizontal, showsIndicators: false) {
+                MultiSelectBar(
+                    count: selection.count,
+                    groupActionTitle: groupActionTitle,
+                    groupActionIcon: groupActionIcon,
+                    canUseGroupAction: canUseGroupAction,
+                    onGroupAction: { handleGroupAction() },
+                    onDuplicate: { duplicateSelected() },
+                    onDelete: { deleteSelected() },
+                    onDone: {
+                        withAnimation(.spring(duration: 0.3)) { selection.exit() }
+                        dismissEverything()
+                    }
+                )
+                .padding(.horizontal, 16)
+            }
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity)
@@ -977,6 +1023,117 @@ struct CanvasView: View {
 
     private var multiSelectStatusText: String {
         selection.count == 0 ? "Tap elements to select" : "\(selection.count) selected"
+    }
+
+    @ViewBuilder
+    private var groupSelectionLayer: some View {
+        ForEach(elementGroups, id: \.id) { group in
+            if let bounds = groupBounds(for: group.id) {
+                groupSelectionView(group: group, bounds: bounds)
+            }
+        }
+    }
+
+    private func groupSelectionView(group: CanvasElementGroupModel, bounds: CGRect) -> some View {
+        let isActive = selectedGroupID == group.id || draggingGroupID == group.id
+        let dragOffset = draggingGroupID == group.id ? groupDragOffset : .zero
+        let cornerRadius: CGFloat = 12
+        let safeScale = max(vm.scale, 0.01)
+        let minimumHitSize = 76 / safeScale
+        let hitWidth = max(bounds.width, minimumHitSize)
+        let hitHeight = max(bounds.height, minimumHitSize)
+
+        return ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .fill(Color.clear)
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+
+            if isActive {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(
+                        Color.accentColor.opacity(0.82),
+                        style: StrokeStyle(lineWidth: max(1.4 / safeScale, 0.5),
+                                           dash: [7 / safeScale, 5 / safeScale])
+                    )
+                    .frame(width: bounds.width, height: bounds.height)
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(Color.accentColor.opacity(0.045))
+                            .frame(width: bounds.width, height: bounds.height)
+                    )
+                    .allowsHitTesting(false)
+
+                groupToolbar(group: group)
+                    .offset(y: -bounds.height / 2 - 34 / safeScale)
+                    .scaleEffect(1 / safeScale)
+                    .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
+            }
+        }
+        .frame(width: hitWidth, height: hitHeight)
+        .position(x: bounds.midX + dragOffset.width, y: bounds.midY + dragOffset.height)
+        .zIndex(isActive ? 15000 : 14000)
+        .allowsHitTesting(true)
+        .gesture(isActive ? groupDragGesture(groupID: group.id) : nil)
+        .highPriorityGesture(
+            LongPressGesture(minimumDuration: 0.5).onEnded { _ in
+                guard !isCanvasGestureActive else { return }
+                enterMultiSelectFromGroup(group.id)
+            }
+        )
+        .onTapGesture {
+            guard !isCanvasGestureActive else { return }
+            selectGroup(group.id)
+        }
+        .animation(.spring(response: 0.24, dampingFraction: 0.86), value: selectedGroupID)
+    }
+
+    private func groupToolbar(group: CanvasElementGroupModel) -> some View {
+        HStack(spacing: 6) {
+            Text(group.name)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Divider().frame(height: 18)
+
+            Button {
+                duplicateGroup(group.id)
+            } label: {
+                Image(systemName: "plus.square.on.square")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Duplicate group")
+
+            Button {
+                ungroup(group.id)
+            } label: {
+                Image(systemName: "square.stack.3d.down.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Ungroup")
+
+            Button(role: .destructive) {
+                deleteGroupContents(group.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Delete group")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .frame(height: 38)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
+        .fixedSize()
     }
 
     @ViewBuilder
@@ -1324,6 +1481,301 @@ struct CanvasView: View {
         selectElement(id: id)
     }
 
+    private func selectGroup(_ groupID: UUID) {
+        dismissEverything()
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+            selectedGroupID = groupID
+        }
+    }
+
+    private func groupMembers(for groupID: UUID) -> [any LayerableElement] {
+        allLayerableElements.filter { $0.groupID == groupID }
+    }
+
+    private func groupBounds(for groupID: UUID) -> CGRect? {
+        let rects = groupMembers(for: groupID).compactMap { element -> CGRect? in
+            boundsMap[element.id]?.rect
+        }
+        guard var union = rects.first else { return nil }
+        for rect in rects.dropFirst() {
+            union = union.union(rect)
+        }
+        return union.insetBy(dx: -16, dy: -16)
+    }
+
+    private func screenRect(for canvasRect: CGRect) -> CGRect {
+        CGRect(
+            x: canvasRect.minX * vm.scale + vm.offset.width,
+            y: canvasRect.minY * vm.scale + vm.offset.height,
+            width: canvasRect.width * vm.scale,
+            height: canvasRect.height * vm.scale
+        )
+    }
+
+    private func groupDragOffset(for element: any LayerableElement) -> CGSize {
+        guard let groupID = element.groupID,
+              draggingGroupID == groupID else { return .zero }
+        return groupDragOffset
+    }
+
+    private func multiSelectIDs(for element: any LayerableElement) -> Set<UUID> {
+        guard let groupID = element.groupID else { return [element.id] }
+        return Set(groupMembers(for: groupID).map(\.id))
+    }
+
+    private func isSelectedInMultiSelect(_ element: any LayerableElement) -> Bool {
+        !selection.selectedIDs.isDisjoint(with: multiSelectIDs(for: element))
+    }
+
+    private func toggleMultiSelection(for element: any LayerableElement) {
+        let ids = multiSelectIDs(for: element)
+        guard !ids.isEmpty else { return }
+
+        if ids.isSubset(of: selection.selectedIDs) {
+            selection.selectedIDs.subtract(ids)
+        } else {
+            selection.selectedIDs.formUnion(ids)
+        }
+    }
+
+    private func enterMultiSelectFromGroupedElement(_ element: any LayerableElement) {
+        dismissEverything()
+        withAnimation(.spring(duration: 0.3)) {
+            selection.enterMultiSelect()
+            selection.selectedIDs.formUnion(multiSelectIDs(for: element))
+        }
+    }
+
+    private func enterMultiSelectFromGroup(_ groupID: UUID) {
+        let ids = Set(groupMembers(for: groupID).map(\.id))
+        guard !ids.isEmpty else { return }
+
+        dismissEverything()
+        withAnimation(.spring(duration: 0.3)) {
+            selection.enterMultiSelect()
+            selection.selectedIDs.formUnion(ids)
+        }
+    }
+
+    private func groupDragGesture(groupID: UUID) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                guard !isCanvasGestureActive else { return }
+                if draggingGroupID != groupID {
+                    selectGroup(groupID)
+                    draggingGroupID = groupID
+                }
+                groupDragOffset = value.translation
+            }
+            .onEnded { value in
+                guard draggingGroupID == groupID else {
+                    groupDragOffset = .zero
+                    return
+                }
+                moveGroup(groupID, by: value.translation)
+                groupDragOffset = .zero
+                draggingGroupID = nil
+            }
+    }
+
+    private func handleGroupAction() {
+        if let groupID = selectedGroupForUngroup {
+            ungroup(groupID)
+        } else {
+            groupSelected()
+        }
+    }
+
+    private func groupSelected() {
+        let elements = selection.selectedIDs.compactMap { layerableElement(withID: $0) }
+        guard elements.count >= 2 else { return }
+
+        let group = CanvasElementGroupModel(
+            canvasID: canvas.id,
+            name: "Group \(elementGroups.count + 1)"
+        )
+        context.insert(group)
+
+        let now = Date()
+        for element in elements {
+            element.groupID = group.id
+            element.updatedAt = now
+        }
+
+        try? context.save()
+
+        Task {
+            await ElementGroupSyncService.shared.upsert(group)
+            for element in elements {
+                await syncElement(element)
+            }
+        }
+
+        cleanupEmptyGroups(excluding: Set([group.id]))
+
+        withAnimation(.spring(duration: 0.3)) {
+            selection.exit()
+            selectedGroupID = group.id
+        }
+    }
+
+    private func ungroup(_ groupID: UUID) {
+        let members = groupMembers(for: groupID)
+        let group = elementGroups.first { $0.id == groupID }
+        let now = Date()
+
+        for element in members {
+            element.groupID = nil
+            element.updatedAt = now
+        }
+
+        if let group {
+            Task { await ElementGroupSyncService.shared.delete(group) }
+            context.delete(group)
+        }
+
+        try? context.save()
+
+        Task {
+            for element in members {
+                await syncElement(element)
+            }
+        }
+
+        withAnimation(.spring(duration: 0.25)) {
+            if selectedGroupID == groupID { selectedGroupID = nil }
+            if draggingGroupID == groupID { draggingGroupID = nil }
+            groupDragOffset = .zero
+            selection.exit()
+        }
+    }
+
+    private func moveGroup(_ groupID: UUID, by translation: CGSize) {
+        let members = groupMembers(for: groupID)
+        guard !members.isEmpty else { return }
+
+        let now = Date()
+        for element in members {
+            element.x += Double(translation.width)
+            element.y += Double(translation.height)
+            element.updatedAt = now
+        }
+
+        if let group = elementGroups.first(where: { $0.id == groupID }) {
+            group.updatedAt = now
+            Task { await ElementGroupSyncService.shared.upsert(group) }
+        }
+
+        try? context.save()
+        Task {
+            for element in members {
+                await syncElement(element)
+            }
+        }
+    }
+
+    private func duplicateGroup(_ groupID: UUID) {
+        let members = groupMembers(for: groupID).sorted { $0.zIndex < $1.zIndex }
+        guard !members.isEmpty else { return }
+
+        let group = CanvasElementGroupModel(
+            canvasID: canvas.id,
+            name: "Group \(elementGroups.count + 1)"
+        )
+        context.insert(group)
+
+        var z = LayersViewModel.nextZ(among: allLayerableElements)
+        var copies: [any LayerableElement] = []
+
+        for member in members {
+            if let newID = duplicateElement(member, zIndex: z, selectCopy: false),
+               let copy = layerableElement(withID: newID) {
+                copy.groupID = group.id
+                copy.updatedAt = Date()
+                copies.append(copy)
+            }
+            z += 1
+        }
+
+        try? context.save()
+
+        Task {
+            await ElementGroupSyncService.shared.upsert(group)
+            for copy in copies {
+                await syncElement(copy)
+            }
+        }
+
+        withAnimation(.spring(duration: 0.25)) {
+            selectedGroupID = group.id
+        }
+    }
+
+    private func deleteGroupContents(_ groupID: UUID) {
+        let ids = Set(groupMembers(for: groupID).map(\.id))
+        guard !ids.isEmpty else {
+            ungroup(groupID)
+            return
+        }
+
+        selection.selectedIDs = ids
+        deleteSelected()
+
+        if let group = elementGroups.first(where: { $0.id == groupID }) {
+            Task { await ElementGroupSyncService.shared.delete(group) }
+            context.delete(group)
+            try? context.save()
+        }
+
+        withAnimation(.spring(duration: 0.25)) {
+            selectedGroupID = nil
+            draggingGroupID = nil
+            groupDragOffset = .zero
+        }
+    }
+
+    private func cleanupEmptyGroups(excluding protectedGroupIDs: Set<UUID> = []) {
+        let usedGroupIDs = Set(allLayerableElements.compactMap(\.groupID))
+        let emptyGroups = elementGroups.filter {
+            !protectedGroupIDs.contains($0.id) && !usedGroupIDs.contains($0.id)
+        }
+
+        guard !emptyGroups.isEmpty else { return }
+
+        for group in emptyGroups {
+            Task { await ElementGroupSyncService.shared.delete(group) }
+            context.delete(group)
+        }
+
+        try? context.save()
+    }
+
+    private func syncElement(_ element: any LayerableElement) async {
+        if let element = element as? TextElementModel {
+            await TextSyncService.shared.upsert(element)
+        } else if let element = element as? StickyNoteModel {
+            await StickyNoteSyncService.shared.upsert(element)
+        } else if let element = element as? TodoListModel {
+            await TodoSyncService.shared.upsertList(element)
+        } else if let element = element as? ShapeElementModel {
+            await ShapeSyncService.shared.upsert(element)
+        } else if let element = element as? ImageElementModel {
+            await ImageSyncService.shared.upsert(element)
+        } else if let element = element as? PDFElementModel {
+            await PDFSyncService.shared.upsert(element)
+        } else if let element = element as? TableElementModel {
+            await TableSyncService.shared.upsertTable(element)
+        } else if let element = element as? AudioElementModel {
+            await AudioSyncService.shared.upsert(element)
+        } else if let element = element as? YouTubeElementModel {
+            await YouTubeSyncService.shared.upsert(element)
+        } else if let element = element as? DrawingElementModel {
+            await DrawingSyncService.shared.upsert(element)
+        } else if let element = element as? SymbolElementModel {
+            await SymbolSyncService.shared.upsert(element)
+        }
+    }
+
     // MARK: - Gestures
 
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
@@ -1485,6 +1937,7 @@ struct CanvasView: View {
 
     private func pullFromCloud() {
         Task {
+            await ElementGroupSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await TextSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await StickyNoteSyncService.shared.pullAll(canvasID: canvas.id, context: context)
             await ShapeSyncService.shared.pullAll(canvasID: canvas.id, context: context)
@@ -1611,7 +2064,8 @@ struct CanvasView: View {
     private func renderElement(_ element: any LayerableElement, nextZIndex: Int) -> some View {
         let boundary       = canvas.boundarySize
         let multiSelect    = selection.isMultiSelectActive
-        let isElemSelected = selection.isSelected(element.id)
+        let isElemSelected = isSelectedInMultiSelect(element)
+        let childInteractionLocked = isCanvasGestureActive || element.groupID != nil
 
         Group {
             if let text = element as? TextElementModel {
@@ -1619,26 +2073,26 @@ struct CanvasView: View {
                                 vm: vm.textVM, isMultiSelectMode: multiSelect,
                                 isSelectedInMultiSelect: isElemSelected,
                                 onExternalTap: { dismissEverything() },
-                                isCanvasGestureActive: isCanvasGestureActive)
+                                isCanvasGestureActive: childInteractionLocked)
             } else if let sticky = element as? StickyNoteModel {
                 StickyNoteView(note: sticky, canvasScale: vm.scale, canvasBoundary: boundary,
                                vm: vm.stickyVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onExternalTap: { dismissEverything() },
-                               isCanvasGestureActive: isCanvasGestureActive)
+                               isCanvasGestureActive: childInteractionLocked)
             } else if let todo = element as? TodoListModel {
                 TodoListView(list: todo, allTasks: todoTasks, canvasScale: vm.scale,
                              canvasBoundary: boundary, vm: vm.todoVM,
                              isMultiSelectMode: multiSelect,
                              isSelectedInMultiSelect: isElemSelected,
                              onExternalTap: { dismissEverything() },
-                             isCanvasGestureActive: isCanvasGestureActive)
+                             isCanvasGestureActive: childInteractionLocked)
             } else if let shape = element as? ShapeElementModel {
                 ShapeElementView(shape: shape, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.shapeVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
-                                 isCanvasGestureActive: isCanvasGestureActive)
+                                 isCanvasGestureActive: childInteractionLocked)
             } else if let img = element as? ImageElementModel {
                 ImageElementView(element: img, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
@@ -1646,14 +2100,14 @@ struct CanvasView: View {
                                  undoManager: vm.undoManager,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
-                                 isCanvasGestureActive: isCanvasGestureActive)
+                                 isCanvasGestureActive: childInteractionLocked)
             } else if let pdf = element as? PDFElementModel {
                 PDFElementView(element: pdf, canvasScale: vm.scale, canvasBoundary: boundary,
                                vm: vm.pdfVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onOpenReader: { openPDFElement = pdf; showPDFReader = true },
                                onExternalTap: { dismissEverything() },
-                               isCanvasGestureActive: isCanvasGestureActive)
+                               isCanvasGestureActive: childInteractionLocked)
             } else if let table = element as? TableElementModel {
                 TableElementView(
                     table: table, allCells: tableCells,
@@ -1668,52 +2122,64 @@ struct CanvasView: View {
                         showCSVExporter = true
                     },
                     onExternalTap: { dismissEverything() },
-                    onMultiSelectTap: { selection.toggle(table.id) },
-                    isCanvasGestureActive: isCanvasGestureActive)
+                    onMultiSelectTap: { toggleMultiSelection(for: table) },
+                    isCanvasGestureActive: childInteractionLocked)
             } else if let audio = element as? AudioElementModel {
                 AudioElementView(element: audio, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.audioVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
-                                 isCanvasGestureActive: isCanvasGestureActive)
+                                 isCanvasGestureActive: childInteractionLocked)
             } else if let youtube = element as? YouTubeElementModel {
                 YouTubeElementView(element: youtube, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.youtubeVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },
-                                   isCanvasGestureActive: isCanvasGestureActive)
+                                   isCanvasGestureActive: childInteractionLocked)
             } else if let drawing = element as? DrawingElementModel {
                 DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },
                                    onContinueCanvasDrawing: { continueCanvasDrawing($0) },
-                                   isCanvasGestureActive: isCanvasGestureActive)
+                                   isCanvasGestureActive: childInteractionLocked)
             } else if let symbol = element as? SymbolElementModel {
                 // ── NEW ────────────────────────────────────────────────────────
                 SymbolElementView(element: symbol, canvasScale: vm.scale, canvasBoundary: boundary,
                                   vm: vm.symbolVM, isMultiSelectMode: multiSelect,
                                   isSelectedInMultiSelect: isElemSelected,
                                   onExternalTap: { dismissEverything() },
-                                  isCanvasGestureActive: isCanvasGestureActive)
+                                  isCanvasGestureActive: childInteractionLocked)
             }
         }
         .opacity(vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
                  ? 0
                  : layersVM.highlightedID == element.id ? 0.5 : 1)
+        .offset(groupDragOffset(for: element))
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
             multiSelect ? nil : LongPressGesture(minimumDuration: 0.5)
                 .onEnded { _ in
                     guard !isCanvasGestureActive else { return }
-                    duplicateElement(element, offset: .zero)
+                    if element.groupID != nil {
+                        enterMultiSelectFromGroupedElement(element)
+                    } else {
+                        duplicateElement(element, offset: .zero)
+                    }
                 }
         )
         .highPriorityGesture(
             multiSelect ? TapGesture().onEnded {
                 guard !isCanvasGestureActive else { return }
-                selection.toggle(element.id)
+                toggleMultiSelection(for: element)
+            } : nil
+        )
+        .highPriorityGesture(
+            (!multiSelect && element.groupID != nil) ? TapGesture().onEnded {
+                guard !isCanvasGestureActive,
+                      let groupID = element.groupID else { return }
+                selectGroup(groupID)
             } : nil
         )
     }
@@ -1904,6 +2370,9 @@ struct CanvasView: View {
 
     private func dismissEverything() {
         stackPicker = nil
+        selectedGroupID = nil
+        draggingGroupID = nil
+        groupDragOffset = .zero
         if let inlineID = vm.textVM.inlineEditingID,
            let el = textElements.first(where: { $0.id == inlineID }),
            el.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1924,6 +2393,11 @@ struct CanvasView: View {
     }
 
     private func selectElement(id: UUID) {
+        if let groupID = layerableElement(withID: id)?.groupID {
+            selectGroup(groupID)
+            return
+        }
+
         dismissEverything()
         if      textElements.contains(where:   { $0.id == id }) { vm.textVM.editingID = id }
         else if stickyNotes.contains(where:    { $0.id == id }) { vm.stickyVM.editingID = id }
@@ -2286,6 +2760,7 @@ struct CanvasView: View {
             else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }  // ← NEW
         }
+        cleanupEmptyGroups()
         withAnimation(.spring(duration: 0.3)) { selection.exit() }
     }
 }

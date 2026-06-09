@@ -229,6 +229,11 @@ final class CanvasSyncService {
         for canvas in canvases {
             let canvasID = canvas.id
 
+            let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>()))?.filter {
+                $0.canvasID == canvasID
+            } ?? []
+            for group in groups { await ElementGroupSyncService.shared.upsert(group) }
+
             let texts = (try? context.fetch(FetchDescriptor<TextElementModel>()))?.filter {
                 $0.canvasID == canvasID
             } ?? []
@@ -247,7 +252,7 @@ final class CanvasSyncService {
             let images = (try? context.fetch(FetchDescriptor<ImageElementModel>()))?.filter {
                 $0.canvasID == canvasID
             } ?? []
-            for el in images { await ImageSyncService.shared.upsert(el) }
+            for el in images { await ImageSyncService.shared.upsert(el, uploadFile: true) }
 
             let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>()))?.filter {
                 $0.canvasID == canvasID

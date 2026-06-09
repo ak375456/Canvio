@@ -58,6 +58,12 @@ struct ImageElementView: View {
             loadDisplayImageIfNeeded()
         }
         .onChange(of: element.imageFileName) { _, _ in loadDisplayImageIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: .imageFileDidBecomeAvailable)) { notification in
+            guard let fileName = notification.object as? String,
+                  fileName == element.imageFileName else { return }
+            lastLoadedFileName = ""
+            loadDisplayImageIfNeeded()
+        }
         .alert("Text Extraction", isPresented: Binding(
             get: { ocrAlertMessage != nil },
             set: { if !$0 { ocrAlertMessage = nil } }
@@ -352,4 +358,5 @@ private struct ImageElementClipModifier: ViewModifier {
 
 extension Notification.Name {
     static let ocrCreatedTextElement = Notification.Name("ocrCreatedTextElement")
+    static let imageFileDidBecomeAvailable = Notification.Name("imageFileDidBecomeAvailable")
 }

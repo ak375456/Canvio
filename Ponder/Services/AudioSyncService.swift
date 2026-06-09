@@ -22,6 +22,7 @@ private struct AudioRow: Codable {
     let height:          Double
     let rotation:        Double
     let z_index:         Int
+    let group_id:        String?
     let created_at:      String
     let updated_at:      String
     let is_deleted:      Bool
@@ -158,6 +159,7 @@ final class AudioSyncService {
                         local.height    = row.height
                         local.rotation  = row.rotation
                         local.zIndex    = row.z_index
+                        local.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt = remoteUpdated
                     }
                     Task { await media.downloadAudioIfNeeded(fileName: row.audio_file_name) }
@@ -174,6 +176,7 @@ final class AudioSyncService {
                     element.height    = row.height
                     element.rotation  = row.rotation
                     element.zIndex    = row.z_index
+                    element.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                     element.createdAt = iso.date(from: row.created_at) ?? Date()
                     element.updatedAt = iso.date(from: row.updated_at) ?? Date()
                     context.insert(element)
@@ -252,6 +255,7 @@ final class AudioSyncService {
             height:          element.height,
             rotation:        element.rotation,
             z_index:         element.zIndex,
+            group_id:        element.groupID?.uuidString,
             created_at:      iso.string(from: element.createdAt),
             updated_at:      now,
             is_deleted:      false

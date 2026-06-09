@@ -21,6 +21,7 @@ private struct DBTodoListRow: Codable {
     let height:     Double
     let color_name: String
     let z_index:    Int
+    let group_id:   String?
     let created_at: String
     let updated_at: String
     let is_deleted: Bool
@@ -243,6 +244,7 @@ final class TodoSyncService {
                         local.height    = row.height
                         local.colorName = row.color_name
                         local.zIndex    = row.z_index
+                        local.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt = remoteUpdated
                     }
                 } else {
@@ -253,6 +255,7 @@ final class TodoSyncService {
                     list.height    = row.height
                     list.colorName = row.color_name
                     list.zIndex    = row.z_index
+                    list.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                     list.createdAt = iso.date(from: row.created_at) ?? Date()
                     list.updatedAt = iso.date(from: row.updated_at) ?? Date()
                     context.insert(list)
@@ -422,6 +425,7 @@ final class TodoSyncService {
             height:     list.height,
             color_name: list.colorName,
             z_index:    list.zIndex,
+            group_id:   list.groupID?.uuidString,
             created_at: iso.string(from: list.createdAt),
             updated_at: now,
             is_deleted: false

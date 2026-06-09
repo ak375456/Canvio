@@ -21,6 +21,7 @@ class PDFElementModel: LayerableElement {
     var height: Double
     var rotation: Double
     var zIndex: Int
+    var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
 
@@ -39,6 +40,7 @@ class PDFElementModel: LayerableElement {
         self.height = 280
         self.rotation = 0
         self.zIndex = 0
+        self.groupID = nil
         self.createdAt = Date()
         self.updatedAt = Date()
     }

@@ -156,6 +156,7 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 instructionRow(icon: "doc.on.doc", text: "Hold any item on the canvas to duplicate it.")
                 instructionRow(icon: "checkmark.circle", text: "To duplicate multiple items, hold the canvas, select items, then tap Duplicate.")
+                instructionRow(icon: "square.stack.3d.up.fill", text: "To group items, hold the canvas, select multiple items, then tap Group. Selecting one grouped item selects the whole group.")
                 instructionRow(icon: "text.cursor", text: "Double tap on the canvas to start typing directly.")
             }
         }

@@ -20,6 +20,7 @@ class TodoListModel: LayerableElement {
     var createdAt: Date
     var updatedAt: Date
     var zIndex: Int = 0
+    var groupID: UUID? = nil
 
     init(canvasID: UUID, x: Double = 0, y: Double = 0) {
         self.id = UUID()
@@ -33,6 +34,7 @@ class TodoListModel: LayerableElement {
         self.createdAt = Date()
         self.updatedAt = Date()
         self.zIndex = 0
+        self.groupID = nil
     }
 
     var layerTitle: String {

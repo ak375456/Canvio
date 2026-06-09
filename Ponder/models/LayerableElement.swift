@@ -10,6 +10,9 @@ protocol LayerableElement: AnyObject {
     var id: UUID { get }
     var zIndex: Int { get set }
     var canvasID: UUID { get }
+    var groupID: UUID? { get set }
+    var x: Double { get set }
+    var y: Double { get set }
     var updatedAt: Date { get set }
 
     var layerTitle: String { get }

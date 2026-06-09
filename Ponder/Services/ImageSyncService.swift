@@ -22,6 +22,7 @@ private struct ImageRow: Codable {
     let corner_radius: Double
     let opacity:       Double
     let z_index:       Int
+    let group_id:      String?
     let created_at:    String
     let updated_at:    String
     let is_deleted:    Bool
@@ -66,7 +67,11 @@ final class ImageSyncService {
 
         if uploadFile {
             let fileName = element.imageFileName
-            Task(priority: .utility) { await media.uploadImage(fileName: fileName) }
+            guard ImageStorageService.fileExists(fileName: fileName) else {
+                print("⚠️ Image upsert skipped missing local file: \(fileName)")
+                return
+            }
+            await media.uploadImage(fileName: fileName)
         }
 
         guard network.isConnected else {
@@ -164,6 +169,7 @@ final class ImageSyncService {
                         local.cornerRadius = row.corner_radius
                         local.opacity      = row.opacity
                         local.zIndex       = row.z_index
+                        local.groupID      = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt    = remoteUpdated
                     }
                     // Always ensure file exists locally (lazy download)
@@ -181,6 +187,7 @@ final class ImageSyncService {
                     element.cornerRadius = row.corner_radius
                     element.opacity      = row.opacity
                     element.zIndex       = row.z_index
+                    element.groupID      = row.group_id.flatMap { UUID(uuidString: $0) }
                     element.createdAt    = iso.date(from: row.created_at) ?? Date()
                     element.updatedAt    = iso.date(from: row.updated_at) ?? Date()
                     context.insert(element)
@@ -213,7 +220,7 @@ final class ImageSyncService {
                             .upsert(row, onConflict: "id")
                             .execute()
                         // Also retry file upload
-                        Task { await media.uploadImage(fileName: row.image_file_name) }
+                        await media.uploadImage(fileName: row.image_file_name)
                         succeeded = true
                     } catch {
                         print("⚠️ Queue flush image upsert failed: \(error.localizedDescription)")
@@ -261,6 +268,7 @@ final class ImageSyncService {
             corner_radius:    element.cornerRadius,
             opacity:          element.opacity,
             z_index:          element.zIndex,
+            group_id:         element.groupID?.uuidString,
             created_at:       iso.string(from: element.createdAt),
             updated_at:       now,
             is_deleted:       false

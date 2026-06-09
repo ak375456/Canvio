@@ -26,6 +26,7 @@ private struct DBTableRow: Codable {
     let row_header_color_name: String
     let show_col_headers:      Bool
     let show_row_headers:      Bool
+    let group_id:              String?
     let created_at:            String
     let updated_at:            String
     let is_deleted:            Bool
@@ -265,6 +266,7 @@ final class TableSyncService {
                         local.rowHeaderColorName  = row.row_header_color_name
                         local.showColHeaders      = row.show_col_headers
                         local.showRowHeaders      = row.show_row_headers
+                        local.groupID             = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt           = remoteUpdated
                     }
                 } else {
@@ -284,6 +286,7 @@ final class TableSyncService {
                     table.rowHeaderColorName  = row.row_header_color_name
                     table.showColHeaders      = row.show_col_headers
                     table.showRowHeaders      = row.show_row_headers
+                    table.groupID             = row.group_id.flatMap { UUID(uuidString: $0) }
                     table.createdAt           = iso.date(from: row.created_at) ?? Date()
                     table.updatedAt           = iso.date(from: row.updated_at) ?? Date()
                     context.insert(table)
@@ -462,6 +465,7 @@ final class TableSyncService {
             row_header_color_name: table.rowHeaderColorName,
             show_col_headers:      table.showColHeaders,
             show_row_headers:      table.showRowHeaders,
+            group_id:              table.groupID?.uuidString,
             created_at:            iso.string(from: table.createdAt),
             updated_at:            now,
             is_deleted:            false

@@ -52,6 +52,8 @@ enum SyncOperationType: String, Codable {
     case deleteYouTube
     case upsertSymbol       // ← NEW
     case deleteSymbol       // ← NEW
+    case upsertElementGroup
+    case deleteElementGroup
 }
 
 // MARK: - SyncQueue

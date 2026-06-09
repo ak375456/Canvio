@@ -47,7 +47,8 @@ struct PonderApp: App {
             YouTubeElementModel.self,
             DrawingElementModel.self,
             ConnectorModel.self,
-            SymbolElementModel.self
+            SymbolElementModel.self,
+            CanvasElementGroupModel.self
         ])
     }
 }
@@ -136,6 +137,7 @@ private struct SyncCoordinatorView: View {
         await AudioSyncService.shared.flushQueue()
         await YouTubeSyncService.shared.flushQueue()
         await SymbolSyncService.shared.flushQueue()
+        await ElementGroupSyncService.shared.flushQueue()
 
         // Step 2 — push all local data that Supabase doesn't have yet
         await CanvasSyncService.shared.reconcileAllLocalData(context: modelContext)
@@ -146,6 +148,7 @@ private struct SyncCoordinatorView: View {
 
         let canvases = (try? modelContext.fetch(FetchDescriptor<CanvasModel>())) ?? []
         for canvas in canvases {
+            await ElementGroupSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await TextSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await StickyNoteSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
             await ShapeSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)

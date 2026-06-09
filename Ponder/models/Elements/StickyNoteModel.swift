@@ -30,6 +30,7 @@ class StickyNoteModel: LayerableElement {
     var colorName: String
     var listStyleRaw: String
     var zIndex: Int = 0
+    var groupID: UUID? = nil
     var updatedAt: Date = Date()
 
     var listStyle: StickyListStyle {
@@ -53,6 +54,7 @@ class StickyNoteModel: LayerableElement {
         self.colorName = "yellow"
         self.listStyleRaw = StickyListStyle.none.rawValue
         self.zIndex = 0
+        self.groupID = nil
         self.updatedAt = Date()
     }
 

@@ -19,6 +19,7 @@ class TableElementModel: LayerableElement {
     var cellHeight: Double
     var rotation: Double
     var zIndex: Int
+    var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
 
@@ -39,6 +40,7 @@ class TableElementModel: LayerableElement {
         self.cellHeight = 36
         self.rotation = 0
         self.zIndex = 0
+        self.groupID = nil
         self.colHeaderColorName = "systemGray6"
         self.rowHeaderColorName = "systemGray6"
         self.showColHeaders = true

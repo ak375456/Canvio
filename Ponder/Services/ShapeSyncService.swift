@@ -27,6 +27,7 @@ private struct ShapeRow: Codable {
     let triangle_variant_raw: String
     let polygon_sides:        Int
     let z_index:              Int
+    let group_id:             String?
     let created_at:           String
     let updated_at:           String
     let is_deleted:           Bool
@@ -164,6 +165,7 @@ final class ShapeSyncService {
                         local.triangleVariantRaw = row.triangle_variant_raw
                         local.polygonSides       = row.polygon_sides
                         local.zIndex             = row.z_index
+                        local.groupID            = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt          = remoteUpdated
                     }
                 } else {
@@ -182,6 +184,7 @@ final class ShapeSyncService {
                     shape.triangleVariantRaw  = row.triangle_variant_raw
                     shape.polygonSides        = row.polygon_sides
                     shape.zIndex              = row.z_index
+                    shape.groupID             = row.group_id.flatMap { UUID(uuidString: $0) }
                     shape.createdAt           = iso.date(from: row.created_at) ?? Date()
                     shape.updatedAt           = iso.date(from: row.updated_at) ?? Date()
                     context.insert(shape)
@@ -266,6 +269,7 @@ final class ShapeSyncService {
             triangle_variant_raw: shape.triangleVariantRaw,
             polygon_sides:        shape.polygonSides,
             z_index:              shape.zIndex,
+            group_id:             shape.groupID?.uuidString,
             created_at:           iso.string(from: shape.createdAt),
             updated_at:           now,
             is_deleted:           false

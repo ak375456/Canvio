@@ -86,6 +86,10 @@ enum ImageStorageService {
         imagesDirectory.appendingPathComponent(fileName)
     }
 
+    static func fileExists(fileName: String) -> Bool {
+        FileManager.default.fileExists(atPath: url(for: fileName).path)
+    }
+
     // MARK: - Fast display thumbnail (ImageIO subsample path)
 
     /// Returns a downsampled image sized to `maxPixelSize` on the longest side.
@@ -103,6 +107,7 @@ enum ImageStorageService {
         if let cached = thumbnailCache.object(forKey: cacheKey) { return cached }
 
         let url = imagesDirectory.appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return load(fileName: fileName)  // fall back to full load
         }

@@ -7,6 +7,10 @@ import SwiftUI
 
 struct MultiSelectBar: View {
     let count: Int
+    let groupActionTitle: String
+    let groupActionIcon: String
+    let canUseGroupAction: Bool
+    let onGroupAction: () -> Void
     let onDuplicate: () -> Void
     let onDelete: () -> Void
     let onDone: () -> Void
@@ -17,6 +21,19 @@ struct MultiSelectBar: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
+
+            Divider().frame(height: 20)
+
+            Button(action: onGroupAction) {
+                HStack(spacing: 6) {
+                    Image(systemName: groupActionIcon).font(.system(size: 14, weight: .medium))
+                    Text(groupActionTitle).font(.subheadline.weight(.medium))
+                }
+                .foregroundStyle(canUseGroupAction ? Color.accentColor : Color.secondary)
+                .padding(.horizontal, 14).frame(height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canUseGroupAction)
 
             Divider().frame(height: 20)
 

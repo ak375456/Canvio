@@ -22,6 +22,7 @@ class TextElementModel: LayerableElement {
     var fontName: String = "system"
     var alignmentRaw: String = "leading"
     var zIndex: Int = 0
+    var groupID: UUID? = nil
     var updatedAt: Date = Date()
 
     // Card background & stroke — default "none" = no card
@@ -43,6 +44,7 @@ class TextElementModel: LayerableElement {
         self.fontName       = "system"
         self.alignmentRaw   = "leading"
         self.zIndex         = 0
+        self.groupID        = nil
         self.updatedAt      = Date()
         self.bgColorName     = "none"
         self.strokeColorName = "none"

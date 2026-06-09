@@ -26,6 +26,7 @@ private struct StickyNoteRow: Codable {
     let color_name:     String
     let list_style_raw: String
     let z_index:        Int
+    let group_id:       String?
     let created_at:     String
     let updated_at:     String
     let is_deleted:     Bool
@@ -162,6 +163,7 @@ final class StickyNoteSyncService {
                         local.colorName    = row.color_name
                         local.listStyleRaw = row.list_style_raw
                         local.zIndex       = row.z_index
+                        local.groupID      = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt    = remoteUpdated
                     }
                 } else {
@@ -178,6 +180,7 @@ final class StickyNoteSyncService {
                     note.colorName    = row.color_name
                     note.listStyleRaw = row.list_style_raw
                     note.zIndex       = row.z_index
+                    note.groupID      = row.group_id.flatMap { UUID(uuidString: $0) }
                     note.updatedAt    = iso.date(from: row.updated_at) ?? Date()
                     context.insert(note)
                 }
@@ -260,6 +263,7 @@ final class StickyNoteSyncService {
             color_name:     note.colorName,
             list_style_raw: note.listStyleRaw,
             z_index:        note.zIndex,
+            group_id:       note.groupID?.uuidString,
             created_at:     iso.string(from: note.updatedAt),
             updated_at:     now,
             is_deleted:     false

@@ -146,6 +146,7 @@ class ShapeElementModel: LayerableElement {
     var createdAt: Date
     var updatedAt: Date
     var zIndex: Int = 0
+    var groupID: UUID? = nil
 
     var shapeKind: ShapeKind {
         get { ShapeKind(rawValue: shapeTypeRaw) ?? .rectangle }
@@ -189,6 +190,7 @@ class ShapeElementModel: LayerableElement {
         self.createdAt = Date()
         self.updatedAt = Date()
         self.zIndex = 0
+        self.groupID = nil
     }
 
     var layerTitle: String { shapeKind.title }

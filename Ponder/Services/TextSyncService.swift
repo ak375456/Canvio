@@ -24,6 +24,7 @@ private struct TextElementRow: Codable {
     let font_name:         String
     let alignment_raw:     String
     let z_index:           Int
+    let group_id:          String?
     let created_at:        String
     let updated_at:        String
     let is_deleted:        Bool
@@ -159,6 +160,7 @@ final class TextSyncService {
                         local.fontName        = row.font_name
                         local.alignmentRaw    = row.alignment_raw
                         local.zIndex          = row.z_index
+                        local.groupID         = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.bgColorName     = row.bg_color_name
                         local.strokeColorName = row.stroke_color_name
                         local.strokeWidth     = row.stroke_width
@@ -176,6 +178,7 @@ final class TextSyncService {
                     el.fontName       = row.font_name
                     el.alignmentRaw   = row.alignment_raw
                     el.zIndex         = row.z_index
+                    el.groupID        = row.group_id.flatMap { UUID(uuidString: $0) }
                     el.bgColorName    = row.bg_color_name
                     el.strokeColorName = row.stroke_color_name
                     el.strokeWidth    = row.stroke_width
@@ -258,6 +261,7 @@ final class TextSyncService {
             font_name:         element.fontName,
             alignment_raw:     element.alignmentRaw,
             z_index:           element.zIndex,
+            group_id:          element.groupID?.uuidString,
             created_at:        iso.string(from: element.updatedAt),
             updated_at:        now,
             is_deleted:        false,

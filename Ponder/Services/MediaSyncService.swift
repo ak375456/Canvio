@@ -50,8 +50,9 @@ final class MediaSyncService {
     // MARK: - Upload helpers
 
     /// Upload a local file to Supabase Storage. Skips if not connected.
-    func uploadFile(localURL: URL, storagePath: String, contentType: String) async {
-        guard network.isConnected else { return }
+    @discardableResult
+    func uploadFile(localURL: URL, storagePath: String, contentType: String) async -> Bool {
+        guard network.isConnected else { return false }
 
         let data: Data
         do {
@@ -60,27 +61,32 @@ final class MediaSyncService {
             }.value
         } catch {
             print("⚠️ MediaSync: cannot read local file \(localURL.lastPathComponent)")
-            return
+            return false
         }
 
         do {
             try await supabase.storage
                 .from(bucket)
                 .upload(storagePath, data: data, options: FileOptions(contentType: contentType, upsert: true))
+            return true
         } catch {
             print("⚠️ MediaSync upload failed [\(storagePath)]: \(error.localizedDescription)")
+            return false
         }
     }
 
     /// Upload raw Data directly (used when we already have data in memory).
-    func uploadData(_ data: Data, storagePath: String, contentType: String) async {
-        guard network.isConnected else { return }
+    @discardableResult
+    func uploadData(_ data: Data, storagePath: String, contentType: String) async -> Bool {
+        guard network.isConnected else { return false }
         do {
             try await supabase.storage
                 .from(bucket)
                 .upload(storagePath, data: data, options: FileOptions(contentType: contentType, upsert: true))
+            return true
         } catch {
             print("⚠️ MediaSync upload failed [\(storagePath)]: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -120,16 +126,23 @@ final class MediaSyncService {
 
     // MARK: - Image convenience
 
-    func uploadImage(fileName: String) async {
+    @discardableResult
+    func uploadImage(fileName: String) async -> Bool {
         let localURL = ImageStorageService.url(for: fileName)
-        await uploadFile(localURL: localURL,
-                         storagePath: imagePath(for: fileName),
-                         contentType: ImageStorageService.contentType(for: fileName))
+        return await uploadFile(localURL: localURL,
+                                storagePath: imagePath(for: fileName),
+                                contentType: ImageStorageService.contentType(for: fileName))
     }
 
-    func downloadImageIfNeeded(fileName: String) async {
+    @discardableResult
+    func downloadImageIfNeeded(fileName: String) async -> Bool {
         let destURL = ImageStorageService.url(for: fileName)
-        await downloadFile(storagePath: imagePath(for: fileName), destinationURL: destURL)
+        let didDownload = await downloadFile(storagePath: imagePath(for: fileName), destinationURL: destURL)
+        if didDownload {
+            ImageStorageService.invalidateCache(fileName: fileName)
+            NotificationCenter.default.post(name: .imageFileDidBecomeAvailable, object: fileName)
+        }
+        return didDownload
     }
 
     func deleteImage(fileName: String) async {
