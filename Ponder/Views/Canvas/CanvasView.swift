@@ -4,6 +4,7 @@ import PhotosUI
 import UniformTypeIdentifiers
 import PencilKit
 #if os(iOS)
+import Vision
 import VisionKit
 #endif
 
@@ -24,6 +25,18 @@ private struct CanvasStackPickerState: Identifiable {
     let width: CGFloat
     let maxHeight: CGFloat
     let items: [CanvasStackPickerItem]
+}
+
+#if os(iOS)
+private struct HandwritingRecognitionResult {
+    let text: String
+    let confidence: Float
+}
+#endif
+
+private enum CanvasDrawingCaptureMode {
+    case drawing
+    case handwritingText
 }
 
 private struct CanvasExportSheet<Content: View>: View {
@@ -120,6 +133,7 @@ struct CanvasView: View {
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
     @State private var canvasDrawingInitialDrawing = PKDrawing()
+    @State private var canvasDrawingCaptureMode: CanvasDrawingCaptureMode = .drawing
     @State private var continuingCanvasDrawingID: UUID?
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
@@ -437,8 +451,6 @@ struct CanvasView: View {
                         groupSelectionLayer
                     }
                 }
-                .opacity(vm.showCanvasDrawingOverlay ? 0.82 : 1.0)
-                .animation(.easeInOut(duration: 0.25), value: vm.showCanvasDrawingOverlay)
                 .scaleEffect(vm.scale, anchor: .topLeading)
                 .offset(vm.offset)
                 .simultaneousGesture(
@@ -525,7 +537,8 @@ struct CanvasView: View {
                         startOffset:  drawingStartOffset,
                         liveScale:    $vm.scale,
                         liveOffset:   $vm.offset,
-                        initialDrawing: canvasDrawingInitialDrawing
+                        initialDrawing: canvasDrawingInitialDrawing,
+                        smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled
                     ) { pkDrawing, effectiveScale, effectiveOffset in
                         saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
                     }
@@ -1827,10 +1840,11 @@ struct CanvasView: View {
         }
     }
 
-    private func startCanvasDrawing() {
+    private func startCanvasDrawing(mode: CanvasDrawingCaptureMode = .drawing) {
         dismissEverything()
         continuingCanvasDrawingID = nil
         canvasDrawingInitialDrawing = PKDrawing()
+        canvasDrawingCaptureMode = mode
         drawingStartScale  = vm.scale
         drawingStartOffset = vm.offset
         isCanvasDrawingInputActive = true
@@ -1847,6 +1861,7 @@ struct CanvasView: View {
         dismissEverything()
         continuingCanvasDrawingID = element.id
         canvasDrawingInitialDrawing = initialDrawing
+        canvasDrawingCaptureMode = .drawing
         drawingStartScale = vm.scale
         drawingStartOffset = vm.offset
         isCanvasDrawingInputActive = true
@@ -1876,11 +1891,30 @@ struct CanvasView: View {
     }
 
     private func saveCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {
+        #if os(iOS)
+        if canvasDrawingCaptureMode == .handwritingText,
+           convertCanvasHandwritingToTextIfPossible(
+                pkDrawing,
+                effectiveScale: effectiveScale,
+                effectiveOffset: effectiveOffset
+           ) {
+            continuingCanvasDrawingID = nil
+            canvasDrawingInitialDrawing = PKDrawing()
+            canvasDrawingCaptureMode = .drawing
+            return
+        }
+        #endif
+
+        persistCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
+    }
+
+    private func persistCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {
         let strokeBounds = pkDrawing.bounds
         guard !pkDrawing.strokes.isEmpty,
               strokeBounds.width > 0, strokeBounds.height > 0 else {
             continuingCanvasDrawingID = nil
             canvasDrawingInitialDrawing = PKDrawing()
+            canvasDrawingCaptureMode = .drawing
             return
         }
 
@@ -1931,7 +1965,135 @@ struct CanvasView: View {
 
         continuingCanvasDrawingID = nil
         canvasDrawingInitialDrawing = PKDrawing()
+        canvasDrawingCaptureMode = .drawing
     }
+
+    #if os(iOS)
+    @discardableResult
+    private func convertCanvasHandwritingToTextIfPossible(_ pkDrawing: PKDrawing,
+                                                          effectiveScale: CGFloat,
+                                                          effectiveOffset: CGSize) -> Bool {
+        let strokeBounds = pkDrawing.bounds
+        guard !pkDrawing.strokes.isEmpty,
+              strokeBounds.width >= 30,
+              strokeBounds.height >= 12
+        else { return false }
+
+        let padding: CGFloat = 24
+        let recognitionBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
+        isProcessingOCRScan = true
+        defer { isProcessingOCRScan = false }
+
+        guard let result = recognizeHandwritingText(
+            in: pkDrawing,
+            bounds: recognitionBounds,
+            minimumConfidence: Float(settings.handwritingToTextStrictness)
+        ) else { return false }
+
+        let canvasPoint = CGPoint(
+            x: (recognitionBounds.midX - effectiveOffset.width) / effectiveScale,
+            y: (recognitionBounds.midY - effectiveOffset.height) / effectiveScale
+        )
+        let estimatedFontSize = estimatedHandwritingFontSize(
+            recognitionText: result.text,
+            bounds: recognitionBounds,
+            scale: effectiveScale
+        )
+        let style = settings.lastTextStyle(text: result.text, estimatedFontSize: estimatedFontSize)
+
+        if let id = continuingCanvasDrawingID,
+           let element = drawings.first(where: { $0.id == id }) {
+            Task { await DrawingSyncService.shared.delete(element) }
+            context.delete(element)
+        }
+
+        _ = vm.textVM.addRecognizedHandwritingText(
+            canvasID: canvas.id,
+            style: style,
+            canvasPoint: canvasPoint,
+            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            context: context,
+            undoManager: vm.undoManager
+        )
+
+        return true
+    }
+
+    private func recognizeHandwritingText(in drawing: PKDrawing,
+                                          bounds: CGRect,
+                                          minimumConfidence: Float) -> HandwritingRecognitionResult? {
+        guard let cgImage = handwritingRecognitionImage(from: drawing, bounds: bounds) else {
+            return nil
+        }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.025
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        let candidates = (request.results ?? [])
+            .compactMap { $0.topCandidates(1).first }
+            .filter { !$0.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        guard !candidates.isEmpty else { return nil }
+
+        let lines = candidates.map { $0.string.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let text = lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 2,
+              text.rangeOfCharacter(from: .alphanumerics) != nil
+        else { return nil }
+
+        let weightedConfidence = candidates.reduce(Float(0)) { partial, candidate in
+            partial + candidate.confidence * Float(max(candidate.string.count, 1))
+        }
+        let totalWeight = candidates.reduce(0) { $0 + max($1.string.count, 1) }
+        let confidence = weightedConfidence / Float(max(totalWeight, 1))
+        guard confidence >= minimumConfidence else { return nil }
+
+        return HandwritingRecognitionResult(text: text, confidence: confidence)
+    }
+
+    private func handwritingRecognitionImage(from drawing: PKDrawing, bounds: CGRect) -> CGImage? {
+        let size = CGSize(
+            width: max(1, bounds.width),
+            height: max(1, bounds.height)
+        )
+        let rendererFormat = UIGraphicsImageRendererFormat()
+        rendererFormat.scale = 3
+        rendererFormat.opaque = true
+
+        let renderer = UIGraphicsImageRenderer(size: size, format: rendererFormat)
+        let image = renderer.image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+
+            let drawingImage = drawing.image(from: bounds, scale: rendererFormat.scale)
+            drawingImage.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return image.cgImage
+    }
+
+    private func estimatedHandwritingFontSize(recognitionText: String,
+                                              bounds: CGRect,
+                                              scale: CGFloat) -> Double {
+        let lineCount = max(
+            1,
+            recognitionText
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .count
+        )
+        let canvasLineHeight = (bounds.height / max(scale, 0.0001)) / CGFloat(lineCount)
+        return Double(max(10, min(72, canvasLineHeight * 0.72)))
+    }
+    #endif
 
     // MARK: - Sync
 
@@ -2205,9 +2367,11 @@ struct CanvasView: View {
                 onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                 onDrawOnCanvas: { startCanvasDrawing() },
+                onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
                 onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onConnect:      { toggleConnectMode() },
                 isConnectModeActive: connectActive,
+                showsWriteTextTool: settings.handwritingToTextEnabled,
                 lockedTools: lockedCanvasTools
             )
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -2232,9 +2396,11 @@ struct CanvasView: View {
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
+                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
+                    showsWriteTextTool: settings.handwritingToTextEnabled,
                     lockedTools: lockedCanvasTools,
                     isVertical: false
                 )
@@ -2258,9 +2424,11 @@ struct CanvasView: View {
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
+                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
+                    showsWriteTextTool: settings.handwritingToTextEnabled,
                     lockedTools: lockedCanvasTools,
                     isVertical: true
                 )
@@ -2285,9 +2453,11 @@ struct CanvasView: View {
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
+                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
+                    showsWriteTextTool: settings.handwritingToTextEnabled,
                     lockedTools: lockedCanvasTools,
                     isVertical: true
                 )

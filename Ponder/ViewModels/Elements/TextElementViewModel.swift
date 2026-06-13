@@ -25,8 +25,10 @@ class TextElementViewModel: ObservableObject {
         element.fontSize      = style.fontSize
         element.isBold        = style.isBold
         element.isItalic      = style.isItalic
+        element.isUnderline   = style.isUnderline
         element.colorName     = style.colorName
         element.fontName      = style.fontName
+        element.alignmentRaw  = style.alignmentRaw
         element.bgColorName     = style.bgColorName
         element.strokeColorName = style.strokeColorName
         element.strokeWidth     = style.strokeWidth
@@ -49,13 +51,79 @@ class TextElementViewModel: ObservableObject {
                 let el = TextElementModel(canvasID: canvasID, text: style.text,
                                           x: canvasX, y: canvasY)
                 el.id = id; el.fontSize = style.fontSize; el.isBold = style.isBold
-                el.isItalic = style.isItalic; el.colorName = style.colorName
-                el.fontName = style.fontName; el.zIndex = zIndex
+                el.isItalic = style.isItalic; el.isUnderline = style.isUnderline
+                el.colorName = style.colorName; el.fontName = style.fontName
+                el.alignmentRaw = style.alignmentRaw
+                el.bgColorName = style.bgColorName
+                el.strokeColorName = style.strokeColorName
+                el.strokeWidth = style.strokeWidth
+                el.zIndex = zIndex
                 el.updatedAt = Date()
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }
             }
         ))
+    }
+
+    @discardableResult
+    func addRecognizedHandwritingText(canvasID: UUID, style: TextStyle, canvasPoint: CGPoint,
+                                      zIndex: Int, context: ModelContext,
+                                      undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let trimmed = style.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let element = TextElementModel(canvasID: canvasID, text: trimmed,
+                                       x: canvasPoint.x, y: canvasPoint.y)
+        element.fontSize = style.fontSize
+        element.isBold = style.isBold
+        element.isItalic = style.isItalic
+        element.isUnderline = style.isUnderline
+        element.colorName = style.colorName
+        element.fontName = style.fontName
+        element.alignmentRaw = style.alignmentRaw
+        element.bgColorName = style.bgColorName
+        element.strokeColorName = style.strokeColorName
+        element.strokeWidth = style.strokeWidth
+        element.zIndex = zIndex
+        element.updatedAt = Date()
+        context.insert(element)
+        try? context.save()
+        editingID = element.id
+        Task { await TextSyncService.shared.upsert(element) }
+
+        let id = element.id
+        undoManager?.push(CanvasAction(
+            undo: {
+                if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
+                    .first(where: { $0.id == id }) {
+                    context.delete(el)
+                    try? context.save()
+                    Task { await TextSyncService.shared.delete(el) }
+                }
+            },
+            redo: {
+                let el = TextElementModel(canvasID: canvasID, text: trimmed,
+                                          x: canvasPoint.x, y: canvasPoint.y)
+                el.id = id
+                el.fontSize = style.fontSize
+                el.isBold = style.isBold
+                el.isItalic = style.isItalic
+                el.isUnderline = style.isUnderline
+                el.colorName = style.colorName
+                el.fontName = style.fontName
+                el.alignmentRaw = style.alignmentRaw
+                el.bgColorName = style.bgColorName
+                el.strokeColorName = style.strokeColorName
+                el.strokeWidth = style.strokeWidth
+                el.zIndex = zIndex
+                el.updatedAt = Date()
+                context.insert(el)
+                try? context.save()
+                Task { await TextSyncService.shared.upsert(el) }
+            }
+        ))
+
+        return id
     }
 
     // MARK: - Add inline (double-tap on canvas)

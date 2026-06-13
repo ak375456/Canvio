@@ -20,9 +20,11 @@ struct CanvasToolbar: View {
     let onAddYouTube:   () -> Void
     let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
+    let onWriteTextOnCanvas: () -> Void
     let onAddSymbol:    () -> Void          // ← NEW
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
+    var showsWriteTextTool = false
     var lockedTools: Set<CanvasTool> = []
     let isVertical: Bool
 
@@ -117,6 +119,13 @@ struct CanvasToolbar: View {
         toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) {
             onDrawOnCanvas()
         }
+        #if os(iOS)
+        if showsWriteTextTool {
+            toolButton(icon: "textformat.abc.dottedunderline", label: "Write", tint: .blue) {
+                onWriteTextOnCanvas()
+            }
+        }
+        #endif
         connectButton
     }
 
@@ -234,9 +243,11 @@ struct CompactCanvasToolbar: View {
     let onAddYouTube:   () -> Void
     let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
+    let onWriteTextOnCanvas: () -> Void
     let onAddSymbol:    () -> Void
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
+    var showsWriteTextTool = false
     var lockedTools: Set<CanvasTool> = []
 
     @State private var isCollapsed = false
@@ -318,6 +329,16 @@ struct CompactCanvasToolbar: View {
                     tint: Color(red: 0.9, green: 0.5, blue: 0.1),
                     action: onDrawOnCanvas
                 )
+                #if os(iOS)
+                if showsWriteTextTool {
+                    compactButton(
+                        icon: "textformat.abc.dottedunderline",
+                        label: "Write Text",
+                        tint: .blue,
+                        action: onWriteTextOnCanvas
+                    )
+                }
+                #endif
             }
             .padding(.horizontal, 16)
             .frame(height: buttonSize + 8, alignment: .center)

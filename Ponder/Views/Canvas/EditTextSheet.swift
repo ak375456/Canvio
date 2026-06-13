@@ -8,6 +8,7 @@ import SwiftData
 import UniformTypeIdentifiers
 
 struct EditTextSheet: View {
+    @EnvironmentObject private var settings: AppSettings
     let element: TextElementModel
     let context: ModelContext
 
@@ -426,6 +427,20 @@ struct EditTextSheet: View {
             element.strokeWidth     = strokeWidth
             element.updatedAt       = Date()
             try? context.save()
+            var style = TextStyle(
+                text: trimmed,
+                fontSize: fontSize,
+                isBold: isBold,
+                isItalic: isItalic,
+                isUnderline: isUnderline,
+                colorName: selectedColor,
+                fontName: selectedFont
+            )
+            style.textAlignment = alignment
+            style.bgColorName = bgColorName
+            style.strokeColorName = strokeColorName
+            style.strokeWidth = strokeWidth
+            settings.rememberTextStyle(style)
             Task { await TextSyncService.shared.upsert(element) }
             dismiss()
         } label: {

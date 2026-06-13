@@ -32,6 +32,9 @@ struct CanvasDrawingOverlay: View {
 
     @State private var drawing: PKDrawing
     @State private var isDrawingModeActive = true
+    @State private var isPickingColor = false
+    @State private var selectedColor = UIColor.systemOrange
+    @State private var pickedColorRevision = 0
 
     /// The scale / offset that match the coordinate space of the current
     /// strokes in `drawing`.  Updated each time we return from Navigate mode.
@@ -45,6 +48,7 @@ struct CanvasDrawingOverlay: View {
     /// Content-area size captured from a GeometryReader (needed for snapshot).
     @State private var contentAreaSize: CGSize = .zero
 
+    let smartShapeSnappingEnabled: Bool
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
     // MARK: Init
@@ -57,6 +61,7 @@ struct CanvasDrawingOverlay: View {
         liveScale:   Binding<CGFloat>,
         liveOffset:  Binding<CGSize>,
         initialDrawing: PKDrawing = PKDrawing(),
+        smartShapeSnappingEnabled: Bool,
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
         self._isActive       = isActive
@@ -65,6 +70,7 @@ struct CanvasDrawingOverlay: View {
         self.startOffset     = startOffset
         self._liveScale      = liveScale
         self._liveOffset     = liveOffset
+        self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         self.onSave          = onSave
         self._drawing         = State(initialValue: initialDrawing)
         self._effectiveScale  = State(initialValue: startScale)
@@ -110,7 +116,8 @@ struct CanvasDrawingOverlay: View {
 
             // ── Hit-test backdrop (draw mode only) ───────────────────────────
             // Prevents accidental taps on canvas elements while we are drawing.
-            Color.black.opacity(0.01)
+            Color.clear
+                .contentShape(Rectangle())
                 .ignoresSafeArea()
                 .allowsHitTesting(isDrawingModeActive)
 
@@ -121,7 +128,12 @@ struct CanvasDrawingOverlay: View {
                 // liveScale / liveOffset are NOT passed here — PKCanvasView
                 // blocks all touches while active, so they never change and
                 // updateUIView is never called unnecessarily.
-                FullCanvasDrawView(drawing: $drawing)
+                FullCanvasDrawView(
+                    drawing: $drawing,
+                    smartShapeSnappingEnabled: smartShapeSnappingEnabled,
+                    selectedColor: $selectedColor,
+                    colorRevision: pickedColorRevision
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             } else if let snap = navigateSnapshot, contentAreaSize != .zero {
@@ -144,12 +156,28 @@ struct CanvasDrawingOverlay: View {
                     .padding(.horizontal, 16)
                 Spacer()
             }
+
+            if isPickingColor {
+                DrawingColorSamplingOverlay(
+                    onColorPicked: { color in
+                        selectedColor = color
+                        pickedColorRevision += 1
+                        isPickingColor = false
+                    },
+                    onCancel: {
+                        isPickingColor = false
+                    }
+                )
+                .zIndex(250)
+            }
         }
     }
 
     // MARK: Mode toggle
 
     private func toggleMode() {
+        isPickingColor = false
+
         if isDrawingModeActive {
             // Draw → Navigate ────────────────────────────────────────────────
             isDrawingInputActive = false
@@ -234,6 +262,14 @@ struct CanvasDrawingOverlay: View {
             }
             .buttonStyle(.plain)
 
+            DrawingColorPickerButton(
+                selectedColor: $selectedColor,
+                compact: usesCompactToolbar,
+                isActive: isPickingColor
+            ) {
+                isPickingColor.toggle()
+            }
+
             Spacer(minLength: usesCompactToolbar ? 6 : 12)
 
             // Draw / Navigate toggle
@@ -281,6 +317,8 @@ struct CanvasDrawingOverlay: View {
     // MARK: Save
 
     private func saveAndDismiss() {
+        isPickingColor = false
+
         if isDrawingModeActive {
             // Already in Draw mode — strokes are in the effectiveScale/Offset space.
             onSave(drawing, effectiveScale, effectiveOffset)
@@ -305,8 +343,17 @@ struct CanvasDrawingOverlay: View {
 
 private struct FullCanvasDrawView: UIViewRepresentable {
     @Binding var drawing: PKDrawing
+    let smartShapeSnappingEnabled: Bool
+    @Binding var selectedColor: UIColor
+    let colorRevision: Int
 
-    func makeCoordinator() -> Coordinator { Coordinator(drawing: $drawing) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            drawing: $drawing,
+            selectedColor: $selectedColor,
+            smartShapeSnappingEnabled: smartShapeSnappingEnabled
+        )
+    }
 
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas          = PKCanvasView()
@@ -321,17 +368,27 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         let picker = PKToolPicker()
         context.coordinator.toolPicker = picker
         picker.addObserver(canvas)
+        picker.addObserver(context.coordinator)
+        context.coordinator.rememberPickerSelection(picker)
+        context.coordinator.markAppliedColorRevision(colorRevision)
         picker.setVisible(true, forFirstResponder: canvas)
+        context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
         canvas.becomeFirstResponder()
         return canvas
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         // Only update drawing when it changed from outside (Clear button or
         // delta bake after Navigate mode).  Guard prevents self-triggering.
         if canvas.drawing != drawing {
             canvas.drawing = drawing
         }
+        context.coordinator.applyPickedColorIfNeeded(
+            to: canvas,
+            selectedColor: selectedColor,
+            colorRevision: colorRevision
+        )
         // Restore first-responder status only if lost (e.g. after clear).
         if !canvas.isFirstResponder {
             context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
@@ -341,20 +398,173 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
+        coordinator.toolPicker?.removeObserver(coordinator)
         coordinator.toolPicker?.removeObserver(canvas)
         canvas.resignFirstResponder()
     }
 
-    class Coordinator: NSObject, PKCanvasViewDelegate {
+    class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         @Binding var drawing: PKDrawing
+        @Binding var selectedColor: UIColor
         weak var canvasView: PKCanvasView?
         var toolPicker: PKToolPicker?
+        var smartShapeSnappingEnabled: Bool {
+            didSet {
+                shapeSnapController.isEnabled = smartShapeSnappingEnabled
+            }
+        }
+        private var lastAppliedColorRevision = 0
+        private var lastPickerToolItemIdentifier: String?
+        private var lastPickerInkType: PKInkingTool.InkType?
+        private var isApplyingPickedColor = false
+        private let shapeSnapController = PencilShapeSnapController()
 
-        init(drawing: Binding<PKDrawing>) { self._drawing = drawing }
+        init(drawing: Binding<PKDrawing>,
+             selectedColor: Binding<UIColor>,
+             smartShapeSnappingEnabled: Bool) {
+            self._drawing = drawing
+            self._selectedColor = selectedColor
+            self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
+            self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
+        }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             drawing = canvasView.drawing
+            guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
+            shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                self?.drawing = snappedDrawing
+            }
         }
+
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                self?.drawing = snappedDrawing
+            }
+        }
+
+        func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
+            handleToolPickerChange(toolPicker)
+        }
+
+        @available(iOS 18.0, *)
+        func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
+            handleToolPickerChange(toolPicker)
+        }
+
+        func markAppliedColorRevision(_ revision: Int) {
+            lastAppliedColorRevision = revision
+        }
+
+        func applyPickedColorIfNeeded(to canvas: PKCanvasView,
+                                      selectedColor: UIColor,
+                                      colorRevision: Int) {
+            guard colorRevision != lastAppliedColorRevision else { return }
+            applyColor(selectedColor, to: canvas, switchToPenIfNeeded: true)
+            lastAppliedColorRevision = colorRevision
+        }
+
+        func syncSelectedColorFromCurrentInkingTool(_ canvas: PKCanvasView) {
+            guard !isApplyingPickedColor,
+                  let color = currentInkingTool(for: canvas)?.color.withAlphaComponent(1),
+                  !selectedColor.isDrawingEquivalent(to: color) else { return }
+            selectedColor = color
+        }
+
+        func rememberPickerSelection(_ toolPicker: PKToolPicker) {
+            _ = updatePickerSelectionState(toolPicker)
+        }
+
+        private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
+            let didSwitchTool = updatePickerSelectionState(toolPicker)
+            let didSwitchToInkingTool = didSwitchTool && pickerInkingTool(from: toolPicker) != nil
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let canvas = self.canvasView else { return }
+
+                if didSwitchToInkingTool {
+                    self.applyColor(self.selectedColor, to: canvas, switchToPenIfNeeded: false)
+                } else {
+                    self.syncSelectedColorFromCurrentInkingTool(canvas)
+                }
+            }
+        }
+
+        private func applyColor(_ selectedColor: UIColor,
+                                to canvas: PKCanvasView,
+                                switchToPenIfNeeded: Bool) {
+            guard !isApplyingPickedColor else { return }
+
+            let color = selectedColor.withAlphaComponent(1)
+            let nextTool: PKInkingTool
+
+            if let inkingTool = canvas.tool as? PKInkingTool {
+                nextTool = PKInkingTool(inkingTool.inkType, color: color, width: inkingTool.width)
+            } else if let pickerTool = pickerInkingTool(from: toolPicker) {
+                nextTool = PKInkingTool(pickerTool.inkType, color: color, width: pickerTool.width)
+            } else if switchToPenIfNeeded {
+                nextTool = PKInkingTool(.pen, color: color, width: 5)
+            } else {
+                return
+            }
+
+            isApplyingPickedColor = true
+            canvas.tool = nextTool
+            isApplyingPickedColor = false
+        }
+
+        private func currentInkingTool(for canvas: PKCanvasView) -> PKInkingTool? {
+            if let inkingTool = canvas.tool as? PKInkingTool { return inkingTool }
+            return pickerInkingTool(from: toolPicker)
+        }
+
+        private func pickerInkingTool(from toolPicker: PKToolPicker?) -> PKInkingTool? {
+            guard let toolPicker else { return nil }
+            if #available(iOS 18.0, *) {
+                return (toolPicker.selectedToolItem as? PKToolPickerInkingItem)?.inkingTool
+            } else {
+                return toolPicker.selectedTool as? PKInkingTool
+            }
+        }
+
+        private func updatePickerSelectionState(_ toolPicker: PKToolPicker) -> Bool {
+            let previousIdentifier = lastPickerToolItemIdentifier
+            let previousInkType = lastPickerInkType
+
+            if #available(iOS 18.0, *) {
+                lastPickerToolItemIdentifier = toolPicker.selectedToolItem.identifier
+            }
+            lastPickerInkType = pickerInkingTool(from: toolPicker)?.inkType
+
+            if #available(iOS 18.0, *) {
+                return previousIdentifier != nil &&
+                    previousIdentifier != lastPickerToolItemIdentifier
+            }
+            return previousInkType != nil && previousInkType != lastPickerInkType
+        }
+    }
+}
+
+extension UIColor {
+    fileprivate func isDrawingEquivalent(to other: UIColor) -> Bool {
+        guard let lhs = drawingRGBAComponents(),
+              let rhs = other.drawingRGBAComponents() else {
+            return cgColor == other.cgColor
+        }
+
+        return zip(lhs, rhs).allSatisfy { abs($0 - $1) < 0.001 }
+    }
+
+    fileprivate func drawingRGBAComponents() -> [CGFloat]? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+
+        return [red, green, blue, alpha]
     }
 }
 
@@ -395,7 +605,8 @@ struct CanvasDrawingOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.01)
+            Color.clear
+                .contentShape(Rectangle())
                 .ignoresSafeArea()
 
             MacDrawingEditor(drawing: drawing) { newDrawing in

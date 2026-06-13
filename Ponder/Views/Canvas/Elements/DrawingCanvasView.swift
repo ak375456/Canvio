@@ -8,14 +8,605 @@ import PencilKit
 
 #if os(iOS)
 
+final class PencilShapeSnapController {
+    var isEnabled: Bool = true {
+        didSet {
+            if !isEnabled { cancelPendingSnap() }
+        }
+    }
+
+    private var pendingSnap: DispatchWorkItem?
+    private var isApplyingSnap = false
+    private let snapDelay: TimeInterval = 0.55
+
+    func scheduleSnap(on canvas: PKCanvasView, commit: @escaping (PKDrawing) -> Void) {
+        guard isEnabled, !isApplyingSnap, !canvas.drawing.strokes.isEmpty else {
+            cancelPendingSnap()
+            return
+        }
+
+        pendingSnap?.cancel()
+        let work = DispatchWorkItem { [weak self, weak canvas] in
+            guard let self, let canvas else { return }
+            self.snapNow(on: canvas, commit: commit)
+        }
+        pendingSnap = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + snapDelay, execute: work)
+    }
+
+    func cancelPendingSnap() {
+        pendingSnap?.cancel()
+        pendingSnap = nil
+    }
+
+    func snapNow(on canvas: PKCanvasView, commit: @escaping (PKDrawing) -> Void) {
+        guard isEnabled,
+              !isApplyingSnap,
+              let snapped = PencilShapeSnapper.snappedDrawing(from: canvas.drawing),
+              snapped.dataRepresentation() != canvas.drawing.dataRepresentation()
+        else { return }
+
+        isApplyingSnap = true
+        pendingSnap?.cancel()
+        pendingSnap = nil
+        canvas.drawing = snapped
+        commit(snapped)
+        isApplyingSnap = false
+    }
+
+    var isApplyingProgrammaticSnap: Bool {
+        isApplyingSnap
+    }
+}
+
+private struct PencilShapeSnapper {
+    private struct Candidate {
+        let points: [CGPoint]
+        let score: CGFloat
+    }
+
+    static func snappedDrawing(from drawing: PKDrawing) -> PKDrawing? {
+        guard let lastIndex = drawing.strokes.indices.last else { return nil }
+
+        var strokes = drawing.strokes
+        let originalStroke = strokes[lastIndex]
+        let rawPoints = renderedPoints(from: originalStroke)
+        guard let cleanPoints = cleanShapePoints(from: rawPoints),
+              let snappedStroke = stroke(from: cleanPoints, matching: originalStroke)
+        else { return nil }
+
+        strokes[lastIndex] = snappedStroke
+        return PKDrawing(strokes: strokes)
+    }
+
+    private static func renderedPoints(from stroke: PKStroke) -> [CGPoint] {
+        stroke.path.map { $0.location.applying(stroke.transform) }
+    }
+
+    private static func cleanShapePoints(from rawPoints: [CGPoint]) -> [CGPoint]? {
+        let points = removingNearDuplicates(rawPoints, minimumDistance: 2)
+        guard points.count >= 2 else { return nil }
+
+        let bounds = bounds(for: points)
+        let diagonal = hypot(bounds.width, bounds.height)
+
+        if let line = lineCandidate(from: points, diagonal: diagonal) {
+            return line.points
+        }
+
+        guard points.count >= 8,
+              diagonal >= 34,
+              isClosed(points, diagonal: diagonal)
+        else { return nil }
+
+        let polygon = polygonCandidate(from: points, bounds: bounds, diagonal: diagonal)
+        let ellipse = ellipseCandidate(from: points, bounds: bounds, diagonal: diagonal)
+
+        switch (polygon, ellipse) {
+        case let (polygon?, ellipse?):
+            return ellipse.score < polygon.score ? ellipse.points : polygon.points
+        case let (polygon?, nil):
+            return polygon.points
+        case let (nil, ellipse?):
+            return ellipse.points
+        default:
+            return nil
+        }
+    }
+
+    private static func lineCandidate(from points: [CGPoint], diagonal: CGFloat) -> Candidate? {
+        guard let first = points.first, let last = points.last else { return nil }
+
+        let directDistance = distance(first, last)
+        guard directDistance >= 28,
+              diagonal >= 28
+        else { return nil }
+
+        let length = polylineLength(points)
+        guard length / max(directDistance, 1) <= 1.22 else { return nil }
+
+        let maxDeviation = points
+            .map { distanceFromPoint($0, toSegmentStart: first, end: last) }
+            .max() ?? 0
+        let allowedDeviation = max(8, directDistance * 0.08)
+        guard maxDeviation <= allowedDeviation else { return nil }
+
+        return Candidate(
+            points: sampledPolyline([first, last]),
+            score: (maxDeviation / max(directDistance, 1)) + abs(length / max(directDistance, 1) - 1)
+        )
+    }
+
+    private static func polygonCandidate(from points: [CGPoint],
+                                         bounds: CGRect,
+                                         diagonal: CGFloat) -> Candidate? {
+        let tolerances = [
+            max(7, diagonal * 0.055),
+            max(9, diagonal * 0.08),
+            max(11, diagonal * 0.11)
+        ]
+
+        var candidates: [Candidate] = []
+
+        for tolerance in tolerances {
+            let vertices = closedVertices(from: points, tolerance: tolerance)
+
+            if vertices.count == 3,
+               let triangle = triangleCandidate(vertices: vertices, sourcePoints: points, diagonal: diagonal) {
+                candidates.append(triangle)
+            }
+
+            if vertices.count == 4,
+               let rectangle = rectangleCandidate(vertices: vertices, sourcePoints: points, diagonal: diagonal) {
+                candidates.append(rectangle)
+            }
+        }
+
+        return candidates.min { $0.score < $1.score }
+    }
+
+    private static func triangleCandidate(vertices: [CGPoint],
+                                          sourcePoints: [CGPoint],
+                                          diagonal: CGFloat) -> Candidate? {
+        guard polygonArea(vertices) >= diagonal * diagonal * 0.035 else { return nil }
+
+        let closed = vertices + [vertices[0]]
+        let meanError = meanDistance(from: sourcePoints, toClosedPolyline: closed)
+        guard meanError <= max(11, diagonal * 0.08) else { return nil }
+
+        return Candidate(
+            points: sampledPolyline(closed),
+            score: meanError / max(diagonal, 1)
+        )
+    }
+
+    private static func rectangleCandidate(vertices: [CGPoint],
+                                           sourcePoints: [CGPoint],
+                                           diagonal: CGFloat) -> Candidate? {
+        let cornerCosines = vertices.indices.map { index -> CGFloat in
+            let current = vertices[index]
+            let previous = vertices[(index + vertices.count - 1) % vertices.count]
+            let next = vertices[(index + 1) % vertices.count]
+            return abs(cosineBetween(vector(from: current, to: previous),
+                                     vector(from: current, to: next)))
+        }
+
+        guard let worstCorner = cornerCosines.max(),
+              worstCorner <= 0.58,
+              let rectangle = orientedRectangle(from: vertices, sourcePoints: sourcePoints)
+        else { return nil }
+
+        let closed = rectangle + [rectangle[0]]
+        let meanError = meanDistance(from: sourcePoints, toClosedPolyline: closed)
+        guard meanError <= max(11, diagonal * 0.075) else { return nil }
+
+        return Candidate(
+            points: sampledPolyline(rotate(closed, toStartNear: sourcePoints[0])),
+            score: (meanError / max(diagonal, 1)) + worstCorner * 0.015
+        )
+    }
+
+    private static func ellipseCandidate(from points: [CGPoint],
+                                         bounds: CGRect,
+                                         diagonal: CGFloat) -> Candidate? {
+        var radiusX = bounds.width / 2
+        var radiusY = bounds.height / 2
+        guard radiusX >= 14, radiusY >= 14 else { return nil }
+
+        let aspect = radiusX / max(radiusY, 1)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        if aspect > 0.76 && aspect < 1.32 {
+            let radius = (radiusX + radiusY) / 2
+            radiusX = radius
+            radiusY = radius
+        }
+
+        var totalError: CGFloat = 0
+        var maxError: CGFloat = 0
+        var sectors = Set<Int>()
+
+        for point in points {
+            let dx = (point.x - center.x) / max(radiusX, 1)
+            let dy = (point.y - center.y) / max(radiusY, 1)
+            let radialDistance = hypot(dx, dy)
+            let error = abs(radialDistance - 1)
+            totalError += error
+            maxError = max(maxError, error)
+
+            let angle = atan2(point.y - center.y, point.x - center.x)
+            let normalized = angle < 0 ? angle + 2 * .pi : angle
+            sectors.insert(Int((normalized / (2 * .pi)) * 8))
+        }
+
+        let meanError = totalError / CGFloat(points.count)
+        guard sectors.count >= 6,
+              meanError <= 0.19,
+              maxError <= 0.62
+        else { return nil }
+
+        return Candidate(
+            points: ellipsePoints(center: center, radiusX: radiusX, radiusY: radiusY),
+            score: meanError * 0.35 + CGFloat(8 - sectors.count) * 0.01
+        )
+    }
+
+    private static func stroke(from cleanPoints: [CGPoint], matching original: PKStroke) -> PKStroke? {
+        let sourcePoints = Array(original.path)
+        guard let firstSource = sourcePoints.first else { return nil }
+
+        let averageSize = sourcePoints.reduce(CGSize.zero) { partial, point in
+            CGSize(width: partial.width + point.size.width,
+                   height: partial.height + point.size.height)
+        }
+        let pointCount = CGFloat(sourcePoints.count)
+        let size = CGSize(
+            width: max(1, averageSize.width / max(pointCount, 1)),
+            height: max(1, averageSize.height / max(pointCount, 1))
+        )
+        let opacity = sourcePoints.reduce(CGFloat(0)) { $0 + $1.opacity } / max(pointCount, 1)
+        let force = sourcePoints.reduce(CGFloat(0)) { $0 + $1.force } / max(pointCount, 1)
+        let azimuth = sourcePoints.last?.azimuth ?? firstSource.azimuth
+        let altitude = sourcePoints.last?.altitude ?? firstSource.altitude
+
+        let controls = cleanPoints.enumerated().map { index, point in
+            PKStrokePoint(
+                location: point,
+                timeOffset: TimeInterval(index) * 0.006,
+                size: size,
+                opacity: max(0.05, min(opacity, 1)),
+                force: max(0, force),
+                azimuth: azimuth,
+                altitude: altitude
+            )
+        }
+
+        guard controls.count >= 2 else { return nil }
+        let path = PKStrokePath(controlPoints: controls, creationDate: original.path.creationDate)
+        return PKStroke(ink: original.ink, path: path, transform: .identity, mask: nil)
+    }
+
+    private static func closedVertices(from points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
+        guard let first = points.first else { return [] }
+        var loop = points
+        if distance(first, loop.last ?? first) > 0.1 {
+            loop.append(first)
+        } else {
+            loop[loop.count - 1] = first
+        }
+
+        var vertices = Array(simplify(loop, tolerance: tolerance).dropLast())
+        while vertices.count > 1,
+              let last = vertices.last,
+              distance(vertices[0], last) < tolerance {
+            vertices.removeLast()
+        }
+        return vertices
+    }
+
+    private static func orientedRectangle(from vertices: [CGPoint],
+                                          sourcePoints: [CGPoint]) -> [CGPoint]? {
+        guard vertices.count == 4 else { return nil }
+
+        let edges = vertices.indices.map { index -> (start: CGPoint, end: CGPoint, length: CGFloat) in
+            let start = vertices[index]
+            let end = vertices[(index + 1) % vertices.count]
+            return (start, end, distance(start, end))
+        }
+        guard let longestEdge = edges.max(by: { $0.length < $1.length }),
+              longestEdge.length > 0
+        else { return nil }
+
+        let axis = normalized(vector(from: longestEdge.start, to: longestEdge.end))
+        let perpendicular = CGVector(dx: -axis.dy, dy: axis.dx)
+        let projectionsA = sourcePoints.map { dot($0, axis) }
+        let projectionsB = sourcePoints.map { dot($0, perpendicular) }
+
+        guard let minA = projectionsA.min(),
+              let maxA = projectionsA.max(),
+              let minB = projectionsB.min(),
+              let maxB = projectionsB.max()
+        else { return nil }
+
+        let centerA = (minA + maxA) / 2
+        let centerB = (minB + maxB) / 2
+        var halfA = (maxA - minA) / 2
+        var halfB = (maxB - minB) / 2
+        guard halfA >= 10, halfB >= 10 else { return nil }
+
+        let ratio = halfA / max(halfB, 1)
+        if ratio > 0.72 && ratio < 1.38 {
+            let side = (halfA + halfB) / 2
+            halfA = side
+            halfB = side
+        }
+
+        let center = point(axis, scaledBy: centerA, plus: point(perpendicular, scaledBy: centerB))
+        return [
+            offset(center, axis, -halfA, perpendicular, -halfB),
+            offset(center, axis, halfA, perpendicular, -halfB),
+            offset(center, axis, halfA, perpendicular, halfB),
+            offset(center, axis, -halfA, perpendicular, halfB)
+        ]
+    }
+
+    private static func ellipsePoints(center: CGPoint, radiusX: CGFloat, radiusY: CGFloat) -> [CGPoint] {
+        let count = 96
+        var points: [CGPoint] = []
+        points.reserveCapacity(count + 1)
+
+        for index in 0..<count {
+            let angle = CGFloat(index) / CGFloat(count) * 2 * .pi
+            points.append(CGPoint(
+                x: center.x + cos(angle) * radiusX,
+                y: center.y + sin(angle) * radiusY
+            ))
+        }
+        if let first = points.first { points.append(first) }
+        return points
+    }
+
+    private static func sampledPolyline(_ points: [CGPoint], spacing: CGFloat = 7) -> [CGPoint] {
+        guard points.count > 1 else { return points }
+        var sampled = [points[0]]
+
+        for index in 1..<points.count {
+            let start = points[index - 1]
+            let end = points[index]
+            let segmentLength = distance(start, end)
+            let steps = max(1, Int(ceil(segmentLength / spacing)))
+
+            for step in 1...steps {
+                let progress = CGFloat(step) / CGFloat(steps)
+                sampled.append(CGPoint(
+                    x: start.x + (end.x - start.x) * progress,
+                    y: start.y + (end.y - start.y) * progress
+                ))
+            }
+        }
+
+        return sampled
+    }
+
+    private static func rotate(_ points: [CGPoint], toStartNear start: CGPoint) -> [CGPoint] {
+        guard points.count > 2 else { return points }
+        let closed = distance(points[0], points[points.count - 1]) < 0.1
+        let body = closed ? Array(points.dropLast()) : points
+        guard let startIndex = body.indices.min(by: {
+            distance(body[$0], start) < distance(body[$1], start)
+        }) else { return points }
+
+        let rotated = Array(body[startIndex...]) + Array(body[..<startIndex])
+        return closed ? rotated + [rotated[0]] : rotated
+    }
+
+    private static func simplify(_ points: [CGPoint], tolerance: CGFloat) -> [CGPoint] {
+        guard points.count > 2,
+              let first = points.first,
+              let last = points.last
+        else { return points }
+
+        var maxDistance: CGFloat = 0
+        var index = 0
+
+        for candidateIndex in 1..<(points.count - 1) {
+            let currentDistance = distanceFromPoint(points[candidateIndex],
+                                                    toSegmentStart: first,
+                                                    end: last)
+            if currentDistance > maxDistance {
+                maxDistance = currentDistance
+                index = candidateIndex
+            }
+        }
+
+        guard maxDistance > tolerance else { return [first, last] }
+
+        let left = simplify(Array(points[0...index]), tolerance: tolerance)
+        let right = simplify(Array(points[index...]), tolerance: tolerance)
+        return Array(left.dropLast()) + right
+    }
+
+    private static func removingNearDuplicates(_ points: [CGPoint],
+                                               minimumDistance: CGFloat) -> [CGPoint] {
+        guard let first = points.first else { return [] }
+        var cleaned = [first]
+
+        for point in points.dropFirst() {
+            if distance(point, cleaned[cleaned.count - 1]) >= minimumDistance {
+                cleaned.append(point)
+            }
+        }
+
+        if let last = points.last,
+           distance(last, cleaned[cleaned.count - 1]) > 0.1 {
+            cleaned.append(last)
+        }
+
+        return cleaned
+    }
+
+    private static func isClosed(_ points: [CGPoint], diagonal: CGFloat) -> Bool {
+        guard let first = points.first, let last = points.last else { return false }
+        return distance(first, last) <= max(18, diagonal * 0.18)
+    }
+
+    private static func bounds(for points: [CGPoint]) -> CGRect {
+        guard let first = points.first else { return .zero }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private static func polylineLength(_ points: [CGPoint]) -> CGFloat {
+        guard points.count > 1 else { return 0 }
+        return (1..<points.count).reduce(CGFloat(0)) { partial, index in
+            partial + distance(points[index - 1], points[index])
+        }
+    }
+
+    private static func meanDistance(from points: [CGPoint],
+                                     toClosedPolyline polyline: [CGPoint]) -> CGFloat {
+        guard polyline.count > 1 else { return .greatestFiniteMagnitude }
+        let total = points.reduce(CGFloat(0)) { partial, point in
+            var best = CGFloat.greatestFiniteMagnitude
+            for index in 1..<polyline.count {
+                best = min(best, distanceFromPoint(point,
+                                                   toSegmentStart: polyline[index - 1],
+                                                   end: polyline[index]))
+            }
+            return partial + best
+        }
+        return total / max(CGFloat(points.count), 1)
+    }
+
+    private static func polygonArea(_ vertices: [CGPoint]) -> CGFloat {
+        guard vertices.count >= 3 else { return 0 }
+        var area: CGFloat = 0
+        for index in vertices.indices {
+            let current = vertices[index]
+            let next = vertices[(index + 1) % vertices.count]
+            area += current.x * next.y - next.x * current.y
+        }
+        return abs(area) / 2
+    }
+
+    private static func distanceFromPoint(_ point: CGPoint,
+                                          toSegmentStart start: CGPoint,
+                                          end: CGPoint) -> CGFloat {
+        let segment = vector(from: start, to: end)
+        let lengthSquared = segment.dx * segment.dx + segment.dy * segment.dy
+        guard lengthSquared > 0 else { return distance(point, start) }
+
+        let pointVector = vector(from: start, to: point)
+        let progress = max(0, min(1, dot(pointVector, segment) / lengthSquared))
+        let projection = CGPoint(x: start.x + segment.dx * progress,
+                                 y: start.y + segment.dy * progress)
+        return distance(point, projection)
+    }
+
+    private static func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
+        hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+
+    private static func vector(from start: CGPoint, to end: CGPoint) -> CGVector {
+        CGVector(dx: end.x - start.x, dy: end.y - start.y)
+    }
+
+    private static func normalized(_ vector: CGVector) -> CGVector {
+        let length = hypot(vector.dx, vector.dy)
+        guard length > 0 else { return .zero }
+        return CGVector(dx: vector.dx / length, dy: vector.dy / length)
+    }
+
+    private static func cosineBetween(_ lhs: CGVector, _ rhs: CGVector) -> CGFloat {
+        let lhsLength = hypot(lhs.dx, lhs.dy)
+        let rhsLength = hypot(rhs.dx, rhs.dy)
+        guard lhsLength > 0, rhsLength > 0 else { return 1 }
+        return dot(lhs, rhs) / (lhsLength * rhsLength)
+    }
+
+    private static func dot(_ point: CGPoint, _ vector: CGVector) -> CGFloat {
+        point.x * vector.dx + point.y * vector.dy
+    }
+
+    private static func dot(_ lhs: CGVector, _ rhs: CGVector) -> CGFloat {
+        lhs.dx * rhs.dx + lhs.dy * rhs.dy
+    }
+
+    private static func point(_ vector: CGVector, scaledBy scale: CGFloat) -> CGPoint {
+        CGPoint(x: vector.dx * scale, y: vector.dy * scale)
+    }
+
+    private static func point(_ lhs: CGVector, scaledBy lhsScale: CGFloat,
+                              plus rhs: CGPoint) -> CGPoint {
+        CGPoint(x: lhs.dx * lhsScale + rhs.x, y: lhs.dy * lhsScale + rhs.y)
+    }
+
+    private static func offset(_ center: CGPoint,
+                               _ firstAxis: CGVector,
+                               _ firstAmount: CGFloat,
+                               _ secondAxis: CGVector,
+                               _ secondAmount: CGFloat) -> CGPoint {
+        CGPoint(
+            x: center.x + firstAxis.dx * firstAmount + secondAxis.dx * secondAmount,
+            y: center.y + firstAxis.dy * firstAmount + secondAxis.dy * secondAmount
+        )
+    }
+}
+
 struct DrawingCanvasView: View {
     let drawing: PKDrawing
     let isEditing: Bool
+    let smartShapeSnappingEnabled: Bool
     let onDrawingChanged: (PKDrawing) -> Void
+
+    @State private var selectedColor = UIColor.systemOrange
+    @State private var isPickingColor = false
+    @State private var pickedColorRevision = 0
 
     var body: some View {
         if isEditing {
-            LivePKCanvas(drawing: drawing, onDrawingChanged: onDrawingChanged)
+            ZStack(alignment: .topTrailing) {
+                LivePKCanvas(
+                    drawing: drawing,
+                    smartShapeSnappingEnabled: smartShapeSnappingEnabled,
+                    selectedColor: $selectedColor,
+                    colorRevision: pickedColorRevision,
+                    onDrawingChanged: onDrawingChanged
+                )
+
+                DrawingColorPickerButton(
+                    selectedColor: $selectedColor,
+                    compact: true,
+                    isActive: isPickingColor
+                ) {
+                    isPickingColor.toggle()
+                }
+                    .padding(8)
+
+                if isPickingColor {
+                    DrawingColorSamplingOverlay(
+                        onColorPicked: { color in
+                            selectedColor = color
+                            pickedColorRevision += 1
+                            isPickingColor = false
+                        },
+                        onCancel: {
+                            isPickingColor = false
+                        }
+                    )
+                    .zIndex(2)
+                }
+            }
         } else {
             DrawingSnapshot(drawing: drawing)
         }
@@ -47,10 +638,17 @@ private struct DrawingSnapshot: View {
 // it automatically reserves two-finger for scroll when isScrollEnabled=true.
 private struct LivePKCanvas: UIViewRepresentable {
     let drawing: PKDrawing
+    let smartShapeSnappingEnabled: Bool
+    @Binding var selectedColor: UIColor
+    let colorRevision: Int
     let onDrawingChanged: (PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onDrawingChanged: onDrawingChanged)
+        Coordinator(
+            selectedColor: $selectedColor,
+            smartShapeSnappingEnabled: smartShapeSnappingEnabled,
+            onDrawingChanged: onDrawingChanged
+        )
     }
 
     func makeUIView(context: Context) -> PKCanvasView {
@@ -72,17 +670,27 @@ private struct LivePKCanvas: UIViewRepresentable {
         let toolPicker = PKToolPicker()
         context.coordinator.toolPicker = toolPicker
         toolPicker.addObserver(canvas)
+        toolPicker.addObserver(context.coordinator)
+        context.coordinator.rememberPickerSelection(toolPicker)
+        context.coordinator.markAppliedColorRevision(colorRevision)
         toolPicker.setVisible(true, forFirstResponder: canvas)
+        context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
         DispatchQueue.main.async { canvas.becomeFirstResponder() }
 
         return canvas
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         if canvas.drawing.dataRepresentation() != drawing.dataRepresentation()
             && !canvas.isFirstResponder {
             canvas.drawing = drawing
         }
+        context.coordinator.applyPickedColorIfNeeded(
+            to: canvas,
+            selectedColor: selectedColor,
+            colorRevision: colorRevision
+        )
         context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
         if !canvas.isFirstResponder {
             DispatchQueue.main.async { canvas.becomeFirstResponder() }
@@ -91,22 +699,173 @@ private struct LivePKCanvas: UIViewRepresentable {
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
+        coordinator.toolPicker?.removeObserver(coordinator)
         coordinator.toolPicker?.removeObserver(canvas)
         canvas.resignFirstResponder()
     }
 
-    class Coordinator: NSObject, PKCanvasViewDelegate {
+    class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
+        @Binding var selectedColor: UIColor
         let onDrawingChanged: (PKDrawing) -> Void
         weak var canvas: PKCanvasView?
         var toolPicker: PKToolPicker?
+        var smartShapeSnappingEnabled: Bool {
+            didSet {
+                shapeSnapController.isEnabled = smartShapeSnappingEnabled
+            }
+        }
+        private var lastAppliedColorRevision = 0
+        private var lastPickerToolItemIdentifier: String?
+        private var lastPickerInkType: PKInkingTool.InkType?
+        private var isApplyingPickedColor = false
+        private let shapeSnapController = PencilShapeSnapController()
 
-        init(onDrawingChanged: @escaping (PKDrawing) -> Void) {
+        init(selectedColor: Binding<UIColor>,
+             smartShapeSnappingEnabled: Bool,
+             onDrawingChanged: @escaping (PKDrawing) -> Void) {
+            self._selectedColor = selectedColor
+            self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.onDrawingChanged = onDrawingChanged
+            self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
 
         func canvasViewDrawingDidChange(_ canvas: PKCanvasView) {
             onDrawingChanged(canvas.drawing)
+            guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
+            shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
+                self?.onDrawingChanged(snappedDrawing)
+            }
         }
+
+        func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
+            shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
+                self?.onDrawingChanged(snappedDrawing)
+            }
+        }
+
+        func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
+            handleToolPickerChange(toolPicker)
+        }
+
+        @available(iOS 18.0, *)
+        func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
+            handleToolPickerChange(toolPicker)
+        }
+
+        func markAppliedColorRevision(_ revision: Int) {
+            lastAppliedColorRevision = revision
+        }
+
+        func applyPickedColorIfNeeded(to canvas: PKCanvasView,
+                                      selectedColor: UIColor,
+                                      colorRevision: Int) {
+            guard colorRevision != lastAppliedColorRevision else { return }
+            applyColor(selectedColor, to: canvas, switchToPenIfNeeded: true)
+            lastAppliedColorRevision = colorRevision
+        }
+
+        func syncSelectedColorFromCurrentInkingTool(_ canvas: PKCanvasView) {
+            guard !isApplyingPickedColor,
+                  let color = currentInkingTool(for: canvas)?.color.withAlphaComponent(1),
+                  !selectedColor.isDrawingEquivalent(to: color) else { return }
+            selectedColor = color
+        }
+
+        func rememberPickerSelection(_ toolPicker: PKToolPicker) {
+            _ = updatePickerSelectionState(toolPicker)
+        }
+
+        private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
+            let didSwitchTool = updatePickerSelectionState(toolPicker)
+            let didSwitchToInkingTool = didSwitchTool && pickerInkingTool(from: toolPicker) != nil
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let canvas = self.canvas else { return }
+
+                if didSwitchToInkingTool {
+                    self.applyColor(self.selectedColor, to: canvas, switchToPenIfNeeded: false)
+                } else {
+                    self.syncSelectedColorFromCurrentInkingTool(canvas)
+                }
+            }
+        }
+
+        private func applyColor(_ selectedColor: UIColor,
+                                to canvas: PKCanvasView,
+                                switchToPenIfNeeded: Bool) {
+            guard !isApplyingPickedColor else { return }
+
+            let color = selectedColor.withAlphaComponent(1)
+            let nextTool: PKInkingTool
+
+            if let inkingTool = canvas.tool as? PKInkingTool {
+                nextTool = PKInkingTool(inkingTool.inkType, color: color, width: inkingTool.width)
+            } else if let pickerTool = pickerInkingTool(from: toolPicker) {
+                nextTool = PKInkingTool(pickerTool.inkType, color: color, width: pickerTool.width)
+            } else if switchToPenIfNeeded {
+                nextTool = PKInkingTool(.pen, color: color, width: 5)
+            } else {
+                return
+            }
+
+            isApplyingPickedColor = true
+            canvas.tool = nextTool
+            isApplyingPickedColor = false
+        }
+
+        private func currentInkingTool(for canvas: PKCanvasView) -> PKInkingTool? {
+            if let inkingTool = canvas.tool as? PKInkingTool { return inkingTool }
+            return pickerInkingTool(from: toolPicker)
+        }
+
+        private func pickerInkingTool(from toolPicker: PKToolPicker?) -> PKInkingTool? {
+            guard let toolPicker else { return nil }
+            if #available(iOS 18.0, *) {
+                return (toolPicker.selectedToolItem as? PKToolPickerInkingItem)?.inkingTool
+            } else {
+                return toolPicker.selectedTool as? PKInkingTool
+            }
+        }
+
+        private func updatePickerSelectionState(_ toolPicker: PKToolPicker) -> Bool {
+            let previousIdentifier = lastPickerToolItemIdentifier
+            let previousInkType = lastPickerInkType
+
+            if #available(iOS 18.0, *) {
+                lastPickerToolItemIdentifier = toolPicker.selectedToolItem.identifier
+            }
+            lastPickerInkType = pickerInkingTool(from: toolPicker)?.inkType
+
+            if #available(iOS 18.0, *) {
+                return previousIdentifier != nil &&
+                    previousIdentifier != lastPickerToolItemIdentifier
+            }
+            return previousInkType != nil && previousInkType != lastPickerInkType
+        }
+    }
+}
+
+extension UIColor {
+    fileprivate func isDrawingEquivalent(to other: UIColor) -> Bool {
+        guard let lhs = drawingRGBAComponents(),
+              let rhs = other.drawingRGBAComponents() else {
+            return cgColor == other.cgColor
+        }
+
+        return zip(lhs, rhs).allSatisfy { abs($0 - $1) < 0.001 }
+    }
+
+    fileprivate func drawingRGBAComponents() -> [CGFloat]? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+
+        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return nil
+        }
+
+        return [red, green, blue, alpha]
     }
 }
 
@@ -116,6 +875,7 @@ private struct LivePKCanvas: UIViewRepresentable {
 struct DrawingCanvasView: View {
     let drawing: PKDrawing
     let isEditing: Bool
+    let smartShapeSnappingEnabled: Bool
     let onDrawingChanged: (PKDrawing) -> Void
 
     var body: some View {
@@ -139,9 +899,49 @@ struct DrawingCanvasView: View {
 struct MacDrawingToolState: Equatable {
     var ink: MacDrawingInk = .pen
     var color: MacDrawingColor = .adaptive
+    var sampledColor: MacDrawingSampledColor?
+    var usesSampledColor = false
     var width: CGFloat = 4
     var eraserWidth: CGFloat = 24
     var isErasing = false
+
+    func strokeNSColor(colorScheme: ColorScheme) -> NSColor {
+        if usesSampledColor, let sampledColor {
+            return sampledColor.nsColor
+        }
+        return color.nsColor(colorScheme: colorScheme)
+    }
+
+    func strokeSwatchColor(colorScheme: ColorScheme) -> Color {
+        if usesSampledColor, let sampledColor {
+            return sampledColor.swiftUIColor
+        }
+        return color.swatchColor(colorScheme: colorScheme)
+    }
+}
+
+struct MacDrawingSampledColor: Equatable {
+    let red: CGFloat
+    let green: CGFloat
+    let blue: CGFloat
+    let alpha: CGFloat
+
+    init?(nsColor: NSColor) {
+        guard let rgbColor = nsColor.usingColorSpace(.deviceRGB)
+            ?? nsColor.usingColorSpace(.sRGB) else { return nil }
+        self.red = rgbColor.redComponent
+        self.green = rgbColor.greenComponent
+        self.blue = rgbColor.blueComponent
+        self.alpha = rgbColor.alphaComponent
+    }
+
+    var nsColor: NSColor {
+        NSColor(deviceRed: red, green: green, blue: blue, alpha: alpha)
+    }
+
+    var swiftUIColor: Color {
+        Color(nsColor: nsColor)
+    }
 }
 
 enum MacDrawingInk: String, CaseIterable, Identifiable {
@@ -325,9 +1125,10 @@ private struct MacDrawingToolControls: View {
                     ForEach(MacDrawingColor.allCases) { color in
                         colorButton(color)
                     }
+
+                    sampleColorButton
                 }
                 .opacity(tool.isErasing ? 0.45 : 1)
-                .disabled(tool.isErasing)
 
                 Divider().frame(height: 24)
 
@@ -366,6 +1167,7 @@ private struct MacDrawingToolControls: View {
     private func colorButton(_ color: MacDrawingColor) -> some View {
         Button {
             tool.isErasing = false
+            tool.usesSampledColor = false
             tool.color = color
         } label: {
             Circle()
@@ -379,12 +1181,46 @@ private struct MacDrawingToolControls: View {
                     Circle()
                         .strokeBorder(Color.accentColor, lineWidth: 2.5)
                         .frame(width: 26, height: 26)
-                        .opacity(tool.color == color && !tool.isErasing ? 1 : 0)
+                        .opacity(tool.color == color && !tool.isErasing && !tool.usesSampledColor ? 1 : 0)
                 )
         }
         .buttonStyle(.plain)
         .frame(width: 28, height: 28)
         .help(color.title)
+    }
+
+    private var sampleColorButton: some View {
+        Button {
+            tool.isErasing = false
+            NSColorSampler().show { selectedColor in
+                guard let selectedColor,
+                      let sampledColor = MacDrawingSampledColor(nsColor: selectedColor) else { return }
+                tool.sampledColor = sampledColor
+                tool.usesSampledColor = true
+            }
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "eyedropper.halffull")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tool.usesSampledColor && !tool.isErasing ? Color.white : Color.primary)
+                    .frame(width: 30, height: 28)
+                    .background(
+                        tool.usesSampledColor && !tool.isErasing
+                            ? Color.accentColor
+                            : Color.secondary.opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 7)
+                    )
+
+                Circle()
+                    .fill(tool.strokeSwatchColor(colorScheme: colorScheme))
+                    .frame(width: 11, height: 11)
+                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.75))
+                    .offset(x: 1, y: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(width: 32, height: 28)
+        .help("Pick Color from Screen")
     }
 }
 
@@ -420,7 +1256,7 @@ private struct MacFreehandPKDrawingView: View {
     }
 
     private var strokeColor: NSColor {
-        tool.color.nsColor(colorScheme: colorScheme)
+        tool.strokeNSColor(colorScheme: colorScheme)
     }
 
     private var drawingGesture: some Gesture {

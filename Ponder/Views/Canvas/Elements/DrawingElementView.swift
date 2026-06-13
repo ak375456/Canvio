@@ -10,6 +10,7 @@ import PencilKit
 struct DrawingElementView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var settings: AppSettings
     @Bindable var element: DrawingElementModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -104,6 +105,7 @@ struct DrawingElementView: View {
             DrawingCanvasView(
                 drawing: element.pkDrawing,
                 isEditing: isEditing,
+                smartShapeSnappingEnabled: settings.smartShapeSnappingEnabled,
                 onDrawingChanged: { vm.saveDrawing(element: element, drawing: $0, context: context) }
             )
             .clipShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))

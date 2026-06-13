@@ -7,6 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct AddTextSheet: View {
+    @EnvironmentObject private var settings: AppSettings
     @Binding var isPresented: Bool
     let onAdd: (TextStyle) -> Void
 
@@ -47,7 +48,10 @@ struct AddTextSheet: View {
             Divider()
             addButton
         }
-        .onAppear { focused = true }
+        .onAppear {
+            loadLastTextStyle()
+            focused = true
+        }
         .fileImporter(
             isPresented: $isImportingFont,
             allowedContentTypes: supportedFontTypes,
@@ -417,11 +421,14 @@ struct AddTextSheet: View {
             var style = TextStyle(
                 text: trimmed, fontSize: fontSize,
                 isBold: isBold, isItalic: isItalic,
+                isUnderline: isUnderline,
                 colorName: selectedColor, fontName: selectedFont
             )
+            style.textAlignment = alignment
             style.bgColorName     = bgColorName
             style.strokeColorName = strokeColorName
             style.strokeWidth     = strokeWidth
+            settings.rememberTextStyle(style)
             onAdd(style)
             isPresented = false
         } label: {
@@ -440,6 +447,24 @@ struct AddTextSheet: View {
 
     private func label(_ text: String) -> some View {
         Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary).tracking(1)
+    }
+
+    private func loadLastTextStyle() {
+        selectedColor = settings.lastTextColorName
+        selectedFont = settings.lastTextFontName
+        fontSize = settings.lastTextFontSize
+        isBold = settings.lastTextIsBold
+        isItalic = settings.lastTextIsItalic
+        isUnderline = settings.lastTextIsUnderline
+        bgColorName = settings.lastTextBgColorName
+        strokeColorName = settings.lastTextStrokeColorName
+        strokeWidth = settings.lastTextStrokeWidth
+
+        switch settings.lastTextAlignmentRawValue {
+        case "center": alignment = .center
+        case "trailing": alignment = .trailing
+        default: alignment = .leading
+        }
     }
 
     private func colorFromName(_ name: String) -> Color {

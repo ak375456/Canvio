@@ -305,6 +305,19 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
     @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
+    @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
+    @AppStorage("ponder.handwritingToTextEnabled") private var handwritingToTextEnabledRaw: Bool = true
+    @AppStorage("ponder.handwritingToTextStrictness") private var handwritingToTextStrictnessRaw: Double = 0.35
+    @AppStorage("ponder.lastTextFontName") private var lastTextFontNameRaw: String = "system"
+    @AppStorage("ponder.lastTextFontSize") private var lastTextFontSizeRaw: Double = 16
+    @AppStorage("ponder.lastTextColorName") private var lastTextColorNameRaw: String = "primary"
+    @AppStorage("ponder.lastTextIsBold") private var lastTextIsBoldRaw: Bool = false
+    @AppStorage("ponder.lastTextIsItalic") private var lastTextIsItalicRaw: Bool = false
+    @AppStorage("ponder.lastTextIsUnderline") private var lastTextIsUnderlineRaw: Bool = false
+    @AppStorage("ponder.lastTextAlignment") private var lastTextAlignmentRaw: String = "leading"
+    @AppStorage("ponder.lastTextBgColorName") private var lastTextBgColorNameRaw: String = "none"
+    @AppStorage("ponder.lastTextStrokeColorName") private var lastTextStrokeColorNameRaw: String = "none"
+    @AppStorage("ponder.lastTextStrokeWidth") private var lastTextStrokeWidthRaw: Double = 2.0
     @AppStorage("isPro") private var isProRaw: Bool = false
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboardingRaw: Bool = false
 
@@ -351,6 +364,71 @@ class AppSettings: ObservableObject {
         set { overlapStackPickerEnabledRaw = newValue; objectWillChange.send() }
     }
 
+    var smartShapeSnappingEnabled: Bool {
+        get { smartShapeSnappingEnabledRaw }
+        set { smartShapeSnappingEnabledRaw = newValue; objectWillChange.send() }
+    }
+
+    var handwritingToTextEnabled: Bool {
+        get { handwritingToTextEnabledRaw }
+        set { handwritingToTextEnabledRaw = newValue; objectWillChange.send() }
+    }
+
+    var handwritingToTextStrictness: Double {
+        get { handwritingToTextStrictnessRaw }
+        set { handwritingToTextStrictnessRaw = max(0, min(1, newValue)); objectWillChange.send() }
+    }
+
+    var lastTextFontName: String {
+        get { lastTextFontNameRaw }
+        set { lastTextFontNameRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextFontSize: Double {
+        get { lastTextFontSizeRaw }
+        set { lastTextFontSizeRaw = max(10, min(72, newValue)); objectWillChange.send() }
+    }
+
+    var lastTextColorName: String {
+        get { lastTextColorNameRaw }
+        set { lastTextColorNameRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextIsBold: Bool {
+        get { lastTextIsBoldRaw }
+        set { lastTextIsBoldRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextIsItalic: Bool {
+        get { lastTextIsItalicRaw }
+        set { lastTextIsItalicRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextIsUnderline: Bool {
+        get { lastTextIsUnderlineRaw }
+        set { lastTextIsUnderlineRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextAlignmentRawValue: String {
+        get { lastTextAlignmentRaw }
+        set { lastTextAlignmentRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextBgColorName: String {
+        get { lastTextBgColorNameRaw }
+        set { lastTextBgColorNameRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextStrokeColorName: String {
+        get { lastTextStrokeColorNameRaw }
+        set { lastTextStrokeColorNameRaw = newValue; objectWillChange.send() }
+    }
+
+    var lastTextStrokeWidth: Double {
+        get { lastTextStrokeWidthRaw }
+        set { lastTextStrokeWidthRaw = max(1, min(12, newValue)); objectWillChange.send() }
+    }
+
     var isPro: Bool {
         get { isProRaw }
         set { isProRaw = newValue; objectWillChange.send() }
@@ -363,5 +441,35 @@ class AppSettings: ObservableObject {
 
     var effectiveGridStyle: GridStyle {
         isPro ? gridStyle : .dotted
+    }
+
+    func rememberTextStyle(_ style: TextStyle) {
+        lastTextFontNameRaw = style.fontName
+        lastTextFontSizeRaw = max(10, min(72, style.fontSize))
+        lastTextColorNameRaw = style.colorName
+        lastTextIsBoldRaw = style.isBold
+        lastTextIsItalicRaw = style.isItalic
+        lastTextIsUnderlineRaw = style.isUnderline
+        lastTextAlignmentRaw = style.alignmentRaw
+        lastTextBgColorNameRaw = style.bgColorName
+        lastTextStrokeColorNameRaw = style.strokeColorName
+        lastTextStrokeWidthRaw = style.strokeWidth
+        objectWillChange.send()
+    }
+
+    func lastTextStyle(text: String, estimatedFontSize: Double? = nil) -> TextStyle {
+        TextStyle(
+            text: text,
+            fontSize: estimatedFontSize.map { max(10, min(72, $0)) } ?? lastTextFontSizeRaw,
+            isBold: lastTextIsBoldRaw,
+            isItalic: lastTextIsItalicRaw,
+            isUnderline: lastTextIsUnderlineRaw,
+            colorName: lastTextColorNameRaw,
+            fontName: lastTextFontNameRaw,
+            alignmentRaw: lastTextAlignmentRaw,
+            bgColorName: lastTextBgColorNameRaw,
+            strokeColorName: lastTextStrokeColorNameRaw,
+            strokeWidth: lastTextStrokeWidthRaw
+        )
     }
 }

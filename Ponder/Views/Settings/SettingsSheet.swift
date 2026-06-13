@@ -31,6 +31,7 @@ struct SettingsSheet: View {
                 VStack(alignment: .leading, spacing: 28) {
                     themeSection
                     toolbarSection
+                    drawingSection
                     canvasActionsSection
                     communitySection
                     selectionSection
@@ -144,6 +145,67 @@ struct SettingsSheet: View {
                 }
             }
             .toggleStyle(.switch)
+            .padding(12)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: - Drawing
+    private var drawingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("DRAWING")
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle(isOn: Binding(
+                    get: { settings.smartShapeSnappingEnabled },
+                    set: { settings.smartShapeSnappingEnabled = $0 }
+                )) {
+                    settingsRowLabel(
+                        icon: "pencil.and.outline",
+                        title: "Smart shapes",
+                        subtitle: "Straighten lines and clean up simple shapes while drawing."
+                    )
+                }
+                .toggleStyle(.switch)
+
+                Divider()
+
+                Toggle(isOn: Binding(
+                    get: { settings.handwritingToTextEnabled },
+                    set: { settings.handwritingToTextEnabled = $0 }
+                )) {
+                    settingsRowLabel(
+                        icon: "textformat.abc.dottedunderline",
+                        title: "Handwriting to text",
+                        subtitle: "Show a separate Write tool that converts handwriting into editable text."
+                    )
+                }
+                .toggleStyle(.switch)
+
+                if settings.handwritingToTextEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Recognition strictness")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(strictnessLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { settings.handwritingToTextStrictness },
+                                set: { settings.handwritingToTextStrictness = $0 }
+                            ),
+                            in: 0.15...0.75,
+                            step: 0.05
+                        )
+                        .tint(.accentColor)
+                    }
+                    .padding(.leading, 28)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
             .padding(12)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
@@ -379,6 +441,32 @@ struct SettingsSheet: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .tracking(1)
+    }
+
+    private var strictnessLabel: String {
+        switch settings.handwritingToTextStrictness {
+        case ..<0.3: return "Relaxed"
+        case 0.3..<0.55: return "Balanced"
+        default: return "Strict"
+        }
+    }
+
+    private func settingsRowLabel(icon: String, title: String, subtitle: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     private func optionCard(title: String, icon: String, isSelected: Bool, isProFeature: Bool = false, action: @escaping () -> Void) -> some View {
