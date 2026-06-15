@@ -16,23 +16,30 @@ struct StickyNoteView: View {
     @State private var isDragging: Bool = false
     @State private var resizeDelta: CGSize = .zero
     @State private var localText: String = ""
+    @State private var tapTimer: Timer? = nil
+    @State private var tapCount = 0
     @FocusState private var textFocused: Bool
 
     private var isSelected: Bool { vm.editingID == note.id }
+    private var isWriting: Bool { vm.writingID == note.id && !note.isCollapsed && !isMultiSelectMode }
     private var palette: StickyNoteColor { StickyNoteColor.color(named: note.colorName) }
     private var currentSize: CGSize {
-        CGSize(width: max(140, note.width + resizeDelta.width),
-               height: max(140, note.height + resizeDelta.height))
+        note.isCollapsed
+        ? CGSize(width: min(max(CGFloat(note.width), 118), 180), height: 48)
+        : CGSize(width: max(96, note.width + resizeDelta.width),
+                 height: max(72, note.height + resizeDelta.height))
     }
     private let foldSize: CGFloat = 26
     private let handleSize: CGFloat = 26
+    private var activeFoldSize: CGFloat { note.isCollapsed ? 16 : foldSize }
 
     var body: some View {
         ZStack {
             noteBody
             foldedCorner
             selectionRing
-            if isSelected && !isMultiSelectMode { toolbar; cornerHandles }
+            collapseButton
+            if isSelected && !isMultiSelectMode && !note.isCollapsed { toolbar; cornerHandles }
         }
         .frame(width: currentSize.width, height: currentSize.height)
         .rotationEffect(.degrees(note.rotation))
@@ -40,13 +47,23 @@ struct StickyNoteView: View {
         .gesture(canMove ? moveDragGesture : nil)
         .onAppear { localText = note.text }
         .onChange(of: vm.editingID) { _, newID in
+            if newID != note.id {
+                commitLocalTextIfNeeded()
+                textFocused = false
+            }
+        }
+        .onChange(of: vm.writingID) { _, newID in
             if newID == note.id {
+                localText = note.text
                 textFocused = true
             } else {
-                if localText != note.text {
-                    vm.updateText(note: note, text: localText, context: context)
-                }
+                commitLocalTextIfNeeded()
                 textFocused = false
+            }
+        }
+        .onChange(of: note.text) { _, newText in
+            if !isWriting {
+                localText = newText
             }
         }
     }
@@ -75,31 +92,30 @@ struct StickyNoteView: View {
 
     private var noteBody: some View {
         ZStack(alignment: .topLeading) {
-            FoldedRectangle(foldSize: foldSize).fill(palette.background)
+            FoldedRectangle(foldSize: activeFoldSize).fill(palette.background)
                 .shadow(color: .black.opacity(0.18), radius: 6, x: 2, y: 4)
             stickyTextEditor
-                .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: foldSize + 8))
+                .padding(note.isCollapsed
+                         ? EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: activeFoldSize + 10)
+                         : EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: activeFoldSize + 8))
         }
         .overlay(
-            FoldedRectangle(foldSize: foldSize)
+            FoldedRectangle(foldSize: activeFoldSize)
                 .stroke(
                     isSelected && !isMultiSelectMode ? Color.accentColor.opacity(0.6) : Color.clear,
                     lineWidth: 2
                 )
         )
-        .onTapGesture {
-            // Only select/focus on tap — not if a drag just finished
-            guard !isMultiSelectMode, !isDragging, !isCanvasGestureActive else { return }
-            if !isSelected {
-                onExternalTap?()
-                vm.editingID = note.id
-            }
-        }
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+            isMultiSelectMode ? nil :
+            TapGesture(count: 1).onEnded { handleTap() }
+        )
     }
 
     private var stickyTextEditor: some View {
         Group {
-            if isSelected && !isMultiSelectMode {
+            if isWriting {
                 TextEditor(text: $localText)
                     .focused($textFocused)
                     .font(stickyFont)
@@ -108,15 +124,25 @@ struct StickyNoteView: View {
                     .foregroundStyle(Color.black.opacity(0.85))
                     .onChange(of: localText) { old, new in handleTextChange(old: old, new: new) }
             } else {
-                Text(localText.isEmpty ? "Tap to write..." : localText)
+                Text(previewText)
                     .font(stickyFont)
                     .foregroundStyle(localText.isEmpty
                                      ? Color.black.opacity(0.35)
                                      : Color.black.opacity(0.85))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .multilineTextAlignment(.leading)
+                    .lineLimit(note.isCollapsed ? 1 : nil)
             }
         }
+    }
+
+    private var previewText: String {
+        if localText.isEmpty { return note.isCollapsed ? "Sticky Note" : "Write something..." }
+        if note.isCollapsed {
+            return localText.components(separatedBy: .newlines)
+                .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "Sticky Note"
+        }
+        return localText
     }
 
     private func handleTextChange(old: String, new: String) {
@@ -168,14 +194,37 @@ struct StickyNoteView: View {
         GeometryReader { geo in
             Path { path in
                 let w = geo.size.width
-                path.move(to: CGPoint(x: w - foldSize, y: 0))
-                path.addLine(to: CGPoint(x: w, y: foldSize))
-                path.addLine(to: CGPoint(x: w - foldSize, y: foldSize))
+                path.move(to: CGPoint(x: w - activeFoldSize, y: 0))
+                path.addLine(to: CGPoint(x: w, y: activeFoldSize))
+                path.addLine(to: CGPoint(x: w - activeFoldSize, y: activeFoldSize))
                 path.closeSubpath()
             }
             .fill(palette.foldShadow)
             .shadow(color: .black.opacity(0.15), radius: 1, x: -1, y: 1)
         }.allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var collapseButton: some View {
+        if !isMultiSelectMode && (isSelected || note.isCollapsed) {
+            Button {
+                commitLocalTextIfNeeded()
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
+                    vm.setCollapsed(note: note, collapsed: !note.isCollapsed, context: context)
+                }
+            } label: {
+                Image(systemName: note.isCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.primary.opacity(0.72))
+                    .frame(width: 24, height: 24)
+                    .background(.regularMaterial, in: Circle())
+                    .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
+            }
+            .buttonStyle(.plain)
+            .help(note.isCollapsed ? "Expand" : "Collapse")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .offset(x: 10, y: -10)
+        }
     }
 
     private var toolbar: some View {
@@ -262,6 +311,51 @@ struct StickyNoteView: View {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+        }
+    }
+
+    private func handleTap() {
+        guard !isDragging, !isCanvasGestureActive else { return }
+
+        tapCount += 1
+        if tapCount == 1 {
+            tapTimer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: false) { _ in
+                DispatchQueue.main.async {
+                    if tapCount == 1 {
+                        selectNote()
+                    }
+                    tapCount = 0
+                    tapTimer = nil
+                }
+            }
+        } else if tapCount >= 2 {
+            tapTimer?.invalidate()
+            tapTimer = nil
+            tapCount = 0
+            startWriting()
+        }
+    }
+
+    private func selectNote() {
+        if !isSelected {
+            onExternalTap?()
+            vm.editingID = note.id
+        }
+    }
+
+    private func startWriting() {
+        if !isSelected {
+            onExternalTap?()
+        }
+        if note.isCollapsed {
+            vm.setCollapsed(note: note, collapsed: false, context: context)
+        }
+        vm.startWriting(noteID: note.id)
+    }
+
+    private func commitLocalTextIfNeeded() {
+        if localText != note.text {
+            vm.updateText(note: note, text: localText, context: context)
         }
     }
 

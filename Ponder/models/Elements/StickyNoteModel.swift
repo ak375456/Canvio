@@ -29,6 +29,7 @@ class StickyNoteModel: LayerableElement {
     var fontName: String
     var colorName: String
     var listStyleRaw: String
+    var isCollapsed: Bool = false
     var zIndex: Int = 0
     var groupID: UUID? = nil
     var updatedAt: Date = Date()
@@ -44,15 +45,16 @@ class StickyNoteModel: LayerableElement {
         self.text = ""
         self.x = x
         self.y = y
-        self.width = 220
-        self.height = 220
+        self.width = 190
+        self.height = 150
         self.rotation = 0
-        self.fontSize = 16
+        self.fontSize = 15
         self.isBold = false
         self.isItalic = false
         self.fontName = "system"
         self.colorName = "yellow"
         self.listStyleRaw = StickyListStyle.none.rawValue
+        self.isCollapsed = false
         self.zIndex = 0
         self.groupID = nil
         self.updatedAt = Date()

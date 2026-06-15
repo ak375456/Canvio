@@ -9,7 +9,14 @@ import Combine
 
 @MainActor
 class StickyNoteViewModel: ObservableObject {
-    @Published var editingID: UUID? = nil
+    @Published var editingID: UUID? = nil {
+        didSet {
+            if editingID != writingID {
+                writingID = nil
+            }
+        }
+    }
+    @Published var writingID: UUID? = nil
 
     func addNote(canvasID: UUID, center: CGPoint, offset: CGSize,
                  scale: CGFloat, zIndex: Int, context: ModelContext,
@@ -20,6 +27,7 @@ class StickyNoteViewModel: ObservableObject {
         note.zIndex = zIndex
         context.insert(note); try? context.save()
         editingID = note.id
+        writingID = note.id
 
         // Sync to Supabase
         Task { await StickyNoteSyncService.shared.upsert(note) }
@@ -80,7 +88,8 @@ class StickyNoteViewModel: ObservableObject {
         copy.text = note.text; copy.colorName = note.colorName
         copy.fontSize = note.fontSize; copy.isBold = note.isBold
         copy.isItalic = note.isItalic; copy.width = note.width
-        copy.height = note.height; copy.zIndex = zIndex
+        copy.height = note.height; copy.isCollapsed = note.isCollapsed
+        copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await StickyNoteSyncService.shared.upsert(copy) }
 
@@ -107,7 +116,7 @@ class StickyNoteViewModel: ObservableObject {
     func updateSize(note: StickyNoteModel, width: Double, height: Double,
                     context: ModelContext, undoManager: CanvasUndoManager? = nil) {
         let oldW = note.width, oldH = note.height
-        note.width = max(140, width); note.height = max(140, height)
+        note.width = max(96, width); note.height = max(72, height)
         note.updatedAt = Date(); try? context.save()
         Task { await StickyNoteSyncService.shared.upsert(note) }
 
@@ -134,17 +143,34 @@ class StickyNoteViewModel: ObservableObject {
         Task { await StickyNoteSyncService.shared.upsert(note) }
     }
 
+    func startWriting(noteID: UUID) {
+        editingID = noteID
+        writingID = noteID
+    }
+
+    func setCollapsed(note: StickyNoteModel, collapsed: Bool, context: ModelContext) {
+        note.isCollapsed = collapsed
+        note.updatedAt = Date()
+        if collapsed, writingID == note.id {
+            writingID = nil
+        }
+        try? context.save()
+        Task { await StickyNoteSyncService.shared.upsert(note) }
+    }
+
     func delete(note: StickyNoteModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: note.id, canvasID: note.canvasID, text: note.text,
                     x: note.x, y: note.y, width: note.width, height: note.height,
                     colorName: note.colorName, fontSize: note.fontSize,
-                    isBold: note.isBold, isItalic: note.isItalic, zIndex: note.zIndex)
+                    isBold: note.isBold, isItalic: note.isItalic,
+                    isCollapsed: note.isCollapsed, zIndex: note.zIndex)
 
         // Soft-delete on Supabase before removing locally
         Task { await StickyNoteSyncService.shared.delete(note) }
         context.delete(note); try? context.save()
         if editingID == snap.id { editingID = nil }
+        if writingID == snap.id { writingID = nil }
 
         undoManager?.push(CanvasAction(
             undo: {
@@ -152,7 +178,8 @@ class StickyNoteViewModel: ObservableObject {
                 el.id = snap.id; el.text = snap.text; el.colorName = snap.colorName
                 el.fontSize = snap.fontSize; el.isBold = snap.isBold
                 el.isItalic = snap.isItalic; el.width = snap.width
-                el.height = snap.height; el.zIndex = snap.zIndex
+                el.height = snap.height; el.isCollapsed = snap.isCollapsed
+                el.zIndex = snap.zIndex
                 context.insert(el); try? context.save()
                 Task { await StickyNoteSyncService.shared.upsert(el) }
             },
@@ -165,5 +192,8 @@ class StickyNoteViewModel: ObservableObject {
         ))
     }
 
-    func stopEditing() { editingID = nil }
+    func stopEditing() {
+        editingID = nil
+        writingID = nil
+    }
 }
