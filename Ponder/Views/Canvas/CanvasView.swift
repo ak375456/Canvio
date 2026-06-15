@@ -10,6 +10,12 @@ import VisionKit
 
 private let canvasViewportCoordinateSpace = "CanvasViewport"
 private let freeMediaElementLimit = 2
+private let freePageLimitPerCanvas = 2
+
+private enum PendingProPageAction {
+    case add(viewportSize: CGSize)
+    case newSameSize(pageID: UUID, viewportSize: CGSize)
+}
 
 private struct CanvasStackPickerItem: Identifiable {
     let id: UUID
@@ -111,8 +117,9 @@ struct CanvasView: View {
     @Query private var allYouTube: [YouTubeElementModel]
     @Query private var allDrawings: [DrawingElementModel]
     @Query private var allConnectors: [ConnectorModel]
-    @Query private var allSymbols: [SymbolElementModel]     // ← NEW
+    @Query private var allSymbols: [SymbolElementModel]
     @Query private var allElementGroups: [CanvasElementGroupModel]
+    @Query private var allCanvasPages: [CanvasPageModel]
 
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
@@ -120,6 +127,7 @@ struct CanvasView: View {
     @State private var showSettings = false
     @State private var showExportSheet = false
     @State private var showLayers = false
+    @State private var showPagesPanel = true
     @State private var showPDFReader = false
     @State private var showTableSizePicker = false
     @State private var showCSVExporter = false
@@ -127,6 +135,11 @@ struct CanvasView: View {
     @State private var csvExportFilename = "table"
     @State private var stackPicker: CanvasStackPickerState?
     @State private var newName: String = ""
+    @State private var selectedPageID: UUID?
+    @State private var pendingProPageAction: PendingProPageAction?
+    @State private var pageForRename: CanvasPageModel?
+    @State private var pageRenameText = ""
+    @State private var pagePendingDeletion: CanvasPageModel?
     @State private var lastMenuLocation: CGPoint? = nil
     @State private var openPDFElement: PDFElementModel? = nil
     @State private var showPDFImporter = false
@@ -150,28 +163,64 @@ struct CanvasView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    private var textElements: [TextElementModel]   { allTextElements.filter { $0.canvasID == canvas.id } }
-    private var stickyNotes: [StickyNoteModel]     { allStickyNotes.filter  { $0.canvasID == canvas.id } }
-    private var todoLists: [TodoListModel]          { allTodoLists.filter    { $0.canvasID == canvas.id } }
+    private var activeContentCanvasID: UUID {
+        activePage?.resolvedContentCanvasID ?? canvas.id
+    }
+
+    private var textElements: [TextElementModel]   { allTextElements.filter { $0.canvasID == activeContentCanvasID } }
+    private var stickyNotes: [StickyNoteModel]     { allStickyNotes.filter  { $0.canvasID == activeContentCanvasID } }
+    private var todoLists: [TodoListModel]          { allTodoLists.filter    { $0.canvasID == activeContentCanvasID } }
     private var todoTasks: [TodoTaskModel] {
         let ids = Set(todoLists.map { $0.id })
         return allTodoTasks.filter { ids.contains($0.listID) }
     }
-    private var shapes: [ShapeElementModel]         { allShapes.filter       { $0.canvasID == canvas.id } }
-    private var images: [ImageElementModel]         { allImages.filter       { $0.canvasID == canvas.id } }
-    private var pdfs: [PDFElementModel]             { allPDFs.filter         { $0.canvasID == canvas.id } }
-    private var tables: [TableElementModel]         { allTables.filter       { $0.canvasID == canvas.id } }
+    private var shapes: [ShapeElementModel]         { allShapes.filter       { $0.canvasID == activeContentCanvasID } }
+    private var images: [ImageElementModel]         { allImages.filter       { $0.canvasID == activeContentCanvasID } }
+    private var pdfs: [PDFElementModel]             { allPDFs.filter         { $0.canvasID == activeContentCanvasID } }
+    private var tables: [TableElementModel]         { allTables.filter       { $0.canvasID == activeContentCanvasID } }
     private var tableCells: [TableCellModel] {
         let ids = Set(tables.map { $0.id })
         return allTableCells.filter { ids.contains($0.tableID) }
     }
-    private var audioElements: [AudioElementModel] { allAudio.filter        { $0.canvasID == canvas.id } }
-    private var youtubeElements: [YouTubeElementModel] { allYouTube.filter  { $0.canvasID == canvas.id } }
-    private var drawings: [DrawingElementModel]    { allDrawings.filter     { $0.canvasID == canvas.id } }
-    private var connectors: [ConnectorModel]       { allConnectors.filter   { $0.canvasID == canvas.id } }
-    private var symbols: [SymbolElementModel]      { allSymbols.filter      { $0.canvasID == canvas.id } }  // ← NEW
+    private var audioElements: [AudioElementModel] { allAudio.filter        { $0.canvasID == activeContentCanvasID } }
+    private var youtubeElements: [YouTubeElementModel] { allYouTube.filter  { $0.canvasID == activeContentCanvasID } }
+    private var drawings: [DrawingElementModel]    { allDrawings.filter     { $0.canvasID == activeContentCanvasID } }
+    private var connectors: [ConnectorModel]       { allConnectors.filter   { $0.canvasID == activeContentCanvasID } }
+    private var symbols: [SymbolElementModel]      { allSymbols.filter      { $0.canvasID == activeContentCanvasID } }
     private var elementGroups: [CanvasElementGroupModel] {
-        allElementGroups.filter { $0.canvasID == canvas.id }
+        allElementGroups.filter { $0.canvasID == activeContentCanvasID }
+    }
+    private var canvasPages: [CanvasPageModel] {
+        allCanvasPages
+            .filter { $0.canvasID == canvas.id }
+            .sorted {
+                if $0.orderIndex == $1.orderIndex { return $0.createdAt < $1.createdAt }
+                return $0.orderIndex < $1.orderIndex
+            }
+    }
+
+    private var activePage: CanvasPageModel? {
+        if let selectedPageID,
+           let page = canvasPages.first(where: { $0.id == selectedPageID }) {
+            return page
+        }
+        return canvasPages.first
+    }
+
+    private var canCreateAdditionalPage: Bool {
+        pro.isPro || canvasPages.count < freePageLimitPerCanvas
+    }
+
+    private var areAdditionalPagesLocked: Bool {
+        !pro.isPro && canvasPages.count >= freePageLimitPerCanvas
+    }
+
+    private var canvasNavigationBoundary: CGSize {
+        canvas.boundarySize
+    }
+
+    private var elementInteractionBoundary: CGSize {
+        canvas.isInfinite ? .zero : canvasNavigationBoundary
     }
 
     private var allLayerableElements: [any LayerableElement] {
@@ -361,6 +410,14 @@ struct CanvasView: View {
     }
 
     var body: some View {
+        canvasAlerts(
+            canvasDocumentSheets(
+                canvasNavigation(canvasReader)
+            )
+        )
+    }
+
+    private var canvasReader: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
 
@@ -392,7 +449,7 @@ struct CanvasView: View {
                                 let canvasX = (pt.x - vm.offset.width)  / vm.scale
                                 let canvasY = (pt.y - vm.offset.height) / vm.scale
                                 let _ = vm.textVM.addInlineText(
-                                    canvasID: canvas.id,
+                                    canvasID: activeContentCanvasID,
                                     canvasPoint: CGPoint(x: canvasX, y: canvasY),
                                     zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                     context: context,
@@ -419,50 +476,7 @@ struct CanvasView: View {
 
                 if !canvas.isInfinite { pageBoundaryOverlay(geo: geo) }
 
-                ZStack {
-                    ConnectorOverlayView(
-                        connectors: connectors,
-                        boundsMap: boundsMap,
-                        vm: vm.connectorVM,
-                        undoManager: vm.undoManager,
-                        canvasID: canvas.id,
-                        canvasScale: vm.scale
-                    )
-                    .zIndex(-1)
-
-                    ConnectorAnchorDotsView(
-                        boundsMap:   boundsMap,
-                        vm:          vm.connectorVM,
-                        undoManager: vm.undoManager,
-                        canvasID:    canvas.id,
-                        canvasScale: vm.scale,
-                        connectors:  connectors
-                    )
-                    .zIndex(9999)
-
-                    let visibleElements = visibleSortedElements(viewportSize: geo.size)
-                    let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
-
-                    ForEach(visibleElements, id: \.id) { element in
-                        renderElement(element, nextZIndex: nextZIndex)
-                    }
-
-                    if !selection.isMultiSelectActive {
-                        groupSelectionLayer
-                    }
-                }
-                .scaleEffect(vm.scale, anchor: .topLeading)
-                .offset(vm.offset)
-                .simultaneousGesture(
-                    SpatialTapGesture(count: 1, coordinateSpace: .named(canvasViewportCoordinateSpace))
-                        .onEnded { tap in
-                            handleElementStackTap(at: tap.location, viewportSize: geo.size)
-                        }
-                )
-                #if os(macOS)
-                .gesture(canvasPanGesture(geo: geo))
-                .simultaneousGesture(canvasMagnifyGesture(geo: geo))
-                #endif
+                canvasElementsSurface(geo: geo)
 
                 #if os(iOS)
                 CanvasGestureBridge(
@@ -481,7 +495,7 @@ struct CanvasView: View {
                     onPanEnded: {
                         vm.handleDragEnd()
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
                         endCanvasGestureSuppression()
                     },
@@ -496,7 +510,7 @@ struct CanvasView: View {
                     onPinchEnded: {
                         vm.handleMagnificationEnd()
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
                         endCanvasGestureSuppression()
                     }
@@ -507,6 +521,10 @@ struct CanvasView: View {
 
                 if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive {
                     toolbarLayer(geo: geo)
+                }
+
+                if !vm.showCanvasDrawingOverlay {
+                    pagesPanelLayer(geo: geo)
                 }
 
                 if vm.connectorVM.isConnectModeActive {
@@ -526,23 +544,11 @@ struct CanvasView: View {
                 }
 
                 if let pos = vm.addMenuPosition {
-                    addMenuOverlay(at: pos, geo: geo)
+                    addMenuOverlay(at: pos)
                 }
 
                 if vm.showCanvasDrawingOverlay {
-                    CanvasDrawingOverlay(
-                        isActive:     $vm.showCanvasDrawingOverlay,
-                        isDrawingInputActive: $isCanvasDrawingInputActive,
-                        startScale:   drawingStartScale,
-                        startOffset:  drawingStartOffset,
-                        liveScale:    $vm.scale,
-                        liveOffset:   $vm.offset,
-                        initialDrawing: canvasDrawingInitialDrawing,
-                        smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled
-                    ) { pkDrawing, effectiveScale, effectiveOffset in
-                        saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
-                    }
-                    .zIndex(200).transition(.opacity)
+                    canvasDrawingOverlayLayer
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -570,13 +576,13 @@ struct CanvasView: View {
                         vm.offset = CGSize(width: newW, height: newH)
                         vm.scale = newScale; vm.lastScale = newScale; vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
                     } else {
                         vm.offset = CGSize(width: vm.offset.width + deltaX, height: vm.offset.height + deltaY)
                         vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
-                            vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
                     }
                 }
@@ -585,9 +591,14 @@ struct CanvasView: View {
             )
             #endif
             .onAppear {
-                if !canvas.isInfinite {
+                let initialPage = ensureDefaultPage()
+                if selectedPageID == nil {
+                    selectedPageID = (initialPage ?? canvasPages.first)?.id
+                }
+                if !canvas.isInfinite,
+                   let page = initialPage ?? activePage {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        vm.centerPage(boundary: canvas.boundarySize, viewportSize: geo.size)
+                        focusPage(page, viewportSize: geo.size, animated: false)
                     }
                 }
                 pullFromCloud()
@@ -605,6 +616,10 @@ struct CanvasView: View {
             .onDisappear { generateThumbnail() }
             .onChange(of: settings.overlapStackPickerEnabled) { _, isEnabled in
                 if !isEnabled { stackPicker = nil }
+            }
+            .onChange(of: selectedPageID) { _, _ in
+                dismissEverything()
+                pullCurrentPageContent()
             }
             .onReceive(NotificationCenter.default.publisher(for: .ocrCreatedTextElement)) { notification in
                 guard let textID = notification.object as? UUID else { return }
@@ -647,7 +662,7 @@ struct CanvasView: View {
             .sheet(isPresented: $vm.showTextSheet) {
                 AddTextSheet(isPresented: $vm.showTextSheet) { style in
                     vm.textVM.addText(
-                        canvasID: canvas.id, style: style,
+                        canvasID: activeContentCanvasID, style: style,
                         center: lastMenuLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2),
                         offset: vm.offset, scale: vm.scale,
                         zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -659,7 +674,7 @@ struct CanvasView: View {
             .sheet(isPresented: $vm.showShapePicker) {
                 ShapePickerSheet { kind in
                     let point = vm.pendingShapeLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
-                    vm.shapeVM.addShape(canvasID: canvas.id, kind: kind, center: point,
+                    vm.shapeVM.addShape(canvasID: activeContentCanvasID, kind: kind, center: point,
                                        offset: vm.offset, scale: vm.scale,
                                        zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                        context: context, undoManager: vm.undoManager)
@@ -672,7 +687,7 @@ struct CanvasView: View {
                 SymbolPickerSheet { symbolName, colorName, fontSize in
                     let center = vm.pendingSymbolLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
                     vm.symbolVM.addSymbol(
-                        canvasID: canvas.id, symbolName: symbolName,
+                        canvasID: activeContentCanvasID, symbolName: symbolName,
                         colorName: colorName, fontSize: fontSize,
                         center: center, offset: vm.offset, scale: vm.scale,
                         zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -685,7 +700,7 @@ struct CanvasView: View {
             .sheet(isPresented: $showTableSizePicker) {
                 TableSizePickerSheet { rows, cols in
                     let point = vm.pendingTableLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
-                    vm.tableVM.addTable(canvasID: canvas.id, rows: rows, cols: cols, center: point,
+                    vm.tableVM.addTable(canvasID: activeContentCanvasID, rows: rows, cols: cols, center: point,
                                        offset: vm.offset, scale: vm.scale,
                                        zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                        context: context, undoManager: vm.undoManager)
@@ -711,7 +726,14 @@ struct CanvasView: View {
                 exportSheet(viewportSize: geo.size)
             }
             .sheet(isPresented: $showPaywall) {
-                PaywallSheet()
+                PaywallSheet {
+                    completePendingProPageAction()
+                }
+                .onDisappear {
+                    if !pro.isPro {
+                        pendingProPageAction = nil
+                    }
+                }
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(24)
@@ -732,7 +754,7 @@ struct CanvasView: View {
                         let result = try AudioStorageService.saveRecording(from: tempURL)
                         let center = vm.pendingAudioLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
                         vm.audioVM.addAudio(
-                            canvasID: canvas.id,
+                            canvasID: activeContentCanvasID,
                             audioFileName: result.fileName,
                             originalName: "Recording \(Date().formatted(.dateTime.hour().minute()))",
                             duration: result.duration, center: center,
@@ -748,7 +770,7 @@ struct CanvasView: View {
                 AddYouTubeLinkSheet(isPresented: $vm.showYouTubeLinkSheet) { urlString, title in
                     let center = vm.pendingYouTubeLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
                     let added = vm.youtubeVM.addVideo(
-                        canvasID: canvas.id,
+                        canvasID: activeContentCanvasID,
                         urlString: urlString,
                         title: title,
                         center: center,
@@ -777,7 +799,7 @@ struct CanvasView: View {
                 CameraPickerView { imageData in
                     let center = vm.pendingImageLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
                     vm.imageVM.addImage(
-                        canvasID: canvas.id, imageData: imageData, center: center,
+                        canvasID: activeContentCanvasID, imageData: imageData, center: center,
                         offset: vm.offset, scale: vm.scale,
                         zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                         context: context, undoManager: vm.undoManager
@@ -829,7 +851,7 @@ struct CanvasView: View {
                 Task {
                     if let data = try? await item.loadTransferable(type: Data.self) {
                         let center = vm.pendingImageLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
-                        vm.imageVM.addImage(canvasID: canvas.id, imageData: data, center: center,
+                        vm.imageVM.addImage(canvasID: activeContentCanvasID, imageData: data, center: center,
                                            offset: vm.offset, scale: vm.scale,
                                            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                            context: context, undoManager: vm.undoManager)
@@ -846,123 +868,580 @@ struct CanvasView: View {
             .fileImporter(isPresented: $vm.showAudioImporter,
                          allowedContentTypes: [UTType.mp3, UTType.mpeg4Audio, UTType.aiff, UTType.wav],
                          allowsMultipleSelection: false) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    let accessing = url.startAccessingSecurityScopedResource()
-                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                    do {
-                        let imported = try AudioStorageService.importAudio(from: url)
-                        let center = vm.pendingAudioLocation ?? CGPoint(x: 300, y: 400)
-                        vm.audioVM.addAudio(canvasID: canvas.id, audioFileName: imported.fileName,
-                                           originalName: imported.originalName, duration: imported.duration,
-                                           center: center, offset: vm.offset, scale: vm.scale,
-                                           zIndex: LayersViewModel.nextZ(among: allLayerableElements),
-                                           context: context, undoManager: vm.undoManager)
-                        vm.pendingAudioLocation = nil
-                    } catch { print("⚠️ Audio import error: \(error)") }
-                case .failure(let error): print("⚠️ Audio file error: \(error)")
-                }
+                handleAudioImportResult(result)
             }
         }
-        .navigationTitle("")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
-        .background(InteractivePopGestureDisabler(isDisabled: true))
-        #endif
-        .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 44, height: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back")
-            }
-            #endif
+    }
 
-            ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 8) {
-                    Button { vm.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }
-                        .disabled(!vm.undoManager.canUndo)
-                    Button { vm.undoManager.redo() } label: { Image(systemName: "arrow.uturn.forward") }
-                        .disabled(!vm.undoManager.canRedo)
-                    Button {
-                        if selection.isMultiSelectActive {
-                            withAnimation(.spring(duration: 0.3)) { selection.exit() }
-                            dismissEverything()
-                        } else {
-                            dismissEverything()
-                            withAnimation(.spring(duration: 0.3)) { selection.enterMultiSelect() }
-                        }
-                    } label: {
-                        Image(systemName: selection.isMultiSelectActive
-                              ? "checkmark.circle.fill" : "checkmark.circle")
-                            .foregroundStyle(selection.isMultiSelectActive ? .blue : .primary)
+    @ViewBuilder
+    private func canvasElementsSurface(geo: GeometryProxy) -> some View {
+        ZStack {
+            connectorOverlayLayer
+            connectorAnchorLayer
+            visibleElementsLayer(viewportSize: geo.size)
+        }
+        .scaleEffect(vm.scale, anchor: .topLeading)
+        .offset(vm.offset)
+        .simultaneousGesture(
+            SpatialTapGesture(count: 1, coordinateSpace: .named(canvasViewportCoordinateSpace))
+                .onEnded { tap in
+                    handleElementStackTap(at: tap.location, viewportSize: geo.size)
+                }
+        )
+        #if os(macOS)
+        .gesture(canvasPanGesture(geo: geo))
+        .simultaneousGesture(canvasMagnifyGesture(geo: geo))
+        #endif
+    }
+
+    private var connectorOverlayLayer: some View {
+        ConnectorOverlayView(
+            connectors: connectors,
+            boundsMap: boundsMap,
+            vm: vm.connectorVM,
+            undoManager: vm.undoManager,
+            canvasID: activeContentCanvasID,
+            canvasScale: vm.scale
+        )
+        .zIndex(-1)
+    }
+
+    private var connectorAnchorLayer: some View {
+        ConnectorAnchorDotsView(
+            boundsMap: boundsMap,
+            vm: vm.connectorVM,
+            undoManager: vm.undoManager,
+            canvasID: activeContentCanvasID,
+            canvasScale: vm.scale,
+            connectors: connectors
+        )
+        .zIndex(9999)
+    }
+
+    @ViewBuilder
+    private var canvasDrawingOverlayLayer: some View {
+        #if os(iOS)
+        CanvasDrawingOverlay(
+            isActive: $vm.showCanvasDrawingOverlay,
+            isDrawingInputActive: $isCanvasDrawingInputActive,
+            startScale: drawingStartScale,
+            startOffset: drawingStartOffset,
+            liveScale: $vm.scale,
+            liveOffset: $vm.offset,
+            initialDrawing: canvasDrawingInitialDrawing,
+            smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled
+        ) { pkDrawing, effectiveScale, effectiveOffset in
+            saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
+        }
+        .zIndex(200)
+        .transition(.opacity)
+        #else
+        EmptyView()
+        #endif
+    }
+
+    @ViewBuilder
+    private func visibleElementsLayer(viewportSize: CGSize) -> some View {
+        let visibleElements = visibleSortedElements(viewportSize: viewportSize)
+        let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
+
+        ForEach(visibleElements, id: \.id) { element in
+            renderElement(element, nextZIndex: nextZIndex)
+        }
+
+        if !selection.isMultiSelectActive {
+            groupSelectionLayer
+        }
+    }
+
+    private func canvasNavigation<Content: View>(_ content: Content) -> some View {
+        content
+            .navigationTitle("")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
+            .background(InteractivePopGestureDisabler(isDisabled: true))
+            #endif
+            .toolbar { canvasToolbar }
+            .ignoresSafeArea(edges: .bottom)
+    }
+
+    @ToolbarContentBuilder
+    private var canvasToolbar: some ToolbarContent {
+        #if os(iOS)
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 44, height: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+        }
+        #endif
+
+        ToolbarItem(placement: .primaryAction) {
+            HStack(spacing: 8) {
+                Button { vm.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(!vm.undoManager.canUndo)
+                Button { vm.undoManager.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                    .disabled(!vm.undoManager.canRedo)
+                Button {
+                    if selection.isMultiSelectActive {
+                        withAnimation(.spring(duration: 0.3)) { selection.exit() }
+                        dismissEverything()
+                    } else {
+                        dismissEverything()
+                        withAnimation(.spring(duration: 0.3)) { selection.enterMultiSelect() }
                     }
-                    Button { showLayers = true } label: { Image(systemName: "square.3.layers.3d") }
-                    Button { showExportSheet = true } label: { Image(systemName: "square.and.arrow.up") }
-                        .accessibilityLabel("Export canvas")
-                    Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
-                    Menu {
-                        Button { newName = canvas.name; showRenameAlert = true } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        Divider()
-                        Button(role: .destructive) { showDeleteAlert = true } label: {
-                            Label("Delete Canvas", systemImage: "trash")
-                        }
-                    } label: { Image(systemName: "ellipsis.circle") }
+                } label: {
+                    Image(systemName: selection.isMultiSelectActive
+                          ? "checkmark.circle.fill" : "checkmark.circle")
+                        .foregroundStyle(selection.isMultiSelectActive ? .blue : .primary)
+                }
+                Button { showLayers = true } label: { Image(systemName: "square.3.layers.3d") }
+                Button { showExportSheet = true } label: { Image(systemName: "square.and.arrow.up") }
+                    .accessibilityLabel("Export canvas")
+                Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+                Menu {
+                    Button { newName = canvas.name; showRenameAlert = true } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    Divider()
+                    Button(role: .destructive) { showDeleteAlert = true } label: {
+                        Label("Delete Canvas", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .ignoresSafeArea(edges: .bottom)
-        .sheet(isPresented: $showPDFReader, onDismiss: { openPDFElement = nil }) {
-            if let pdf = openPDFElement {
-                PDFReaderSheet(pdfFileName: pdf.pdfFileName, originalName: pdf.originalName, pageCount: pdf.pageCount)
+    }
+
+    private func canvasDocumentSheets<Content: View>(_ content: Content) -> some View {
+        content
+            .sheet(isPresented: $showPDFReader, onDismiss: { openPDFElement = nil }) {
+                if let pdf = openPDFElement {
+                    PDFReaderSheet(
+                        pdfFileName: pdf.pdfFileName,
+                        originalName: pdf.originalName,
+                        pageCount: pdf.pageCount
+                    )
+                }
             }
-        }
-        .sheet(isPresented: $showPDFImporter) {
-            #if canImport(UIKit)
-            PDFDocumentPicker { url in
-                let accessing = url.startAccessingSecurityScopedResource()
-                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-                let center = vm.pendingPDFLocation ?? CGPoint(x: 300, y: 400)
-                vm.pdfVM.addPDF(canvasID: canvas.id, sourceURL: url, center: center,
-                               offset: vm.offset, scale: vm.scale,
-                               zIndex: LayersViewModel.nextZ(among: allLayerableElements),
-                               context: context, undoManager: vm.undoManager)
-                vm.pendingPDFLocation = nil; showPDFImporter = false
+            .sheet(isPresented: $showPDFImporter) {
+                pdfImporterSheet
             }
-            #endif
-        }
-        .sheet(isPresented: $showCSVExporter) {
-            CSVShareSheet(csvString: csvExportString, filename: csvExportFilename)
-                .presentationDetents([.medium]).presentationDragIndicator(.visible).presentationCornerRadius(24)
-        }
-        .alert("Delete Canvas", isPresented: $showDeleteAlert) {
-            Button("Delete", role: .destructive) { onDelete(); dismiss() }
-            Button("Cancel", role: .cancel) { }
-        } message: { Text("\(canvas.name) will be permanently deleted.") }
-        .alert("Rename Canvas", isPresented: $showRenameAlert) {
-            TextField("Canvas name", text: $newName).autocorrectionDisabled()
-            Button("Rename") {
-                let trimmed = newName.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty { onRename(trimmed) }
+            .sheet(isPresented: $showCSVExporter) {
+                CSVShareSheet(csvString: csvExportString, filename: csvExportFilename)
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(24)
             }
-            Button("Cancel", role: .cancel) { }
-        }
-        .alert("OCR Scan", isPresented: Binding(
+    }
+
+    private func canvasAlerts<Content: View>(_ content: Content) -> some View {
+        content
+            .alert("Delete Canvas", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) { onDelete(); dismiss() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("\(canvas.name) will be permanently deleted.")
+            }
+            .alert("Rename Canvas", isPresented: $showRenameAlert) {
+                TextField("Canvas name", text: $newName).autocorrectionDisabled()
+                Button("Rename") {
+                    let trimmed = newName.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty { onRename(trimmed) }
+                }
+                Button("Cancel", role: .cancel) { }
+            }
+            .alert("Rename Page", isPresented: renamePageAlertBinding) {
+                TextField("Page name", text: $pageRenameText).autocorrectionDisabled()
+                Button("Rename") { commitPageRename() }
+                Button("Cancel", role: .cancel) { pageForRename = nil }
+            }
+            .alert("Delete Page", isPresented: deletePageAlertBinding) {
+                Button("Delete", role: .destructive) {
+                    if let page = pagePendingDeletion { deletePage(page) }
+                    pagePendingDeletion = nil
+                }
+                Button("Cancel", role: .cancel) { pagePendingDeletion = nil }
+            } message: {
+                Text("This page and its content will be deleted.")
+            }
+            .alert("OCR Scan", isPresented: ocrScanAlertBinding) {
+                Button("OK", role: .cancel) { ocrScanAlertMessage = nil }
+            } message: {
+                Text(ocrScanAlertMessage ?? "")
+            }
+    }
+
+    private var renamePageAlertBinding: Binding<Bool> {
+        Binding(
+            get: { pageForRename != nil },
+            set: { isPresented in
+                if !isPresented { pageForRename = nil }
+            }
+        )
+    }
+
+    private var deletePageAlertBinding: Binding<Bool> {
+        Binding(
+            get: { pagePendingDeletion != nil },
+            set: { isPresented in
+                if !isPresented { pagePendingDeletion = nil }
+            }
+        )
+    }
+
+    private var ocrScanAlertBinding: Binding<Bool> {
+        Binding(
             get: { ocrScanAlertMessage != nil },
-            set: { if !$0 { ocrScanAlertMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) { ocrScanAlertMessage = nil }
-        } message: {
-            Text(ocrScanAlertMessage ?? "")
+            set: { isPresented in
+                if !isPresented { ocrScanAlertMessage = nil }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var pdfImporterSheet: some View {
+        #if canImport(UIKit)
+        PDFDocumentPicker { url in
+            handlePDFImportURL(url)
+        }
+        #else
+        EmptyView()
+        #endif
+    }
+
+    private func handlePDFImportURL(_ url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
+        let center = vm.pendingPDFLocation ?? CGPoint(x: 300, y: 400)
+        vm.pdfVM.addPDF(
+            canvasID: activeContentCanvasID,
+            sourceURL: url,
+            center: center,
+            offset: vm.offset,
+            scale: vm.scale,
+            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            context: context,
+            undoManager: vm.undoManager
+        )
+        vm.pendingPDFLocation = nil
+        showPDFImporter = false
+    }
+
+    private func handleAudioImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let imported = try AudioStorageService.importAudio(from: url)
+                let center = vm.pendingAudioLocation ?? CGPoint(x: 300, y: 400)
+                vm.audioVM.addAudio(
+                    canvasID: activeContentCanvasID,
+                    audioFileName: imported.fileName,
+                    originalName: imported.originalName,
+                    duration: imported.duration,
+                    center: center,
+                    offset: vm.offset,
+                    scale: vm.scale,
+                    zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+                    context: context,
+                    undoManager: vm.undoManager
+                )
+                vm.pendingAudioLocation = nil
+            } catch {
+                print("⚠️ Audio import error: \(error)")
+            }
+        case .failure(let error):
+            print("⚠️ Audio file error: \(error)")
+        }
+    }
+
+    @ViewBuilder
+    private func pagesPanelLayer(geo: GeometryProxy) -> some View {
+        CanvasPagesPanel(
+            pages: canvasPages,
+            activePageID: activePage?.id,
+            viewportSize: geo.size,
+            isAddLocked: areAdditionalPagesLocked,
+            isExpanded: $showPagesPanel,
+            onSelect: { page in
+                selectPage(page, viewportSize: geo.size)
+            },
+            onAdd: { addPage(viewportSize: geo.size) },
+            onRename: { page in
+                pageRenameText = page.name
+                pageForRename = page
+            },
+            onDuplicate: { duplicatePage($0, viewportSize: geo.size) },
+            onDelete: { pagePendingDeletion = $0 }
+        )
+    }
+
+    @discardableResult
+    private func ensureDefaultPage() -> CanvasPageModel? {
+        normalizePageContentIDs()
+
+        if let firstPage = canvasPages.first {
+            return firstPage
+        }
+
+        let size = canvas.defaultPageSize
+        let page = CanvasPageModel(
+            canvasID: canvas.id,
+            contentCanvasID: canvas.id,
+            name: "Page 1",
+            width: size.width,
+            height: size.height
+        )
+        context.insert(page)
+        try? context.save()
+        Task { await CanvasPageSyncService.shared.upsert(page) }
+        return page
+    }
+
+    private func normalizePageContentIDs() {
+        guard !canvasPages.isEmpty else { return }
+
+        var changedPages: [CanvasPageModel] = []
+        for (index, page) in canvasPages.enumerated() {
+            let desiredID: UUID
+            if index == 0 {
+                desiredID = canvas.id
+            } else if page.contentCanvasID == nil || page.resolvedContentCanvasID == canvas.id {
+                desiredID = UUID()
+            } else {
+                continue
+            }
+
+            page.contentCanvasID = desiredID
+            page.updatedAt = Date()
+            changedPages.append(page)
+        }
+
+        guard !changedPages.isEmpty else { return }
+        try? context.save()
+        Task {
+            for page in changedPages {
+                await CanvasPageSyncService.shared.upsert(page)
+            }
+        }
+    }
+
+    private func addPage(viewportSize: CGSize) {
+        guard canCreateAdditionalPage else {
+            pendingProPageAction = .add(viewportSize: viewportSize)
+            showPaywall = true
+            return
+        }
+
+        createPage(viewportSize: viewportSize)
+    }
+
+    private func createPage(viewportSize: CGSize) {
+        generateThumbnail()
+        let size = canvas.defaultPageSize
+        let nextIndex = (canvasPages.map(\.orderIndex).max() ?? -1) + 1
+
+        let page = CanvasPageModel(
+            canvasID: canvas.id,
+            contentCanvasID: UUID(),
+            name: "Page \(nextIndex + 1)",
+            width: size.width,
+            height: size.height,
+            orderIndex: nextIndex
+        )
+
+        context.insert(page)
+        try? context.save()
+        selectedPageID = page.id
+        Task { await CanvasPageSyncService.shared.upsert(page) }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            focusPage(page, viewportSize: viewportSize, animated: false)
+        }
+    }
+
+    private func duplicatePage(_ page: CanvasPageModel, viewportSize: CGSize) {
+        guard canCreateAdditionalPage else {
+            pendingProPageAction = .newSameSize(pageID: page.id, viewportSize: viewportSize)
+            showPaywall = true
+            return
+        }
+
+        createPage(sameSizeAs: page, viewportSize: viewportSize)
+    }
+
+    private func createPage(sameSizeAs page: CanvasPageModel, viewportSize: CGSize) {
+        generateThumbnail()
+        let nextIndex = (canvasPages.map(\.orderIndex).max() ?? -1) + 1
+        let duplicate = CanvasPageModel(
+            canvasID: canvas.id,
+            contentCanvasID: UUID(),
+            name: "Page \(nextIndex + 1)",
+            width: page.width,
+            height: page.height,
+            orderIndex: nextIndex
+        )
+
+        context.insert(duplicate)
+        try? context.save()
+        selectedPageID = duplicate.id
+        Task { await CanvasPageSyncService.shared.upsert(duplicate) }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            focusPage(duplicate, viewportSize: viewportSize, animated: false)
+        }
+    }
+
+    private func completePendingProPageAction() {
+        guard let action = pendingProPageAction else { return }
+        pendingProPageAction = nil
+
+        switch action {
+        case .add(let viewportSize):
+            createPage(viewportSize: viewportSize)
+        case .newSameSize(let pageID, let viewportSize):
+            if let page = canvasPages.first(where: { $0.id == pageID }) {
+                createPage(sameSizeAs: page, viewportSize: viewportSize)
+            } else {
+                createPage(viewportSize: viewportSize)
+            }
+        }
+    }
+
+    private func deletePage(_ page: CanvasPageModel) {
+        guard canvasPages.count > 1 else { return }
+        let remainingPages = canvasPages.filter { $0.id != page.id }
+        deletePageContent(for: page.resolvedContentCanvasID)
+        Task { await CanvasPageSyncService.shared.delete(page) }
+        context.delete(page)
+        try? context.save()
+
+        if selectedPageID == page.id {
+            selectedPageID = remainingPages.first?.id
+        }
+    }
+
+    private func deletePageContent(for contentCanvasID: UUID) {
+        let groups = allElementGroups.filter { $0.canvasID == contentCanvasID }
+        let texts = allTextElements.filter { $0.canvasID == contentCanvasID }
+        let stickies = allStickyNotes.filter { $0.canvasID == contentCanvasID }
+        let todos = allTodoLists.filter { $0.canvasID == contentCanvasID }
+        let todoIDs = Set(todos.map(\.id))
+        let tasks = allTodoTasks.filter { todoIDs.contains($0.listID) }
+        let shapes = allShapes.filter { $0.canvasID == contentCanvasID }
+        let images = allImages.filter { $0.canvasID == contentCanvasID }
+        let pdfs = allPDFs.filter { $0.canvasID == contentCanvasID }
+        let tables = allTables.filter { $0.canvasID == contentCanvasID }
+        let tableIDs = Set(tables.map(\.id))
+        let cells = allTableCells.filter { tableIDs.contains($0.tableID) }
+        let audio = allAudio.filter { $0.canvasID == contentCanvasID }
+        let youtube = allYouTube.filter { $0.canvasID == contentCanvasID }
+        let drawings = allDrawings.filter { $0.canvasID == contentCanvasID }
+        let connectors = allConnectors.filter { $0.canvasID == contentCanvasID }
+        let symbols = allSymbols.filter { $0.canvasID == contentCanvasID }
+
+        Task {
+            for connector in connectors { await ConnectorSyncService.shared.delete(connector) }
+            for text in texts { await TextSyncService.shared.delete(text) }
+            for sticky in stickies { await StickyNoteSyncService.shared.delete(sticky) }
+            for todo in todos {
+                let listTasks = tasks.filter { $0.listID == todo.id }
+                await TodoSyncService.shared.deleteList(todo, tasks: listTasks)
+            }
+            for shape in shapes { await ShapeSyncService.shared.delete(shape) }
+            for image in images { await ImageSyncService.shared.delete(image) }
+            for pdf in pdfs { await PDFSyncService.shared.delete(pdf) }
+            for table in tables {
+                let tableCells = cells.filter { $0.tableID == table.id }
+                await TableSyncService.shared.deleteTable(table, cells: tableCells)
+            }
+            for item in audio { await AudioSyncService.shared.delete(item) }
+            for item in youtube { await YouTubeSyncService.shared.delete(item) }
+            for drawing in drawings { await DrawingSyncService.shared.delete(drawing) }
+            for symbol in symbols { await SymbolSyncService.shared.delete(symbol) }
+            for group in groups { await ElementGroupSyncService.shared.delete(group) }
+        }
+
+        connectors.forEach { context.delete($0) }
+        texts.forEach { context.delete($0) }
+        stickies.forEach { context.delete($0) }
+        tasks.forEach { context.delete($0) }
+        todos.forEach { context.delete($0) }
+        shapes.forEach { context.delete($0) }
+        images.forEach { context.delete($0) }
+        pdfs.forEach { context.delete($0) }
+        cells.forEach { context.delete($0) }
+        tables.forEach { context.delete($0) }
+        audio.forEach { context.delete($0) }
+        youtube.forEach { context.delete($0) }
+        drawings.forEach { context.delete($0) }
+        symbols.forEach { context.delete($0) }
+        groups.forEach { context.delete($0) }
+    }
+
+    private func selectPage(_ page: CanvasPageModel, viewportSize: CGSize) {
+        guard page.id != selectedPageID else { return }
+        generateThumbnail()
+        selectedPageID = page.id
+        focusPage(page, viewportSize: viewportSize, animated: false)
+    }
+
+    private func commitPageRename() {
+        guard let page = pageForRename else { return }
+        let trimmed = pageRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            pageForRename = nil
+            return
+        }
+
+        page.name = trimmed
+        page.updatedAt = Date()
+        try? context.save()
+        Task { await CanvasPageSyncService.shared.upsert(page) }
+        pageForRename = nil
+    }
+
+    private func focusPage(_ page: CanvasPageModel, viewportSize: CGSize, animated: Bool = true) {
+        guard viewportSize.width > 0,
+              viewportSize.height > 0,
+              page.width > 0,
+              page.height > 0 else { return }
+
+        let padding: CGFloat = viewportSize.width < 430 ? 42 : 72
+        let availableWidth = max(80, viewportSize.width - padding * 2)
+        let availableHeight = max(80, viewportSize.height - padding * 2)
+        let scaleX = availableWidth / CGFloat(page.width)
+        let scaleY = availableHeight / CGFloat(page.height)
+        let nextScale = max(0.15, min(scaleX, scaleY, 1.1))
+        let center = page.center
+        let nextOffset = CGSize(
+            width: viewportSize.width / 2 - CGFloat(center.x) * nextScale,
+            height: viewportSize.height / 2 - CGFloat(center.y) * nextScale
+        )
+
+        let applyFocus = {
+            vm.scale = nextScale
+            vm.lastScale = nextScale
+            vm.offset = nextOffset
+            vm.lastOffset = nextOffset
+        }
+
+        if animated {
+            withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                applyFocus()
+            }
+        } else {
+            applyFocus()
         }
     }
 
@@ -1184,14 +1663,14 @@ struct CanvasView: View {
     }
 
     @ViewBuilder
-    private func addMenuOverlay(at position: CGPoint, geo: GeometryProxy) -> some View {
+    private func addMenuOverlay(at position: CGPoint) -> some View {
         Color.black.opacity(0.001)
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture { vm.hideAddMenu() }
 
         AddElementMenu(position: position, lockedTools: lockedCanvasTools) { tool in
-            handleToolSelection(tool, at: position, geo: geo)
+            handleToolSelection(tool, at: position)
         } onDismiss: {
             vm.hideAddMenu()
         }
@@ -1433,7 +1912,7 @@ struct CanvasView: View {
         into items: inout [CanvasStackPickerItem],
         bounds: (Element) -> ElementBounds
     ) {
-        for element in elements where element.canvasID == canvas.id {
+        for element in elements where element.canvasID == activeContentCanvasID {
             guard bounds(element).contains(canvasPoint: canvasPoint, hitSlop: hitSlop) else { continue }
             items.append(CanvasStackPickerItem(
                 id: element.id,
@@ -1604,7 +2083,7 @@ struct CanvasView: View {
         guard elements.count >= 2 else { return }
 
         let group = CanvasElementGroupModel(
-            canvasID: canvas.id,
+            canvasID: activeContentCanvasID,
             name: "Group \(elementGroups.count + 1)"
         )
         context.insert(group)
@@ -1692,7 +2171,7 @@ struct CanvasView: View {
         guard !members.isEmpty else { return }
 
         let group = CanvasElementGroupModel(
-            canvasID: canvas.id,
+            canvasID: activeContentCanvasID,
             name: "Group \(elementGroups.count + 1)"
         )
         context.insert(group)
@@ -1800,7 +2279,7 @@ struct CanvasView: View {
             .onEnded { _ in
                 vm.handleDragEnd()
                 if !canvas.isInfinite {
-                    vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                    vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                 }
                 endCanvasGestureSuppression()
             }
@@ -1817,7 +2296,7 @@ struct CanvasView: View {
             .onEnded { _ in
                 vm.handleMagnificationEnd()
                 if !canvas.isInfinite {
-                    vm.clampOffset(to: canvas.boundarySize, viewportSize: geo.size, scale: vm.scale)
+                    vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                 }
                 endCanvasGestureSuppression()
             }
@@ -1949,7 +2428,7 @@ struct CanvasView: View {
             Task { await DrawingSyncService.shared.upsert(element) }
         } else {
             let element = DrawingElementModel(
-                canvasID: canvas.id,
+                canvasID: activeContentCanvasID,
                 x: Double(canvasX),
                 y: Double(canvasY),
                 width: Double(elemW),
@@ -2008,7 +2487,7 @@ struct CanvasView: View {
         }
 
         _ = vm.textVM.addRecognizedHandwritingText(
-            canvasID: canvas.id,
+            canvasID: activeContentCanvasID,
             style: style,
             canvasPoint: canvasPoint,
             zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -2099,32 +2578,65 @@ struct CanvasView: View {
 
     private func pullFromCloud() {
         Task {
-            await ElementGroupSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await TextSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await StickyNoteSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ShapeSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ConnectorSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await DrawingSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await TodoSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await TableSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await YouTubeSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: context)  // ← NEW
+            await CanvasPageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            normalizePageContentIDs()
+            await pullContent(canvasID: activeContentCanvasID)
         }
     }
 
+    private func pullCurrentPageContent() {
+        Task {
+            await pullContent(canvasID: activeContentCanvasID)
+        }
+    }
+
+    private func pullContent(canvasID: UUID) async {
+        await ElementGroupSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TextSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await StickyNoteSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ShapeSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ConnectorSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await DrawingSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TodoSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TableSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ImageSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await PDFSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await AudioSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await YouTubeSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await SymbolSyncService.shared.pullAll(canvasID: canvasID, context: context)
+    }
+
     private func generateThumbnail() {
-        CanvasThumbnailRenderer.generate(
-            canvas: canvas, textElements: textElements,
-            stickyNotes: stickyNotes, todoLists: todoLists,
-            shapes: shapes, images: images, drawings: drawings,
-            gridStyle: settings.effectiveGridStyle,
-            backgroundMode: settings.canvasBackgroundMode,
-            backgroundPalette: settings.canvasBackgroundPalette,
-            context: context
-        )
+        if let activePage {
+            CanvasThumbnailRenderer.generatePageThumbnail(
+                page: activePage,
+                canvas: canvas,
+                textElements: textElements,
+                stickyNotes: stickyNotes,
+                todoLists: todoLists,
+                shapes: shapes,
+                images: images,
+                drawings: drawings,
+                gridStyle: settings.effectiveGridStyle,
+                backgroundMode: settings.canvasBackgroundMode,
+                backgroundPalette: settings.canvasBackgroundPalette,
+                context: context
+            )
+        } else {
+            CanvasThumbnailRenderer.generate(
+                canvas: canvas,
+                textElements: textElements,
+                stickyNotes: stickyNotes,
+                todoLists: todoLists,
+                shapes: shapes,
+                images: images,
+                drawings: drawings,
+                gridStyle: settings.effectiveGridStyle,
+                backgroundMode: settings.canvasBackgroundMode,
+                backgroundPalette: settings.canvasBackgroundPalette,
+                context: context
+            )
+        }
     }
 
     @ViewBuilder
@@ -2224,7 +2736,7 @@ struct CanvasView: View {
 
     @ViewBuilder
     private func renderElement(_ element: any LayerableElement, nextZIndex: Int) -> some View {
-        let boundary       = canvas.boundarySize
+        let boundary       = elementInteractionBoundary
         let multiSelect    = selection.isMultiSelectActive
         let isElemSelected = isSelectedInMultiSelect(element)
         let childInteractionLocked = isCanvasGestureActive || element.groupID != nil
@@ -2586,7 +3098,7 @@ struct CanvasView: View {
 
     private func addStickyAtCenter(viewportSize: CGSize) {
         dismissEverything()
-        vm.stickyVM.addNote(canvasID: canvas.id,
+        vm.stickyVM.addNote(canvasID: activeContentCanvasID,
                             center: CGPoint(x: viewportSize.width/2, y: viewportSize.height/2),
                             offset: vm.offset, scale: vm.scale,
                             zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -2594,7 +3106,7 @@ struct CanvasView: View {
     }
     private func addTodoAtCenter(viewportSize: CGSize) {
         dismissEverything()
-        vm.todoVM.addList(canvasID: canvas.id,
+        vm.todoVM.addList(canvasID: activeContentCanvasID,
                           center: CGPoint(x: viewportSize.width/2, y: viewportSize.height/2),
                           offset: vm.offset, scale: vm.scale,
                           zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -2602,7 +3114,7 @@ struct CanvasView: View {
     }
     private func addDrawingAtCenter(viewportSize: CGSize) {
         dismissEverything()
-        vm.drawingVM.addDrawing(canvasID: canvas.id,
+        vm.drawingVM.addDrawing(canvasID: activeContentCanvasID,
                                 center: CGPoint(x: viewportSize.width/2, y: viewportSize.height/2),
                                 offset: vm.offset, scale: vm.scale,
                                 zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -2635,7 +3147,7 @@ struct CanvasView: View {
 
         CanvasTemplateService.insert(
             template,
-            canvasID: canvas.id,
+            canvasID: activeContentCanvasID,
             at: canvasPoint,
             startZIndex: LayersViewModel.nextZ(among: allLayerableElements),
             context: context,
@@ -2698,7 +3210,7 @@ struct CanvasView: View {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
             let center = vm.pendingPDFLocation ?? CGPoint(x: 300, y: 400)
-            vm.pdfVM.addPDF(canvasID: canvas.id, sourceURL: url, center: center,
+            vm.pdfVM.addPDF(canvasID: activeContentCanvasID, sourceURL: url, center: center,
                            offset: vm.offset, scale: vm.scale,
                            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                            context: context, undoManager: vm.undoManager)
@@ -2720,17 +3232,17 @@ struct CanvasView: View {
         dismissEverything(); vm.pendingYouTubeLocation = point; vm.showYouTubeLinkSheet = true
     }
 
-    private func handleToolSelection(_ tool: CanvasTool, at screenPoint: CGPoint, geo: GeometryProxy) {
+    private func handleToolSelection(_ tool: CanvasTool, at screenPoint: CGPoint) {
         vm.hideAddMenu(); lastMenuLocation = screenPoint
         let nextZ = LayersViewModel.nextZ(among: allLayerableElements)
         switch tool {
         case .text: vm.showTextSheet = true
         case .stickyNote:
-            vm.stickyVM.addNote(canvasID: canvas.id, center: screenPoint,
+            vm.stickyVM.addNote(canvasID: activeContentCanvasID, center: screenPoint,
                                offset: vm.offset, scale: vm.scale, zIndex: nextZ,
                                context: context, undoManager: vm.undoManager)
         case .todoList:
-            vm.todoVM.addList(canvasID: canvas.id, center: screenPoint,
+            vm.todoVM.addList(canvasID: activeContentCanvasID, center: screenPoint,
                              offset: vm.offset, scale: vm.scale, zIndex: nextZ,
                              context: context, undoManager: vm.undoManager)
         case .templates: openTemplatePicker(at: screenPoint)
@@ -2744,7 +3256,7 @@ struct CanvasView: View {
         case .youtube: openYouTubeLinkSheet(at: screenPoint)
         case .drawing:
             dismissEverything()
-            vm.drawingVM.addDrawing(canvasID: canvas.id, center: screenPoint,
+            vm.drawingVM.addDrawing(canvasID: activeContentCanvasID, center: screenPoint,
                                    offset: vm.offset, scale: vm.scale, zIndex: nextZ,
                                    context: context, undoManager: vm.undoManager)
         }
@@ -2777,7 +3289,7 @@ struct CanvasView: View {
                 )
                 dismissEverything()
                 let textID = vm.textVM.addOCRText(
-                    canvasID: canvas.id,
+                    canvasID: activeContentCanvasID,
                     text: trimmed,
                     canvasPoint: canvasPoint,
                     zIndex: LayersViewModel.nextZ(among: allLayerableElements),
@@ -2809,7 +3321,7 @@ struct CanvasView: View {
             let screenPoint = vm.pendingDocumentScanLocation ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
             dismissEverything()
             let documentID = vm.pdfVM.addScannedDocument(
-                canvasID: canvas.id,
+                canvasID: activeContentCanvasID,
                 images: images,
                 center: screenPoint,
                 offset: vm.offset,

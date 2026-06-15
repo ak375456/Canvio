@@ -54,10 +54,23 @@ class HomeViewModel: ObservableObject {
             customHeight: h
         )
         context.insert(canvas)
+
+        let pageSize = canvas.defaultPageSize
+        let firstPage = CanvasPageModel(
+            canvasID: canvas.id,
+            contentCanvasID: canvas.id,
+            name: "Page 1",
+            width: pageSize.width,
+            height: pageSize.height
+        )
+        context.insert(firstPage)
         try? context.save()
 
         // Sync to Supabase in the background — doesn't block the UI
-        Task { await CanvasSyncService.shared.upsert(canvas) }
+        Task {
+            await CanvasSyncService.shared.upsert(canvas)
+            await CanvasPageSyncService.shared.upsert(firstPage)
+        }
 
         showCreateSheet = false
         resetForm()

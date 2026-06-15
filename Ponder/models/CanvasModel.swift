@@ -86,6 +86,12 @@ class CanvasModel {
         canvasSize.dimensions(customWidth: customWidth, customHeight: customHeight)
     }
 
+    var defaultPageSize: CGSize {
+        let boundary = boundarySize
+        if boundary != .zero { return boundary }
+        return CGSize(width: max(320, customWidth), height: max(240, customHeight))
+    }
+
     var isInfinite: Bool { canvasSize == .infinite }
 
     init(

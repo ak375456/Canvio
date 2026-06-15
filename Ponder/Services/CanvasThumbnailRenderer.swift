@@ -29,6 +29,67 @@ enum CanvasThumbnailRenderer {
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         context:       ModelContext
     ) {
+        guard let jpeg = renderThumbnailData(
+            canvas: canvas,
+            textElements: textElements,
+            stickyNotes: stickyNotes,
+            todoLists: todoLists,
+            shapes: shapes,
+            images: images,
+            drawings: drawings,
+            gridStyle: gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette
+        ) else { return }
+
+        canvas.thumbnailData = jpeg
+        try? context.save()
+    }
+
+    static func generatePageThumbnail(
+        page: CanvasPageModel,
+        canvas: CanvasModel,
+        textElements: [TextElementModel],
+        stickyNotes: [StickyNoteModel],
+        todoLists: [TodoListModel],
+        shapes: [ShapeElementModel],
+        images: [ImageElementModel],
+        drawings: [DrawingElementModel],
+        gridStyle: GridStyle = .dotted,
+        backgroundMode: CanvasBackgroundMode = .adaptive,
+        backgroundPalette: CanvasBackgroundPalette = .neutral,
+        context: ModelContext
+    ) {
+        guard let jpeg = renderThumbnailData(
+            canvas: canvas,
+            textElements: textElements,
+            stickyNotes: stickyNotes,
+            todoLists: todoLists,
+            shapes: shapes,
+            images: images,
+            drawings: drawings,
+            gridStyle: gridStyle,
+            backgroundMode: backgroundMode,
+            backgroundPalette: backgroundPalette
+        ) else { return }
+
+        page.thumbnailData = jpeg
+        canvas.thumbnailData = jpeg
+        try? context.save()
+    }
+
+    private static func renderThumbnailData(
+        canvas: CanvasModel,
+        textElements: [TextElementModel],
+        stickyNotes: [StickyNoteModel],
+        todoLists: [TodoListModel],
+        shapes: [ShapeElementModel],
+        images: [ImageElementModel],
+        drawings: [DrawingElementModel],
+        gridStyle: GridStyle,
+        backgroundMode: CanvasBackgroundMode,
+        backgroundPalette: CanvasBackgroundPalette
+    ) -> Data? {
         let snapshot = CanvasThumbnailSnapshot(
             canvas:       canvas,
             textElements: textElements,
@@ -48,7 +109,7 @@ enum CanvasThumbnailRenderer {
         renderer.scale = kThumbScale
 
         #if os(iOS)
-        guard let uiImage = renderer.uiImage else { return }
+        guard let uiImage = renderer.uiImage else { return nil }
 
         // Flatten onto an opaque bitmap — JPEG has no alpha channel
         let format = UIGraphicsImageRendererFormat()
@@ -59,11 +120,10 @@ enum CanvasThumbnailRenderer {
             ctx.fill(CGRect(origin: .zero, size: uiImage.size))
             uiImage.draw(at: .zero)
         }
-        guard let jpeg = opaque.jpegData(compressionQuality: 0.75) else { return }
-        canvas.thumbnailData = jpeg
+        return opaque.jpegData(compressionQuality: 0.75)
 
         #elseif os(macOS)
-        guard let nsImage = renderer.nsImage else { return }
+        guard let nsImage = renderer.nsImage else { return nil }
 
         let size = nsImage.size
         let pixelW = Int(size.width  * kThumbScale)
@@ -82,14 +142,14 @@ enum CanvasThumbnailRenderer {
             colorSpaceName: .deviceRGB,
             bytesPerRow: 0,
             bitsPerPixel: 0
-        ) else { return }
+        ) else { return nil }
 
         rep.size = size
 
         NSGraphicsContext.saveGraphicsState()
         guard let gc = NSGraphicsContext(bitmapImageRep: rep) else {
             NSGraphicsContext.restoreGraphicsState()
-            return
+            return nil
         }
         NSGraphicsContext.current = gc
         // Fill white background so JPEG has no transparency
@@ -98,13 +158,10 @@ enum CanvasThumbnailRenderer {
         nsImage.draw(in: NSRect(origin: .zero, size: size))
         NSGraphicsContext.restoreGraphicsState()
 
-        guard let jpeg = rep.representation(using: .jpeg,
-                                            properties: [.compressionFactor: 0.75])
-        else { return }
-        canvas.thumbnailData = jpeg
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.75])
+        #else
+        return nil
         #endif
-
-        try? context.save()
     }
 }
 

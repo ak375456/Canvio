@@ -153,18 +153,35 @@ struct HomeView: View {
         // Pull all element types for every canvas
         let allCanvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
         for canvas in allCanvases {
-            await TextSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await StickyNoteSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ShapeSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ConnectorSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await DrawingSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await TodoSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await TableSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: context)
-            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            await CanvasPageSyncService.shared.pullAll(canvasID: canvas.id, context: context)
+            for contentCanvasID in pageContentCanvasIDs(for: canvas.id) {
+                await pullElements(canvasID: contentCanvasID)
+            }
         }
+    }
+
+    private func pageContentCanvasIDs(for canvasID: UUID) -> [UUID] {
+        let pages = (try? context.fetch(FetchDescriptor<CanvasPageModel>())) ?? []
+        let ids = pages
+            .filter { $0.canvasID == canvasID }
+            .map(\.resolvedContentCanvasID)
+        return ids.isEmpty ? [canvasID] : Array(Set(ids))
+    }
+
+    private func pullElements(canvasID: UUID) async {
+        await ElementGroupSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TextSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await StickyNoteSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ShapeSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ConnectorSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await DrawingSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TodoSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await TableSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await ImageSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await PDFSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await AudioSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await YouTubeSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await SymbolSyncService.shared.pullAll(canvasID: canvasID, context: context)
     }
 
     // MARK: - Avatar button

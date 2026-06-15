@@ -209,7 +209,6 @@ struct Minimap: View {
         rects += youtubeElements.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += drawings.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += symbols.map { centeredRect(x: $0.x, y: $0.y, width: $0.fontSize, height: $0.fontSize) }
-
         return rects
     }
 

@@ -34,6 +34,7 @@ struct PonderApp: App {
         }
         .modelContainer(for: [
             CanvasModel.self,
+            CanvasPageModel.self,
             TextElementModel.self,
             StickyNoteModel.self,
             TodoListModel.self,
@@ -125,6 +126,7 @@ private struct SyncCoordinatorView: View {
 
         // Step 1 — flush offline queue
         await CanvasSyncService.shared.flushQueue()
+        await CanvasPageSyncService.shared.flushQueue()
         await TextSyncService.shared.flushQueue()
         await StickyNoteSyncService.shared.flushQueue()
         await ShapeSyncService.shared.flushQueue()
@@ -148,19 +150,34 @@ private struct SyncCoordinatorView: View {
 
         let canvases = (try? modelContext.fetch(FetchDescriptor<CanvasModel>())) ?? []
         for canvas in canvases {
-            await ElementGroupSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await TextSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await StickyNoteSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await ShapeSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await ConnectorSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await DrawingSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await TodoSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await TableSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await ImageSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await PDFSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await AudioSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await YouTubeSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
-            await SymbolSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
+            await CanvasPageSyncService.shared.pullAll(canvasID: canvas.id, context: modelContext)
+            for contentCanvasID in pageContentCanvasIDs(for: canvas.id) {
+                await pullElements(canvasID: contentCanvasID)
+            }
         }
+    }
+
+    private func pageContentCanvasIDs(for canvasID: UUID) -> [UUID] {
+        let pages = (try? modelContext.fetch(FetchDescriptor<CanvasPageModel>())) ?? []
+        let ids = pages
+            .filter { $0.canvasID == canvasID }
+            .map(\.resolvedContentCanvasID)
+        return ids.isEmpty ? [canvasID] : Array(Set(ids))
+    }
+
+    private func pullElements(canvasID: UUID) async {
+        await ElementGroupSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await TextSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await StickyNoteSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await ShapeSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await ConnectorSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await DrawingSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await TodoSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await TableSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await ImageSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await PDFSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await AudioSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await YouTubeSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await SymbolSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
     }
 }

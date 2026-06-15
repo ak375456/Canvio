@@ -24,6 +24,8 @@ struct SyncOperation: Codable, Identifiable {
 enum SyncOperationType: String, Codable {
     case upsertCanvas
     case deleteCanvas
+    case upsertCanvasPage
+    case deleteCanvasPage
     case upsertText
     case deleteText
     case upsertSticky

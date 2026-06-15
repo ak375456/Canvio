@@ -225,86 +225,97 @@ final class CanvasSyncService {
         // Small yield so Supabase has the canvas rows before elements reference them
         try? await Task.sleep(nanoseconds: 500_000_000)
 
-        // 2. All element types for every canvas
+        // 2. Pages and all element types for every canvas
         for canvas in canvases {
-            let canvasID = canvas.id
+            let parentCanvasID = canvas.id
 
-            let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>()))?.filter {
-                $0.canvasID == canvasID
+            let pages = (try? context.fetch(FetchDescriptor<CanvasPageModel>()))?.filter {
+                $0.canvasID == parentCanvasID
             } ?? []
-            for group in groups { await ElementGroupSyncService.shared.upsert(group) }
+            for page in pages { await CanvasPageSyncService.shared.upsert(page) }
 
-            let texts = (try? context.fetch(FetchDescriptor<TextElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in texts { await TextSyncService.shared.upsert(el) }
+            let contentCanvasIDs = pages.isEmpty
+                ? [parentCanvasID]
+                : Array(Set(pages.map(\.resolvedContentCanvasID)))
 
-            let stickies = (try? context.fetch(FetchDescriptor<StickyNoteModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in stickies { await StickyNoteSyncService.shared.upsert(el) }
+            for contentCanvasID in contentCanvasIDs {
+                let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for group in groups { await ElementGroupSyncService.shared.upsert(group) }
 
-            let shapes = (try? context.fetch(FetchDescriptor<ShapeElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in shapes { await ShapeSyncService.shared.upsert(el) }
+                let texts = (try? context.fetch(FetchDescriptor<TextElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in texts { await TextSyncService.shared.upsert(el) }
 
-            let images = (try? context.fetch(FetchDescriptor<ImageElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in images { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                let stickies = (try? context.fetch(FetchDescriptor<StickyNoteModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in stickies { await StickyNoteSyncService.shared.upsert(el) }
 
-            let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in pdfs { await PDFSyncService.shared.upsert(el) }
+                let shapes = (try? context.fetch(FetchDescriptor<ShapeElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in shapes { await ShapeSyncService.shared.upsert(el) }
 
-            let todos = (try? context.fetch(FetchDescriptor<TodoListModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in todos { await TodoSyncService.shared.upsertList(el) }
+                let images = (try? context.fetch(FetchDescriptor<ImageElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in images { await ImageSyncService.shared.upsert(el, uploadFile: true) }
 
-            let tasks = (try? context.fetch(FetchDescriptor<TodoTaskModel>())) ?? []
-            let todoIDs = Set(todos.map { $0.id })
-            for el in tasks.filter({ todoIDs.contains($0.listID) }) {
-                await TodoSyncService.shared.upsertTask(el)
+                let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in pdfs { await PDFSyncService.shared.upsert(el) }
+
+                let todos = (try? context.fetch(FetchDescriptor<TodoListModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in todos { await TodoSyncService.shared.upsertList(el) }
+
+                let tasks = (try? context.fetch(FetchDescriptor<TodoTaskModel>())) ?? []
+                let todoIDs = Set(todos.map { $0.id })
+                for el in tasks.filter({ todoIDs.contains($0.listID) }) {
+                    await TodoSyncService.shared.upsertTask(el)
+                }
+
+                let tables = (try? context.fetch(FetchDescriptor<TableElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in tables { await TableSyncService.shared.upsertTable(el) }
+
+                let cells = (try? context.fetch(FetchDescriptor<TableCellModel>())) ?? []
+                let tableIDs = Set(tables.map { $0.id })
+                for el in cells.filter({ tableIDs.contains($0.tableID) }) {
+                    await TableSyncService.shared.upsertCell(el)
+                }
+
+                let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in audio { await AudioSyncService.shared.upsert(el) }
+
+                let youtube = (try? context.fetch(FetchDescriptor<YouTubeElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in youtube { await YouTubeSyncService.shared.upsert(el) }
+
+                let drawings = (try? context.fetch(FetchDescriptor<DrawingElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in drawings { await DrawingSyncService.shared.upsert(el) }
+
+                let connectors = (try? context.fetch(FetchDescriptor<ConnectorModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in connectors { await ConnectorSyncService.shared.upsert(el) }
+
+                let symbols = (try? context.fetch(FetchDescriptor<SymbolElementModel>()))?.filter {
+                    $0.canvasID == contentCanvasID
+                } ?? []
+                for el in symbols { await SymbolSyncService.shared.upsert(el) }
             }
-
-            let tables = (try? context.fetch(FetchDescriptor<TableElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in tables { await TableSyncService.shared.upsertTable(el) }
-
-            let cells = (try? context.fetch(FetchDescriptor<TableCellModel>())) ?? []
-            let tableIDs = Set(tables.map { $0.id })
-            for el in cells.filter({ tableIDs.contains($0.tableID) }) {
-                await TableSyncService.shared.upsertCell(el)
-            }
-
-            let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in audio { await AudioSyncService.shared.upsert(el) }
-
-            let youtube = (try? context.fetch(FetchDescriptor<YouTubeElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in youtube { await YouTubeSyncService.shared.upsert(el) }
-
-            let drawings = (try? context.fetch(FetchDescriptor<DrawingElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in drawings { await DrawingSyncService.shared.upsert(el) }
-
-            let connectors = (try? context.fetch(FetchDescriptor<ConnectorModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in connectors { await ConnectorSyncService.shared.upsert(el) }
-
-            let symbols = (try? context.fetch(FetchDescriptor<SymbolElementModel>()))?.filter {
-                $0.canvasID == canvasID
-            } ?? []
-            for el in symbols { await SymbolSyncService.shared.upsert(el) }
         }
 
         print("✅ reconcileAllLocalData complete")
