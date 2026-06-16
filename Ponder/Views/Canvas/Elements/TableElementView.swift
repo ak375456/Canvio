@@ -22,6 +22,7 @@ struct TableElementView: View {
     var onExternalTap: (() -> Void)? = nil
     var onMultiSelectTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var isCanvasNavigationActive: Bool = false
 
     @State private var dragOffset: CGSize = .zero
     @State private var rotationAngle: Double = 0
@@ -30,11 +31,6 @@ struct TableElementView: View {
     @State private var resizeStartCellHeight: Double = 0
 
     private var isTableSelected: Bool { vm.selectedTableID == table.id }
-    private var tableCells: [TableCellModel] { allCells.filter { $0.tableID == table.id } }
-    private var selectedCell: TableCellModel? {
-        guard let id = vm.selectedCellID else { return nil }
-        return tableCells.first { $0.id == id }
-    }
 
     private let handleSize: CGFloat = 28
     private let handleHitSize: CGFloat = 52
@@ -55,11 +51,15 @@ struct TableElementView: View {
     }
 
     var body: some View {
+        let tableCells = isCanvasNavigationActive ? [] : cellsForCurrentTable()
+        let cellsByPosition = isCanvasNavigationActive ? [:] : makeCellsByPosition(tableCells)
+        let selectedCell = isCanvasNavigationActive ? nil : selectedCell(in: tableCells)
+
         ZStack {
-            tableContent
+            tableContent(cellsByPosition: cellsByPosition)
             selectionRing
 
-            if isTableSelected && !isMultiSelectMode {
+            if isTableSelected && !isMultiSelectMode && !isCanvasNavigationActive {
                 TableToolbarView(
                     table: table, cells: tableCells, selectedCell: selectedCell, vm: vm,
                     onDelete: { vm.delete(table: table, cells: tableCells, context: context) },
@@ -93,6 +93,22 @@ struct TableElementView: View {
         }
     }
 
+    private func cellsForCurrentTable() -> [TableCellModel] {
+        allCells.filter { $0.tableID == table.id }
+    }
+
+    private func makeCellsByPosition(_ cells: [TableCellModel]) -> [TableCellPosition: TableCellModel] {
+        Dictionary(
+            cells.map { (TableCellPosition(row: $0.row, col: $0.col), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    private func selectedCell(in cells: [TableCellModel]) -> TableCellModel? {
+        guard let id = vm.selectedCellID else { return nil }
+        return cells.first { $0.id == id }
+    }
+
     @ViewBuilder
     private var selectionRing: some View {
         if isMultiSelectMode {
@@ -124,7 +140,39 @@ struct TableElementView: View {
         .gesture(resizeGesture)
     }
 
-    private var tableContent: some View {
+    private func tableContent(cellsByPosition: [TableCellPosition: TableCellModel]) -> some View {
+        tableShell {
+            if isCanvasNavigationActive {
+                navigationPreview
+            } else {
+                tableGrid(cellsByPosition: cellsByPosition)
+            }
+        }
+    }
+
+    private func tableShell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .background(Color(colorScheme == .dark ? .black : .white).opacity(0.95))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(
+                        isTableSelected && !isMultiSelectMode
+                            ? Color.accentColor.opacity(0.7)
+                            : Color.secondary.opacity(0.3),
+                        lineWidth: isTableSelected && !isMultiSelectMode ? 2 : 1
+                    )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !isMultiSelectMode, !isCanvasGestureActive else { return }
+                if !isTableSelected { onExternalTap?(); vm.selectTable(id: table.id) }
+                else { vm.stopEditing() }
+            }
+    }
+
+    private func tableGrid(cellsByPosition: [TableCellPosition: TableCellModel]) -> some View {
         VStack(spacing: 0) {
             if table.showColHeaders {
                 HStack(spacing: 0) {
@@ -135,28 +183,27 @@ struct TableElementView: View {
             ForEach(0..<table.rowCount, id: \.self) { r in
                 HStack(spacing: 0) {
                     if table.showRowHeaders { rowHeaderCell(text: "\(r + 1)") }
-                    ForEach(0..<table.colCount, id: \.self) { c in cellView(row: r, col: c) }
+                    ForEach(0..<table.colCount, id: \.self) { c in
+                        cellView(row: r, col: c, cellsByPosition: cellsByPosition)
+                    }
                 }
             }
         }
-        .background(Color(colorScheme == .dark ? .black : .white).opacity(0.95))
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(
-                    isTableSelected && !isMultiSelectMode
-                        ? Color.accentColor.opacity(0.7)
-                        : Color.secondary.opacity(0.3),
-                    lineWidth: isTableSelected && !isMultiSelectMode ? 2 : 1
-                )
+    }
+
+    private var navigationPreview: some View {
+        TableNavigationPreview(
+            rowCount: table.rowCount,
+            colCount: table.colCount,
+            cellWidth: CGFloat(table.cellWidth),
+            cellHeight: CGFloat(table.cellHeight),
+            rowHeaderWidth: rowHeaderWidth,
+            colHeaderHeight: colHeaderHeight,
+            showRowHeaders: table.showRowHeaders,
+            showColHeaders: table.showColHeaders,
+            colorScheme: colorScheme
         )
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isMultiSelectMode, !isCanvasGestureActive else { return }
-            if !isTableSelected { onExternalTap?(); vm.selectTable(id: table.id) }
-            else { vm.stopEditing() }
-        }
+        .frame(width: totalWidth, height: totalHeight)
     }
 
     private var cornerCell: some View {
@@ -184,8 +231,10 @@ struct TableElementView: View {
     }
 
     @ViewBuilder
-    private func cellView(row: Int, col: Int) -> some View {
-        if let cell = tableCells.first(where: { $0.row == row && $0.col == col }) {
+    private func cellView(row: Int,
+                          col: Int,
+                          cellsByPosition: [TableCellPosition: TableCellModel]) -> some View {
+        if let cell = cellsByPosition[TableCellPosition(row: row, col: col)] {
             if cell.isMerged {
                 Color.clear.frame(width: 0, height: 0)
             } else {
@@ -203,6 +252,10 @@ struct TableElementView: View {
                     onDoubleTap: { handleDoubleTap(cell: cell) }
                 )
             }
+        } else {
+            Color.clear
+                .frame(width: CGFloat(table.cellWidth), height: CGFloat(table.cellHeight))
+                .border(Color.secondary.opacity(0.2), width: 0.5)
         }
     }
 
@@ -286,6 +339,74 @@ struct TableElementView: View {
 
     private var canMove: Bool {
         isTableSelected && !isMultiSelectMode && !isCanvasGestureActive
+    }
+
+    private struct TableCellPosition: Hashable {
+        let row: Int
+        let col: Int
+    }
+
+    private struct TableNavigationPreview: View {
+        let rowCount: Int
+        let colCount: Int
+        let cellWidth: CGFloat
+        let cellHeight: CGFloat
+        let rowHeaderWidth: CGFloat
+        let colHeaderHeight: CGFloat
+        let showRowHeaders: Bool
+        let showColHeaders: Bool
+        let colorScheme: ColorScheme
+
+        var body: some View {
+            Canvas { context, size in
+                let borderColor = Color.secondary.opacity(0.18)
+                let headerColor = Color.secondary.opacity(colorScheme == .dark ? 0.16 : 0.08)
+
+                if showColHeaders {
+                    context.fill(
+                        Path(CGRect(x: 0, y: 0, width: size.width, height: colHeaderHeight)),
+                        with: .color(headerColor)
+                    )
+                }
+
+                if showRowHeaders {
+                    context.fill(
+                        Path(CGRect(x: 0, y: 0, width: rowHeaderWidth, height: size.height)),
+                        with: .color(headerColor)
+                    )
+                }
+
+                var grid = Path()
+                let gridStartX = showRowHeaders ? rowHeaderWidth : 0
+                let gridStartY = showColHeaders ? colHeaderHeight : 0
+
+                if showRowHeaders {
+                    grid.move(to: CGPoint(x: rowHeaderWidth, y: 0))
+                    grid.addLine(to: CGPoint(x: rowHeaderWidth, y: size.height))
+                }
+
+                if showColHeaders {
+                    grid.move(to: CGPoint(x: 0, y: colHeaderHeight))
+                    grid.addLine(to: CGPoint(x: size.width, y: colHeaderHeight))
+                }
+
+                for col in 0...max(colCount, 0) {
+                    let x = gridStartX + CGFloat(col) * cellWidth
+                    guard x >= 0 && x <= size.width else { continue }
+                    grid.move(to: CGPoint(x: x, y: gridStartY))
+                    grid.addLine(to: CGPoint(x: x, y: size.height))
+                }
+
+                for row in 0...max(rowCount, 0) {
+                    let y = gridStartY + CGFloat(row) * cellHeight
+                    guard y >= 0 && y <= size.height else { continue }
+                    grid.move(to: CGPoint(x: gridStartX, y: y))
+                    grid.addLine(to: CGPoint(x: size.width, y: y))
+                }
+
+                context.stroke(grid, with: .color(borderColor), lineWidth: 0.5)
+            }
+        }
     }
 
     private struct TappableTableCell: View {

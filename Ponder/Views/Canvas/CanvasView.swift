@@ -2797,7 +2797,8 @@ struct CanvasView: View {
                     },
                     onExternalTap: { dismissEverything() },
                     onMultiSelectTap: { toggleMultiSelection(for: table) },
-                    isCanvasGestureActive: childInteractionLocked)
+                    isCanvasGestureActive: childInteractionLocked,
+                    isCanvasNavigationActive: isCanvasGestureActive)
             } else if let audio = element as? AudioElementModel {
                 AudioElementView(element: audio, canvasScale: vm.scale, canvasBoundary: boundary,
                                  vm: vm.audioVM, isMultiSelectMode: multiSelect,
