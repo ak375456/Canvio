@@ -18,6 +18,7 @@ struct CanvasToolbar: View {
     let onAddTable:     () -> Void
     let onAddAudio:     () -> Void
     let onAddYouTube:   () -> Void
+    let onLasso:        () -> Void
     let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
     let onWriteTextOnCanvas: () -> Void
@@ -115,6 +116,7 @@ struct CanvasToolbar: View {
         toolButton(icon: "waveform",             label: "Audio",   tint: .pink, isLocked: lockedTools.contains(.audio))   { onAddAudio() }
         toolButton(icon: "play.rectangle.fill",  label: "YouTube", tint: .red)    { onAddYouTube() }
         toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }
+        toolButton(icon: "lasso",                label: "Lasso",   tint: .blue)   { onLasso() }
         toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
         toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) {
             onDrawOnCanvas()
@@ -241,6 +243,7 @@ struct CompactCanvasToolbar: View {
     let onAddTable:     () -> Void
     let onAddAudio:     () -> Void
     let onAddYouTube:   () -> Void
+    let onLasso:        () -> Void
     let onAddDrawing:   () -> Void
     let onDrawOnCanvas: () -> Void
     let onWriteTextOnCanvas: () -> Void
@@ -322,6 +325,7 @@ struct CompactCanvasToolbar: View {
                 compactButton(icon: "square.grid.2x2", label: "Templates", tint: .indigo, action: onAddTemplate)
                 compactButton(icon: "square.on.circle", label: "Shape", tint: .purple, action: onAddShape)
                 compactButton(icon: "photo", label: "Image", tint: .cyan, isLocked: lockedTools.contains(.image), action: onAddImage)
+                compactButton(icon: "lasso", label: "Lasso", tint: .blue, action: onLasso)
                 compactButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange, action: onAddDrawing)
                 compactButton(
                     icon: "scribble.variable",

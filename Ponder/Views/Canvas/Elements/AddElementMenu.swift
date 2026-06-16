@@ -104,6 +104,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case table
     case audio
     case youtube
+    case lasso
     case drawing
 
     var id: String { rawValue }
@@ -122,6 +123,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .table:      return "Table"
         case .audio:      return "Audio"
         case .youtube:    return "YouTube"
+        case .lasso:      return "Lasso"
         case .drawing:    return "Drawing"
         }
     }
@@ -140,6 +142,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .table:      return "Spreadsheet with rows & columns"
         case .audio:      return "Record or import audio"
         case .youtube:    return "Embed a video link"
+        case .lasso:      return "Select multiple canvas items"
         case .drawing:    return "Pen, pencil, marker, lasso"
         }
     }
@@ -158,6 +161,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .table:      return "tablecells"
         case .audio:      return "waveform"
         case .youtube:    return "play.rectangle.fill"
+        case .lasso:      return "lasso"
         case .drawing:    return "pencil.and.scribble"
         }
     }
@@ -176,6 +180,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .table:      return .indigo
         case .audio:      return .pink
         case .youtube:    return .red
+        case .lasso:      return .blue
         case .drawing:    return .orange
         }
     }

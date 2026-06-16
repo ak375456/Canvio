@@ -33,6 +33,12 @@ private struct CanvasStackPickerState: Identifiable {
     let items: [CanvasStackPickerItem]
 }
 
+private struct ElementPositionSnapshot {
+    let id: UUID
+    let x: Double
+    let y: Double
+}
+
 #if os(iOS)
 private struct HandwritingRecognitionResult {
     let text: String
@@ -154,6 +160,10 @@ struct CanvasView: View {
     @State private var selectedGroupID: UUID?
     @State private var draggingGroupID: UUID?
     @State private var groupDragOffset: CGSize = .zero
+    @State private var multiSelectDragOffset: CGSize = .zero
+    @State private var isLassoModeActive = false
+    @State private var lassoPoints: [CGPoint] = []
+    @State private var lassoFeedbackText: String?
     @State private var isProcessingOCRScan = false
     @State private var isProcessingDocumentScan = false
     @State private var ocrScanAlertMessage: String?
@@ -480,7 +490,7 @@ struct CanvasView: View {
 
                 #if os(iOS)
                 CanvasGestureBridge(
-                    isEnabled: !vm.showCanvasDrawingOverlay || !isCanvasDrawingInputActive,
+                    isEnabled: (!vm.showCanvasDrawingOverlay || !isCanvasDrawingInputActive) && !isLassoModeActive,
                     selectedElementFrame: selectedElementGestureFrame,
                     onPanBegan: {
                         beginCanvasGestureSuppression()
@@ -519,11 +529,11 @@ struct CanvasView: View {
                 .allowsHitTesting(false)
                 #endif
 
-                if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive {
+                if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive && !isLassoModeActive {
                     toolbarLayer(geo: geo)
                 }
 
-                if !vm.showCanvasDrawingOverlay {
+                if !vm.showCanvasDrawingOverlay && !isLassoModeActive {
                     pagesPanelLayer(geo: geo)
                 }
 
@@ -533,6 +543,10 @@ struct CanvasView: View {
 
                 if selection.isMultiSelectActive {
                     multiSelectOverlay
+                }
+
+                if isLassoModeActive {
+                    lassoOverlay(geo: geo)
                 }
 
                 if let picker = stackPicker {
@@ -949,7 +963,9 @@ struct CanvasView: View {
             renderElement(element, nextZIndex: nextZIndex)
         }
 
-        if !selection.isMultiSelectActive {
+        if selection.isMultiSelectActive {
+            multiSelectDragLayer
+        } else {
             groupSelectionLayer
         }
     }
@@ -1517,6 +1533,379 @@ struct CanvasView: View {
         selection.count == 0 ? "Tap elements to select" : "\(selection.count) selected"
     }
 
+    private func lassoOverlay(geo: GeometryProxy) -> some View {
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.001)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace))
+                        .onChanged { value in
+                            lassoFeedbackText = nil
+                            appendLassoPoint(value.location)
+                        }
+                        .onEnded { _ in
+                            finishLassoSelection()
+                        }
+                )
+
+            lassoDrawingLayer
+                .allowsHitTesting(false)
+
+            lassoModePill
+                .padding(.top, 16)
+                .padding(.horizontal, 16)
+        }
+        .frame(width: geo.size.width, height: geo.size.height)
+        .zIndex(130)
+        .transition(.opacity)
+    }
+
+    private var lassoModePill: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "lasso")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(lassoFeedbackText ?? "Draw around items")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+                Text("Release to select")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                cancelLassoSelection()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel lasso")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 260)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 4)
+    }
+
+    private var lassoDrawingLayer: some View {
+        Canvas { context, _ in
+            guard let first = lassoPoints.first else { return }
+
+            var strokePath = Path()
+            strokePath.move(to: first)
+            for point in lassoPoints.dropFirst() {
+                strokePath.addLine(to: point)
+            }
+
+            if lassoPoints.count > 2 {
+                var fillPath = strokePath
+                fillPath.closeSubpath()
+                context.fill(fillPath, with: .color(Color.accentColor.opacity(0.10)))
+            }
+
+            context.stroke(
+                strokePath,
+                with: .color(Color.accentColor),
+                style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round, dash: [8, 5])
+            )
+        }
+    }
+
+    private func startLassoSelection() {
+        dismissEverything()
+        withAnimation(.spring(duration: 0.24)) {
+            selection.exit()
+            isLassoModeActive = true
+            lassoPoints = []
+            lassoFeedbackText = nil
+        }
+    }
+
+    private func cancelLassoSelection() {
+        withAnimation(.spring(duration: 0.2)) {
+            isLassoModeActive = false
+            lassoPoints = []
+            lassoFeedbackText = nil
+        }
+    }
+
+    private func appendLassoPoint(_ point: CGPoint) {
+        guard let last = lassoPoints.last else {
+            lassoPoints = [point]
+            return
+        }
+
+        let dx = point.x - last.x
+        let dy = point.y - last.y
+        guard hypot(dx, dy) >= 2.5 else { return }
+        lassoPoints.append(point)
+    }
+
+    private func finishLassoSelection() {
+        guard lassoPoints.count >= 3 else {
+            lassoPoints = []
+            lassoFeedbackText = "Draw a larger loop"
+            return
+        }
+
+        let selectedIDs = selectedElementIDs(inLasso: lassoPoints)
+        lassoPoints = []
+
+        guard !selectedIDs.isEmpty else {
+            lassoFeedbackText = "No items selected"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                if isLassoModeActive {
+                    lassoFeedbackText = nil
+                }
+            }
+            return
+        }
+
+        withAnimation(.spring(duration: 0.28)) {
+            selection.isMultiSelectActive = true
+            selection.selectedIDs = selectedIDs
+            isLassoModeActive = false
+            lassoFeedbackText = nil
+        }
+    }
+
+    private func selectedElementIDs(inLasso points: [CGPoint]) -> Set<UUID> {
+        let polygonBounds = boundingRect(for: points).insetBy(dx: -8, dy: -8)
+        var ids = Set<UUID>()
+
+        for element in allLayerableElements {
+            guard let bounds = boundsMap[element.id] else { continue }
+            let rect = screenRect(for: bounds.rect).insetBy(dx: -8, dy: -8)
+            guard rect.intersects(polygonBounds),
+                  lasso(points, intersects: rect) else { continue }
+            ids.formUnion(multiSelectIDs(for: element))
+        }
+
+        return ids
+    }
+
+    private func lasso(_ points: [CGPoint], intersects rect: CGRect) -> Bool {
+        let rectPoints = [
+            CGPoint(x: rect.midX, y: rect.midY),
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.maxY),
+            CGPoint(x: rect.minX, y: rect.maxY)
+        ]
+
+        if rectPoints.contains(where: { contains(point: $0, inPolygon: points) }) {
+            return true
+        }
+
+        if points.contains(where: { rect.contains($0) }) {
+            return true
+        }
+
+        return polygonSegments(points).contains { segment in
+            lineSegment(segment.0, segment.1, intersects: rect)
+        }
+    }
+
+    private func boundingRect(for points: [CGPoint]) -> CGRect {
+        guard let first = points.first else { return .null }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    private func contains(point: CGPoint, inPolygon polygon: [CGPoint]) -> Bool {
+        guard polygon.count >= 3 else { return false }
+
+        var isInside = false
+        var previous = polygon[polygon.count - 1]
+
+        for current in polygon {
+            let crossesY = (current.y > point.y) != (previous.y > point.y)
+            if crossesY {
+                let denominator = previous.y - current.y
+                guard abs(denominator) > 0.0001 else {
+                    previous = current
+                    continue
+                }
+                let slopeX = (previous.x - current.x) * (point.y - current.y)
+                    / denominator + current.x
+                if point.x < slopeX {
+                    isInside.toggle()
+                }
+            }
+            previous = current
+        }
+
+        return isInside
+    }
+
+    private func polygonSegments(_ points: [CGPoint]) -> [(CGPoint, CGPoint)] {
+        guard points.count >= 2 else { return [] }
+
+        var segments = zip(points, points.dropFirst()).map { ($0, $1) }
+        if let first = points.first, let last = points.last {
+            segments.append((last, first))
+        }
+        return segments
+    }
+
+    private func lineSegment(_ a: CGPoint, _ b: CGPoint, intersects rect: CGRect) -> Bool {
+        if rect.contains(a) || rect.contains(b) { return true }
+
+        let edges = [
+            (CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY)),
+            (CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)),
+            (CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)),
+            (CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.minY))
+        ]
+
+        return edges.contains { edge in
+            lineSegmentsIntersect(a, b, edge.0, edge.1)
+        }
+    }
+
+    private func lineSegmentsIntersect(_ p1: CGPoint,
+                                       _ p2: CGPoint,
+                                       _ p3: CGPoint,
+                                       _ p4: CGPoint) -> Bool {
+        let d1 = direction(p3, p4, p1)
+        let d2 = direction(p3, p4, p2)
+        let d3 = direction(p1, p2, p3)
+        let d4 = direction(p1, p2, p4)
+        let epsilon: CGFloat = 0.0001
+
+        if ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)) {
+            return true
+        }
+
+        return abs(d1) < epsilon && point(p1, isOnSegmentFrom: p3, to: p4)
+            || abs(d2) < epsilon && point(p2, isOnSegmentFrom: p3, to: p4)
+            || abs(d3) < epsilon && point(p3, isOnSegmentFrom: p1, to: p2)
+            || abs(d4) < epsilon && point(p4, isOnSegmentFrom: p1, to: p2)
+    }
+
+    private func direction(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+        (c.x - a.x) * (b.y - a.y) - (b.x - a.x) * (c.y - a.y)
+    }
+
+    private func point(_ point: CGPoint, isOnSegmentFrom start: CGPoint, to end: CGPoint) -> Bool {
+        point.x >= min(start.x, end.x)
+            && point.x <= max(start.x, end.x)
+            && point.y >= min(start.y, end.y)
+            && point.y <= max(start.y, end.y)
+    }
+
+    @ViewBuilder
+    private var multiSelectDragLayer: some View {
+        if let bounds = selectedMultiSelectBounds {
+            multiSelectDragView(bounds: bounds)
+        }
+    }
+
+    private var selectedMultiSelectBounds: CGRect? {
+        let rects = selection.selectedIDs.compactMap { id in
+            boundsMap[id]?.rect
+        }
+        guard var union = rects.first else { return nil }
+
+        for rect in rects.dropFirst() {
+            union = union.union(rect)
+        }
+
+        return union.insetBy(dx: -18, dy: -18)
+    }
+
+    private func multiSelectDragView(bounds: CGRect) -> some View {
+        let safeScale = max(vm.scale, 0.01)
+        let minimumHitSize = 88 / safeScale
+        let hitWidth = max(bounds.width, minimumHitSize)
+        let hitHeight = max(bounds.height, minimumHitSize)
+        let isDragging = multiSelectDragOffset != .zero
+
+        return ZStack {
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.clear)
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(
+                    Color.blue.opacity(isDragging ? 0.95 : 0.78),
+                    style: StrokeStyle(
+                        lineWidth: max(1.5 / safeScale, 0.6),
+                        dash: [8 / safeScale, 5 / safeScale]
+                    )
+                )
+                .frame(width: bounds.width, height: bounds.height)
+                .background(
+                    RoundedRectangle(cornerRadius: 14)
+                        .fill(Color.blue.opacity(isDragging ? 0.075 : 0.045))
+                        .frame(width: bounds.width, height: bounds.height)
+                )
+                .allowsHitTesting(false)
+
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                    .font(.system(size: 12, weight: .bold))
+                Text("Move")
+                    .font(.caption.weight(.bold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background(Color.blue, in: Capsule())
+            .shadow(color: .blue.opacity(0.28), radius: 8, x: 0, y: 3)
+            .scaleEffect(1 / safeScale)
+            .offset(y: -bounds.height / 2 - 28 / safeScale)
+            .allowsHitTesting(false)
+        }
+        .frame(width: hitWidth, height: hitHeight)
+        .position(
+            x: bounds.midX + multiSelectDragOffset.width,
+            y: bounds.midY + multiSelectDragOffset.height
+        )
+        .zIndex(17000)
+        .gesture(multiSelectDragGesture)
+        .animation(.spring(response: 0.22, dampingFraction: 0.88), value: selection.selectedIDs)
+    }
+
+    private var multiSelectDragGesture: some Gesture {
+        DragGesture(minimumDistance: 5)
+            .onChanged { value in
+                guard selection.hasSelection, !isCanvasGestureActive else { return }
+                multiSelectDragOffset = value.translation
+            }
+            .onEnded { value in
+                guard selection.hasSelection else {
+                    multiSelectDragOffset = .zero
+                    return
+                }
+                moveSelectedElements(by: value.translation)
+                multiSelectDragOffset = .zero
+            }
+    }
+
     @ViewBuilder
     private var groupSelectionLayer: some View {
         ForEach(elementGroups, id: \.id) { group in
@@ -2010,6 +2399,15 @@ struct CanvasView: View {
         return groupDragOffset
     }
 
+    private func selectionDragOffset(for element: any LayerableElement) -> CGSize {
+        if selection.isMultiSelectActive,
+           selection.selectedIDs.contains(element.id) {
+            return multiSelectDragOffset
+        }
+
+        return groupDragOffset(for: element)
+    }
+
     private func multiSelectIDs(for element: any LayerableElement) -> Set<UUID> {
         guard let groupID = element.groupID else { return [element.id] }
         return Set(groupMembers(for: groupID).map(\.id))
@@ -2161,6 +2559,72 @@ struct CanvasView: View {
         try? context.save()
         Task {
             for element in members {
+                await syncElement(element)
+            }
+        }
+    }
+
+    private func moveSelectedElements(by translation: CGSize) {
+        guard translation != .zero else { return }
+        let members = selection.selectedIDs.compactMap { layerableElement(withID: $0) }
+        guard !members.isEmpty else { return }
+
+        moveElements(members, by: translation, undoLabel: "Move Selection")
+    }
+
+    private func moveElements(_ elements: [any LayerableElement],
+                              by translation: CGSize,
+                              undoLabel: String) {
+        let uniqueElements = Array(
+            Dictionary(elements.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }).values
+        )
+        guard !uniqueElements.isEmpty else { return }
+
+        let before = uniqueElements.map { ElementPositionSnapshot(id: $0.id, x: $0.x, y: $0.y) }
+        let now = Date()
+
+        for element in uniqueElements {
+            element.x += Double(translation.width)
+            element.y += Double(translation.height)
+            element.updatedAt = now
+        }
+
+        try? context.save()
+
+        Task {
+            for element in uniqueElements {
+                await syncElement(element)
+            }
+        }
+
+        let after = uniqueElements.map { ElementPositionSnapshot(id: $0.id, x: $0.x, y: $0.y) }
+
+        vm.undoManager.push(CanvasAction(
+            undo: {
+                applyElementPositionSnapshots(before)
+            },
+            redo: {
+                applyElementPositionSnapshots(after)
+            }
+        ))
+    }
+
+    private func applyElementPositionSnapshots(_ snapshots: [ElementPositionSnapshot]) {
+        let now = Date()
+        var changed: [any LayerableElement] = []
+
+        for snapshot in snapshots {
+            guard let element = layerableElement(withID: snapshot.id) else { continue }
+            element.x = snapshot.x
+            element.y = snapshot.y
+            element.updatedAt = now
+            changed.append(element)
+        }
+
+        guard !changed.isEmpty else { return }
+        try? context.save()
+        Task {
+            for element in changed {
                 await syncElement(element)
             }
         }
@@ -2830,7 +3294,7 @@ struct CanvasView: View {
         .opacity(vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
                  ? 0
                  : layersVM.highlightedID == element.id ? 0.5 : 1)
-        .offset(groupDragOffset(for: element))
+        .offset(selectionDragOffset(for: element))
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
@@ -2878,6 +3342,7 @@ struct CanvasView: View {
                 onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onLasso:        { startLassoSelection() },
                 onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                 onDrawOnCanvas: { startCanvasDrawing() },
                 onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
@@ -2907,6 +3372,7 @@ struct CanvasView: View {
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onLasso:        { startLassoSelection() },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
@@ -2935,6 +3401,7 @@ struct CanvasView: View {
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onLasso:        { startLassoSelection() },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
@@ -2964,6 +3431,7 @@ struct CanvasView: View {
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onLasso:        { startLassoSelection() },
                     onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
                     onDrawOnCanvas: { startCanvasDrawing() },
                     onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
@@ -3255,6 +3723,7 @@ struct CanvasView: View {
         case .table: openTableSizePicker(at: screenPoint)
         case .audio: openAudioPicker(at: screenPoint)
         case .youtube: openYouTubeLinkSheet(at: screenPoint)
+        case .lasso: startLassoSelection()
         case .drawing:
             dismissEverything()
             vm.drawingVM.addDrawing(canvasID: activeContentCanvasID, center: screenPoint,
