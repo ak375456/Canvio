@@ -111,12 +111,16 @@ struct EditTextSheet: View {
     private var textField: some View {
         VStack(alignment: .leading, spacing: 8) {
             label("TEXT")
-            TextEditor(text: $text)
-                .font(previewFont)
+            PastePreservingTextEditor(
+                text: $text,
+                fontName: selectedFont,
+                fontSize: fontSize,
+                isBold: isBold,
+                isItalic: isItalic,
+                isFocused: focused
+            )
                 .frame(minHeight: 80, maxHeight: 200)
-                .scrollContentBackground(.hidden)
                 .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
-                .focused($focused)
             Divider()
         }
     }

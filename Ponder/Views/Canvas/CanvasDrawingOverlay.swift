@@ -8,13 +8,6 @@ import PencilKit
 
 #if os(iOS)
 
-// MARK: - Preference key
-
-private struct ContentAreaSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
-}
-
 // MARK: - Overlay
 
 struct CanvasDrawingOverlay: View {
@@ -31,24 +24,16 @@ struct CanvasDrawingOverlay: View {
     @Binding var liveOffset: CGSize
 
     @State private var drawing: PKDrawing
-    @State private var isDrawingModeActive = true
     @State private var isPickingColor = false
     @State private var selectedColor = UIColor.systemOrange
     @State private var pickedColorRevision = 0
-
-    /// The scale / offset that match the coordinate space of the current
-    /// strokes in `drawing`.  Updated each time we return from Navigate mode.
     @State private var effectiveScale:  CGFloat
     @State private var effectiveOffset: CGSize
-
-    /// Snapshot rendered ONCE when entering Navigate mode.
-    /// Pure UIImage → SwiftUI transform with no UIKit render-cycle lag.
-    @State private var navigateSnapshot: UIImage? = nil
-
-    /// Content-area size captured from a GeometryReader (needed for snapshot).
-    @State private var contentAreaSize: CGSize = .zero
+    @State private var navigationSnapshot: DrawingNavigationSnapshot?
+    @State private var redrawShield: RedrawShield?
 
     let smartShapeSnappingEnabled: Bool
+    let isCanvasNavigationGestureActive: Bool
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
     // MARK: Init
@@ -61,6 +46,7 @@ struct CanvasDrawingOverlay: View {
         liveScale:   Binding<CGFloat>,
         liveOffset:  Binding<CGSize>,
         initialDrawing: PKDrawing = PKDrawing(),
+        isCanvasNavigationGestureActive: Bool = false,
         smartShapeSnappingEnabled: Bool,
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
@@ -70,6 +56,7 @@ struct CanvasDrawingOverlay: View {
         self.startOffset     = startOffset
         self._liveScale      = liveScale
         self._liveOffset     = liveOffset
+        self.isCanvasNavigationGestureActive = isCanvasNavigationGestureActive
         self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         self.onSave          = onSave
         self._drawing         = State(initialValue: initialDrawing)
@@ -77,19 +64,13 @@ struct CanvasDrawingOverlay: View {
         self._effectiveOffset = State(initialValue: startOffset)
     }
 
-    // MARK: Visual transform (Navigate mode only)
+    // MARK: Visual transform
 
-    /// Ratio to visually scale the snapshot so it tracks the canvas zoom.
-    private var visualRatio: CGFloat { liveScale / effectiveScale }
+    /// Ratio to visually scale the live drawing surface so it tracks canvas zoom.
+    private var visualRatio: CGFloat { liveScale / max(effectiveScale, 0.0001) }
     private var usesCompactToolbar: Bool { horizontalSizeClass == .compact }
-    private var modeButtonTitle: String {
-        if isDrawingModeActive {
-            return usesCompactToolbar ? "Draw" : "Drawing"
-        }
-        return usesCompactToolbar ? "Move" : "Navigate"
-    }
 
-    /// Translation to visually shift the snapshot so it tracks the canvas pan.
+    /// Translation to visually shift the live drawing surface so it tracks canvas pan.
     private var visualTranslation: CGSize {
         let r = visualRatio
         return CGSize(
@@ -101,121 +82,94 @@ struct CanvasDrawingOverlay: View {
     // MARK: Body
 
     var body: some View {
-        ZStack {
+        GeometryReader { geo in
+            ZStack {
 
-            // ── Invisible size capturer ──────────────────────────────────────
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .preference(key: ContentAreaSizeKey.self, value: geo.size)
-                    }
-                )
-                .onPreferenceChange(ContentAreaSizeKey.self) { contentAreaSize = $0 }
+                // ── Hit-test backdrop (draw mode only) ───────────────────────────
+                // Prevents accidental taps on canvas elements while we are drawing.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .allowsHitTesting(true)
 
-            // ── Hit-test backdrop (draw mode only) ───────────────────────────
-            // Prevents accidental taps on canvas elements while we are drawing.
-            Color.clear
-                .contentShape(Rectangle())
-                .ignoresSafeArea()
-                .allowsHitTesting(isDrawingModeActive)
-
-            // ── Drawing surface ──────────────────────────────────────────────
-            if isDrawingModeActive {
-
-                // Draw mode: live PKCanvasView.
-                // liveScale / liveOffset are NOT passed here — PKCanvasView
-                // blocks all touches while active, so they never change and
-                // updateUIView is never called unnecessarily.
+                // ── Drawing surface ──────────────────────────────────────────────
                 FullCanvasDrawView(
                     drawing: $drawing,
-                    smartShapeSnappingEnabled: smartShapeSnappingEnabled,
+                    smartShapeSnappingEnabled: smartShapeSnappingEnabled
+                        && navigationSnapshot == nil
+                        && redrawShield == nil,
                     selectedColor: $selectedColor,
                     colorRevision: pickedColorRevision
                 )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .scaleEffect(visualRatio, anchor: .topLeading)
+                .offset(visualTranslation)
+                .opacity(navigationSnapshot == nil && redrawShield == nil ? 1 : 0)
+                .transaction { transaction in
+                    transaction.disablesAnimations = true
+                }
 
-            } else if let snap = navigateSnapshot, contentAreaSize != .zero {
+                if let navigationSnapshot {
+                    Image(uiImage: navigationSnapshot.image)
+                        .resizable()
+                        .frame(
+                            width: navigationSnapshot.sourceRect.width,
+                            height: navigationSnapshot.sourceRect.height
+                        )
+                        .offset(
+                            x: navigationSnapshot.sourceRect.minX,
+                            y: navigationSnapshot.sourceRect.minY
+                        )
+                        .scaleEffect(visualRatio, anchor: .topLeading)
+                        .offset(visualTranslation)
+                        .allowsHitTesting(false)
+                        .zIndex(20)
+                        .transaction { transaction in
+                            transaction.disablesAnimations = true
+                        }
+                }
 
-                // Navigate mode: pre-computed UIImage snapshot.
-                // Rendered ONCE on mode-switch; the SwiftUI transform below
-                // makes it track the canvas with zero UIKit lag.
-                Image(uiImage: snap)
-                    .resizable()
-                    .frame(width: contentAreaSize.width, height: contentAreaSize.height)
-                    .scaleEffect(visualRatio, anchor: .topLeading)
-                    .offset(visualTranslation)
-                    .allowsHitTesting(false)
+                if let redrawShield {
+                    Image(uiImage: redrawShield.image)
+                        .resizable()
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .allowsHitTesting(false)
+                        .zIndex(30)
+                }
+
+                // ── Toolbar ──────────────────────────────────────────────────────
+                VStack {
+                    overlayToolbar
+                        .padding(.top, 12)
+                        .padding(.horizontal, 16)
+                    Spacer()
+                }
+                .zIndex(100)
+
+                if isPickingColor {
+                    DrawingColorSamplingOverlay(
+                        onColorPicked: { color in
+                            selectedColor = color
+                            pickedColorRevision += 1
+                            isPickingColor = false
+                        },
+                        onCancel: {
+                            isPickingColor = false
+                        }
+                    )
+                    .zIndex(250)
+                }
             }
-
-            // ── Toolbar ──────────────────────────────────────────────────────
-            VStack {
-                overlayToolbar
-                    .padding(.top, 12)
-                    .padding(.horizontal, 16)
-                Spacer()
-            }
-
-            if isPickingColor {
-                DrawingColorSamplingOverlay(
-                    onColorPicked: { color in
-                        selectedColor = color
-                        pickedColorRevision += 1
-                        isPickingColor = false
-                    },
-                    onCancel: {
-                        isPickingColor = false
-                    }
-                )
-                .zIndex(250)
+            .onChange(of: isCanvasNavigationGestureActive) { _, isActive in
+                if isActive {
+                    navigationSnapshot = makeNavigationSnapshot(viewportSize: geo.size)
+                    redrawShield = nil
+                    isPickingColor = false
+                } else {
+                    bakeLiveCanvasTransformIntoDrawing(viewportSize: geo.size)
+                }
             }
         }
-    }
-
-    // MARK: Mode toggle
-
-    private func toggleMode() {
-        isPickingColor = false
-
-        if isDrawingModeActive {
-            // Draw → Navigate ────────────────────────────────────────────────
-            isDrawingInputActive = false
-            // Render the drawing to a UIImage once.  During Navigate mode
-            // this image is shown with a SwiftUI transform — pure GPU compositing,
-            // no UIKit involvement, no per-frame updateUIView calls.
-            if contentAreaSize != .zero {
-                navigateSnapshot = drawing.image(
-                    from:  CGRect(origin: .zero, size: contentAreaSize),
-                    scale: UIScreen.main.scale
-                )
-            }
-        } else {
-            // Navigate → Draw ────────────────────────────────────────────────
-            isDrawingInputActive = true
-            // Bake the accumulated pan/zoom delta into PKDrawing so that new
-            // strokes share the same coordinate space as the existing ones.
-            let ratio = liveScale  / effectiveScale
-            let tx    = liveOffset.width  - effectiveOffset.width  * ratio
-            let ty    = liveOffset.height - effectiveOffset.height * ratio
-            let moved = abs(ratio - 1.0) > 0.0001 || abs(tx) > 0.5 || abs(ty) > 0.5
-
-            if moved {
-                let delta = CGAffineTransform(a: ratio, b: 0, c: 0, d: ratio, tx: tx, ty: ty)
-                drawing = drawing.transformed(using: delta)
-            }
-
-            effectiveScale  = liveScale
-            effectiveOffset = liveOffset
-            navigateSnapshot = nil   // PKCanvasView takes over rendering
-        }
-
-        // ⚠️  No withAnimation here.
-        // The visual transform on the snapshot and the PKDrawing content
-        // switch atomically.  An animation would create a window where the
-        // transform is partially applied but the data has already changed,
-        // producing a blink / ghost frame.
-        isDrawingModeActive.toggle()
     }
 
     // MARK: Toolbar
@@ -241,13 +195,6 @@ struct CanvasDrawingOverlay: View {
             // Clear
             Button {
                 drawing = PKDrawing()
-                // Refresh snapshot if we are in Navigate mode.
-                if !isDrawingModeActive, contentAreaSize != .zero {
-                    navigateSnapshot = drawing.image(
-                        from:  CGRect(origin: .zero, size: contentAreaSize),
-                        scale: UIScreen.main.scale
-                    )
-                }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "trash").font(.system(size: 13, weight: .semibold))
@@ -272,31 +219,6 @@ struct CanvasDrawingOverlay: View {
 
             Spacer(minLength: usesCompactToolbar ? 6 : 12)
 
-            // Draw / Navigate toggle
-            Button { toggleMode() } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: isDrawingModeActive ? "hand.draw.fill" : "hand.raised.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(modeButtonTitle)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-                .foregroundStyle(isDrawingModeActive ? Color.white : Color.primary)
-                .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
-                .background(
-                    isDrawingModeActive
-                        ? AnyShapeStyle(Color.accentColor)
-                        : AnyShapeStyle(.regularMaterial),
-                    in: Capsule()
-                )
-                .shadow(
-                    color:  isDrawingModeActive ? Color.accentColor.opacity(0.35) : .clear,
-                    radius: 6, x: 0, y: 2
-                )
-            }
-            .buttonStyle(.plain)
-
             // Cancel
             Button {
                 isDrawingInputActive = true
@@ -319,24 +241,100 @@ struct CanvasDrawingOverlay: View {
     private func saveAndDismiss() {
         isPickingColor = false
 
-        if isDrawingModeActive {
-            // Already in Draw mode — strokes are in the effectiveScale/Offset space.
-            onSave(drawing, effectiveScale, effectiveOffset)
-        } else {
-            // In Navigate mode — bake the outstanding delta before saving.
-            var final = drawing
-            let ratio = liveScale  / effectiveScale
-            let tx    = liveOffset.width  - effectiveOffset.width  * ratio
-            let ty    = liveOffset.height - effectiveOffset.height * ratio
-            if abs(ratio - 1.0) > 0.0001 || abs(tx) > 0.5 || abs(ty) > 0.5 {
-                let delta = CGAffineTransform(a: ratio, b: 0, c: 0, d: ratio, tx: tx, ty: ty)
-                final = final.transformed(using: delta)
-            }
-            onSave(final, liveScale, liveOffset)
-        }
+        onSave(drawingBakedToLiveCanvas(), liveScale, liveOffset)
         isDrawingInputActive = true
         isActive = false
     }
+
+    private func bakeLiveCanvasTransformIntoDrawing(viewportSize: CGSize) {
+        guard hasLiveCanvasTransformDelta else {
+            navigationSnapshot = nil
+            return
+        }
+
+        redrawShield = makeRedrawShield(viewportSize: viewportSize)
+        let bakedDrawing = drawingBakedToLiveCanvas()
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            navigationSnapshot = nil
+            drawing = bakedDrawing
+            effectiveScale = liveScale
+            effectiveOffset = liveOffset
+        }
+
+        let shieldID = redrawShield?.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            guard redrawShield?.id == shieldID else { return }
+            redrawShield = nil
+        }
+    }
+
+    private var hasLiveCanvasTransformDelta: Bool {
+        abs(visualRatio - 1.0) > 0.0001
+        || abs(visualTranslation.width) > 0.5
+        || abs(visualTranslation.height) > 0.5
+    }
+
+    private func makeNavigationSnapshot(viewportSize: CGSize) -> DrawingNavigationSnapshot? {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+
+        let ratio = max(visualRatio, 0.0001)
+        let visibleSourceRect = CGRect(
+            x: -visualTranslation.width / ratio,
+            y: -visualTranslation.height / ratio,
+            width: viewportSize.width / ratio,
+            height: viewportSize.height / ratio
+        )
+        let sourceRect = visibleSourceRect.insetBy(
+            dx: -visibleSourceRect.width * 0.5,
+            dy: -visibleSourceRect.height * 0.5
+        )
+        let image = drawing.image(
+            from: sourceRect,
+            scale: UIScreen.main.scale * ratio
+        )
+        return DrawingNavigationSnapshot(image: image, sourceRect: sourceRect)
+    }
+
+    private func makeRedrawShield(viewportSize: CGSize) -> RedrawShield? {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return nil }
+
+        let ratio = max(visualRatio, 0.0001)
+        let sourceRect = CGRect(
+            x: -visualTranslation.width / ratio,
+            y: -visualTranslation.height / ratio,
+            width: viewportSize.width / ratio,
+            height: viewportSize.height / ratio
+        )
+        let image = drawing.image(
+            from: sourceRect,
+            scale: UIScreen.main.scale * ratio
+        )
+        return RedrawShield(image: image)
+    }
+
+    private func drawingBakedToLiveCanvas() -> PKDrawing {
+        let ratio = visualRatio
+        let tx = visualTranslation.width
+        let ty = visualTranslation.height
+        guard hasLiveCanvasTransformDelta else { return drawing }
+
+        let delta = CGAffineTransform(a: ratio, b: 0, c: 0, d: ratio, tx: tx, ty: ty)
+        return drawing.transformed(using: delta)
+    }
+}
+
+private struct DrawingNavigationSnapshot: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let sourceRect: CGRect
+}
+
+private struct RedrawShield: Identifiable {
+    let id = UUID()
+    let image: UIImage
 }
 
 // MARK: - Live PKCanvasView (Draw mode only)
@@ -364,6 +362,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         canvas.isScrollEnabled = false
         canvas.delegate     = context.coordinator
         context.coordinator.canvasView = canvas
+        context.coordinator.rememberCanvasDrawing(drawing)
 
         let picker = PKToolPicker()
         context.coordinator.toolPicker = picker
@@ -379,11 +378,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
         context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
-        // Only update drawing when it changed from outside (Clear button or
-        // delta bake after Navigate mode).  Guard prevents self-triggering.
-        if canvas.drawing != drawing {
-            canvas.drawing = drawing
-        }
+        context.coordinator.applyExternalDrawingIfNeeded(drawing, to: canvas)
         context.coordinator.applyPickedColorIfNeeded(
             to: canvas,
             selectedColor: selectedColor,
@@ -417,6 +412,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         private var lastPickerToolItemIdentifier: String?
         private var lastPickerInkType: PKInkingTool.InkType?
         private var isApplyingPickedColor = false
+        private var currentCanvasDrawingData = Data()
         private let shapeSnapController = PencilShapeSnapController()
 
         init(drawing: Binding<PKDrawing>,
@@ -428,16 +424,30 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
 
+        func rememberCanvasDrawing(_ drawing: PKDrawing) {
+            currentCanvasDrawingData = drawing.dataRepresentation()
+        }
+
+        func applyExternalDrawingIfNeeded(_ drawing: PKDrawing, to canvas: PKCanvasView) {
+            let nextData = drawing.dataRepresentation()
+            guard nextData != currentCanvasDrawingData else { return }
+            canvas.drawing = drawing
+            currentCanvasDrawingData = nextData
+        }
+
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            rememberCanvasDrawing(canvasView.drawing)
             drawing = canvasView.drawing
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
             shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                self?.rememberCanvasDrawing(snappedDrawing)
                 self?.drawing = snappedDrawing
             }
         }
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                self?.rememberCanvasDrawing(snappedDrawing)
                 self?.drawing = snappedDrawing
             }
         }

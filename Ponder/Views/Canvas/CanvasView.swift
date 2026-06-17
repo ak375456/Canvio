@@ -156,6 +156,10 @@ struct CanvasView: View {
     @State private var continuingCanvasDrawingID: UUID?
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
+    @State private var isCanvasNavigationGestureInProgress = false
+    @State private var canvasNavigationGesturePanTranslation: CGSize = .zero
+    @State private var canvasNavigationGestureMagnification: CGFloat = 1
+    @State private var canvasNavigationGestureFocalPoint: CGPoint?
     @State private var canvasGestureSuppressionID = UUID()
     @State private var selectedGroupID: UUID?
     @State private var draggingGroupID: UUID?
@@ -490,39 +494,26 @@ struct CanvasView: View {
 
                 #if os(iOS)
                 CanvasGestureBridge(
-                    isEnabled: (!vm.showCanvasDrawingOverlay || !isCanvasDrawingInputActive) && !isLassoModeActive,
-                    selectedElementFrame: selectedElementGestureFrame,
+                    isEnabled: !isLassoModeActive,
+                    requiresTwoFingerPan: vm.showCanvasDrawingOverlay && isCanvasDrawingInputActive,
+                    selectedElementFrame: vm.showCanvasDrawingOverlay ? nil : selectedElementGestureFrame,
                     onPanBegan: {
-                        beginCanvasGestureSuppression()
-                        vm.lastOffset = vm.offset
+                        beginCanvasNavigationGesture()
                     },
                     onPanChanged: { translation in
-                        vm.offset = CGSize(
-                            width: vm.lastOffset.width + translation.width,
-                            height: vm.lastOffset.height + translation.height
-                        )
+                        updateCanvasNavigationPan(translation)
                     },
                     onPanEnded: {
-                        vm.handleDragEnd()
-                        if !canvas.isInfinite {
-                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
-                        }
-                        endCanvasGestureSuppression()
+                        endCanvasNavigationGesture(viewportSize: geo.size)
                     },
                     onPinchBegan: {
-                        beginCanvasGestureSuppression()
-                        vm.lastScale = vm.scale
-                        vm.lastOffset = vm.offset
+                        beginCanvasNavigationGesture()
                     },
                     onPinchChanged: { magnification, focal in
-                        vm.handleMagnification(magnification, focalPoint: focal)
+                        updateCanvasNavigationMagnification(magnification, focalPoint: focal)
                     },
                     onPinchEnded: {
-                        vm.handleMagnificationEnd()
-                        if !canvas.isInfinite {
-                            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
-                        }
-                        endCanvasGestureSuppression()
+                        endCanvasNavigationGesture(viewportSize: geo.size)
                     }
                 )
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -943,6 +934,7 @@ struct CanvasView: View {
             liveScale: $vm.scale,
             liveOffset: $vm.offset,
             initialDrawing: canvasDrawingInitialDrawing,
+            isCanvasNavigationGestureActive: isCanvasNavigationGestureInProgress,
             smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled
         ) { pkDrawing, effectiveScale, effectiveOffset in
             saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
@@ -2766,13 +2758,75 @@ struct CanvasView: View {
             }
     }
 
+    private func beginCanvasNavigationGesture() {
+        let wasInProgress = isCanvasNavigationGestureInProgress
+        beginCanvasGestureSuppression()
+
+        guard !wasInProgress else { return }
+        vm.lastOffset = vm.offset
+        vm.lastScale = vm.scale
+        canvasNavigationGesturePanTranslation = .zero
+        canvasNavigationGestureMagnification = 1
+        canvasNavigationGestureFocalPoint = nil
+    }
+
+    private func updateCanvasNavigationPan(_ translation: CGSize) {
+        canvasNavigationGesturePanTranslation = translation
+        applyCanvasNavigationGesture()
+    }
+
+    private func updateCanvasNavigationMagnification(_ magnification: CGFloat, focalPoint: CGPoint) {
+        canvasNavigationGestureMagnification = magnification
+        if canvasNavigationGestureFocalPoint == nil {
+            canvasNavigationGestureFocalPoint = focalPoint
+        }
+        applyCanvasNavigationGesture()
+    }
+
+    private func applyCanvasNavigationGesture() {
+        let baseScale = max(vm.lastScale, 0.0001)
+        let nextScale = max(0.3, min(baseScale * canvasNavigationGestureMagnification, 5.0))
+        let scaleDelta = nextScale / baseScale
+
+        let zoomedOffset: CGSize
+        if let focal = canvasNavigationGestureFocalPoint {
+            zoomedOffset = CGSize(
+                width: focal.x - (focal.x - vm.lastOffset.width) * scaleDelta,
+                height: focal.y - (focal.y - vm.lastOffset.height) * scaleDelta
+            )
+        } else {
+            zoomedOffset = vm.lastOffset
+        }
+
+        vm.scale = nextScale
+        vm.offset = CGSize(
+            width: zoomedOffset.width + canvasNavigationGesturePanTranslation.width,
+            height: zoomedOffset.height + canvasNavigationGesturePanTranslation.height
+        )
+    }
+
+    private func endCanvasNavigationGesture(viewportSize: CGSize) {
+        vm.lastScale = vm.scale
+        vm.lastOffset = vm.offset
+        if !canvas.isInfinite {
+            vm.clampOffset(to: canvasNavigationBoundary, viewportSize: viewportSize, scale: vm.scale)
+        }
+
+        canvasNavigationGesturePanTranslation = .zero
+        canvasNavigationGestureMagnification = 1
+        canvasNavigationGestureFocalPoint = nil
+        endCanvasGestureSuppression()
+    }
+
     private func beginCanvasGestureSuppression() {
+        isCanvasNavigationGestureInProgress = true
         if isCanvasGestureActive { return }
         canvasGestureSuppressionID = UUID()
         isCanvasGestureActive = true
     }
 
     private func endCanvasGestureSuppression() {
+        isCanvasNavigationGestureInProgress = false
         let token = UUID()
         canvasGestureSuppressionID = token
         isCanvasGestureActive = true
