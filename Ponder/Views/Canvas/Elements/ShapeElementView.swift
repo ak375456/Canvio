@@ -93,7 +93,7 @@ struct ShapeElementView: View {
     private var shapeLayer: some View {
         shapeRenderer
             .frame(width: currentSize.width, height: currentSize.height)
-            .contentShape(Rectangle())
+            .contentShape(shapeInteractionRegion)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .strokeBorder(
@@ -108,6 +108,18 @@ struct ShapeElementView: View {
                     vm.editingID = shape.id
                 }
             }
+    }
+
+    private var shapeInteractionRegion: ShapeInteractionRegion {
+        ShapeInteractionRegion(
+            kind: shape.shapeKind,
+            triangleVariant: shape.triangleVariant,
+            polygonSides: shape.polygonSides,
+            capturesInterior: (shape.shapeKind.supportsFill && shape.hasFill)
+                || (isSelected && !isMultiSelectMode),
+            hasArrow: shape.hasArrowHead,
+            strokeWidth: max(CGFloat(shape.strokeWidth), 28 / max(canvasScale, 0.1))
+        )
     }
 
     private var toolbarOverlay: some View {
@@ -522,6 +534,56 @@ struct ShapeElementView: View {
 
     private func paletteColor(_ name: String) -> Color {
         ShapeColorPalette.color(named: name)
+    }
+}
+
+private struct ShapeInteractionRegion: Shape {
+    let kind: ShapeKind
+    let triangleVariant: TriangleVariant
+    let polygonSides: Int
+    let capturesInterior: Bool
+    let hasArrow: Bool
+    let strokeWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let basePath = basePath(in: rect)
+        guard !capturesInterior || kind == .line else { return basePath }
+
+        var hitPath = basePath.strokedPath(
+            StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
+        )
+        if kind == .line, hasArrow {
+            hitPath.addPath(arrowPath(in: rect))
+        }
+        return hitPath
+    }
+
+    private func basePath(in rect: CGRect) -> Path {
+        switch kind {
+        case .line:
+            return Path { path in
+                path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            }
+        case .rectangle:
+            return RoundedRectangle(cornerRadius: 4).path(in: rect)
+        case .triangle:
+            return TriangleShape(variant: triangleVariant).path(in: rect)
+        case .polygon:
+            return PolygonShape(sides: polygonSides).path(in: rect)
+        case .circle:
+            return Circle().path(in: rect)
+        }
+    }
+
+    private func arrowPath(in rect: CGRect) -> Path {
+        Path { path in
+            let arrowLength = max(8, strokeWidth * 0.8)
+            path.move(to: CGPoint(x: rect.maxX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.maxX - arrowLength, y: rect.midY - arrowLength * 0.7))
+            path.addLine(to: CGPoint(x: rect.maxX - arrowLength, y: rect.midY + arrowLength * 0.7))
+            path.closeSubpath()
+        }
     }
 }
 
