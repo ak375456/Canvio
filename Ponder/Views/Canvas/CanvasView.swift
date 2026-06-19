@@ -40,9 +40,24 @@ private struct ElementPositionSnapshot {
 }
 
 #if os(iOS)
-private struct HandwritingRecognitionResult {
+private struct HandwritingRecognitionLine {
     let text: String
     let confidence: Float
+    let bounds: CGRect
+}
+
+private struct HandwritingRecognitionResult {
+    let lines: [HandwritingRecognitionLine]
+    let confidence: Float
+
+    var text: String {
+        lines.map(\.text).joined(separator: "\n")
+    }
+}
+
+private struct HandwritingTextBlock {
+    let text: String
+    let bounds: CGRect
 }
 #endif
 
@@ -337,7 +352,10 @@ struct CanvasView: View {
         if let text = element as? TextElementModel {
             let lines = text.text.split(separator: "\n", omittingEmptySubsequences: false)
             let longestLine = lines.map(\.count).max() ?? 4
-            let width = max(160, min(1200, Double(longestLine) * Double(text.fontSize) * 0.62 + 32))
+            let width = max(
+                160,
+                min(20_000, Double(longestLine) * Double(text.fontSize) * 0.62 + 32)
+            )
             let height = max(40, Double(max(lines.count, 1)) * Double(text.fontSize) * 1.35 + 24)
             return ElementBounds(id: text.id, cx: text.x, cy: text.y, width: width, height: height)
         } else if let sticky = element as? StickyNoteModel {
@@ -464,6 +482,7 @@ struct CanvasView: View {
                                 let canvasY = (pt.y - vm.offset.height) / vm.scale
                                 let _ = vm.textVM.addInlineText(
                                     canvasID: activeContentCanvasID,
+                                    style: settings.lastTextStyle(text: ""),
                                     canvasPoint: CGPoint(x: canvasX, y: canvasY),
                                     zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                     context: context,
@@ -935,7 +954,12 @@ struct CanvasView: View {
             liveOffset: $vm.offset,
             initialDrawing: canvasDrawingInitialDrawing,
             isCanvasNavigationGestureActive: isCanvasNavigationGestureInProgress,
-            smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled
+            smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled,
+            showsHandwritingTextGrouping: canvasDrawingCaptureMode == .handwritingText,
+            handwritingTextGrouping: Binding(
+                get: { settings.handwritingTextGrouping },
+                set: { settings.handwritingTextGrouping = $0 }
+            )
         ) { pkDrawing, effectiveScale, effectiveOffset in
             saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
         }
@@ -2987,16 +3011,11 @@ struct CanvasView: View {
             minimumConfidence: Float(settings.handwritingToTextStrictness)
         ) else { return false }
 
-        let canvasPoint = CGPoint(
-            x: (recognitionBounds.midX - effectiveOffset.width) / effectiveScale,
-            y: (recognitionBounds.midY - effectiveOffset.height) / effectiveScale
+        let blocks = handwritingTextBlocks(
+            from: result,
+            grouping: settings.handwritingTextGrouping
         )
-        let estimatedFontSize = estimatedHandwritingFontSize(
-            recognitionText: result.text,
-            bounds: recognitionBounds,
-            scale: effectiveScale
-        )
-        let style = settings.lastTextStyle(text: result.text, estimatedFontSize: estimatedFontSize)
+        guard !blocks.isEmpty else { return false }
 
         if let id = continuingCanvasDrawingID,
            let element = drawings.first(where: { $0.id == id }) {
@@ -3004,11 +3023,32 @@ struct CanvasView: View {
             context.delete(element)
         }
 
-        _ = vm.textVM.addRecognizedHandwritingText(
+        let startingZIndex = LayersViewModel.nextZ(among: allLayerableElements)
+        let placements = blocks.enumerated().map { index, block in
+            let canvasPoint = CGPoint(
+                x: (block.bounds.midX - effectiveOffset.width) / effectiveScale,
+                y: (block.bounds.midY - effectiveOffset.height) / effectiveScale
+            )
+            let estimatedFontSize = estimatedHandwritingFontSize(
+                recognitionText: block.text,
+                bounds: block.bounds,
+                scale: effectiveScale
+            )
+            let style = settings.lastTextStyle(
+                text: block.text,
+                estimatedFontSize: estimatedFontSize
+            )
+
+            return RecognizedHandwritingTextPlacement(
+                style: style,
+                canvasPoint: canvasPoint,
+                zIndex: startingZIndex + index
+            )
+        }
+
+        _ = vm.textVM.addRecognizedHandwritingTexts(
             canvasID: activeContentCanvasID,
-            style: style,
-            canvasPoint: canvasPoint,
-            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            placements: placements,
             context: context,
             undoManager: vm.undoManager
         )
@@ -3035,27 +3075,155 @@ struct CanvasView: View {
             return nil
         }
 
-        let candidates = (request.results ?? [])
-            .compactMap { $0.topCandidates(1).first }
-            .filter { !$0.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let lines = (request.results ?? []).compactMap { observation -> HandwritingRecognitionLine? in
+            guard let candidate = observation.topCandidates(1).first else { return nil }
+            let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
 
-        guard !candidates.isEmpty else { return nil }
+            let normalized = observation.boundingBox
+            let lineBounds = CGRect(
+                x: bounds.minX + normalized.minX * bounds.width,
+                y: bounds.minY + (1 - normalized.maxY) * bounds.height,
+                width: normalized.width * bounds.width,
+                height: normalized.height * bounds.height
+            )
+            return HandwritingRecognitionLine(
+                text: text,
+                confidence: candidate.confidence,
+                bounds: lineBounds
+            )
+        }
+        .sorted {
+            let verticalDifference = abs($0.bounds.midY - $1.bounds.midY)
+            if verticalDifference <= max($0.bounds.height, $1.bounds.height) * 0.45 {
+                return $0.bounds.minX < $1.bounds.minX
+            }
+            return $0.bounds.minY < $1.bounds.minY
+        }
 
-        let lines = candidates.map { $0.string.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let text = lines.joined(separator: "\n")
+        guard !lines.isEmpty else { return nil }
+
+        let text = lines.map(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 2,
               text.rangeOfCharacter(from: .alphanumerics) != nil
         else { return nil }
 
-        let weightedConfidence = candidates.reduce(Float(0)) { partial, candidate in
-            partial + candidate.confidence * Float(max(candidate.string.count, 1))
+        let weightedConfidence = lines.reduce(Float(0)) { partial, line in
+            partial + line.confidence * Float(max(line.text.count, 1))
         }
-        let totalWeight = candidates.reduce(0) { $0 + max($1.string.count, 1) }
+        let totalWeight = lines.reduce(0) { $0 + max($1.text.count, 1) }
         let confidence = weightedConfidence / Float(max(totalWeight, 1))
         guard confidence >= minimumConfidence else { return nil }
 
-        return HandwritingRecognitionResult(text: text, confidence: confidence)
+        return HandwritingRecognitionResult(lines: lines, confidence: confidence)
+    }
+
+    private func handwritingTextBlocks(from result: HandwritingRecognitionResult,
+                                       grouping: HandwritingTextGrouping) -> [HandwritingTextBlock] {
+        switch grouping {
+        case .oneBlock:
+            guard let bounds = unionBounds(of: result.lines) else { return [] }
+            return [HandwritingTextBlock(text: result.text, bounds: bounds)]
+
+        case .eachLine:
+            return result.lines.map {
+                HandwritingTextBlock(text: $0.text, bounds: $0.bounds)
+            }
+
+        case .automatic:
+            return automaticHandwritingTextBlocks(from: result.lines)
+        }
+    }
+
+    private func automaticHandwritingTextBlocks(
+        from lines: [HandwritingRecognitionLine]
+    ) -> [HandwritingTextBlock] {
+        guard !lines.isEmpty else { return [] }
+        let sortedHeights = lines.map { max($0.bounds.height, 1) }.sorted()
+        let medianHeight = sortedHeights[sortedHeights.count / 2]
+        var unvisited = Set(lines.indices)
+        var components: [[HandwritingRecognitionLine]] = []
+
+        while let seed = unvisited.first {
+            unvisited.remove(seed)
+            var stack = [seed]
+            var component: [HandwritingRecognitionLine] = []
+
+            while let index = stack.popLast() {
+                component.append(lines[index])
+                let neighbors = unvisited.filter {
+                    handwritingLinesBelongTogether(
+                        lines[index],
+                        lines[$0],
+                        medianHeight: medianHeight
+                    )
+                }
+                for neighbor in neighbors {
+                    unvisited.remove(neighbor)
+                    stack.append(neighbor)
+                }
+            }
+
+            components.append(component)
+        }
+
+        return components.compactMap { component in
+            let ordered = component.sorted {
+                let verticalDifference = abs($0.bounds.midY - $1.bounds.midY)
+                if verticalDifference <= medianHeight * 0.45 {
+                    return $0.bounds.minX < $1.bounds.minX
+                }
+                return $0.bounds.minY < $1.bounds.minY
+            }
+            guard let bounds = unionBounds(of: ordered) else { return nil }
+
+            var text = ""
+            var previous: HandwritingRecognitionLine?
+            for line in ordered {
+                if let previous {
+                    let sameVisualLine = abs(previous.bounds.midY - line.bounds.midY)
+                        <= medianHeight * 0.45
+                    text += sameVisualLine ? " " : "\n"
+                }
+                text += line.text
+                previous = line
+            }
+            return HandwritingTextBlock(text: text, bounds: bounds)
+        }
+        .sorted {
+            if abs($0.bounds.midY - $1.bounds.midY) <= medianHeight * 0.45 {
+                return $0.bounds.minX < $1.bounds.minX
+            }
+            return $0.bounds.minY < $1.bounds.minY
+        }
+    }
+
+    private func handwritingLinesBelongTogether(_ first: HandwritingRecognitionLine,
+                                                _ second: HandwritingRecognitionLine,
+                                                medianHeight: CGFloat) -> Bool {
+        let a = first.bounds
+        let b = second.bounds
+        let verticalOverlap = max(0, min(a.maxY, b.maxY) - max(a.minY, b.minY))
+        let verticalOverlapRatio = verticalOverlap / max(1, min(a.height, b.height))
+        let horizontalGap = max(0, max(a.minX, b.minX) - min(a.maxX, b.maxX))
+
+        if verticalOverlapRatio >= 0.4 {
+            return horizontalGap <= medianHeight * 3.5
+        }
+
+        let verticalGap = max(0, max(a.minY, b.minY) - min(a.maxY, b.maxY))
+        guard verticalGap <= medianHeight * 1.35 else { return false }
+
+        let horizontalOverlap = max(0, min(a.maxX, b.maxX) - max(a.minX, b.minX))
+        let horizontalOverlapRatio = horizontalOverlap / max(1, min(a.width, b.width))
+        let leftEdgesAreAligned = abs(a.minX - b.minX) <= medianHeight * 2
+        return horizontalOverlapRatio >= 0.12 || leftEdgesAreAligned
+    }
+
+    private func unionBounds(of lines: [HandwritingRecognitionLine]) -> CGRect? {
+        guard let first = lines.first else { return nil }
+        return lines.dropFirst().reduce(first.bounds) { $0.union($1.bounds) }
     }
 
     private func handwritingRecognitionImage(from drawing: PKDrawing, bounds: CGRect) -> CGImage? {
@@ -3088,7 +3256,7 @@ struct CanvasView: View {
                 .count
         )
         let canvasLineHeight = (bounds.height / max(scale, 0.0001)) / CGFloat(lineCount)
-        return Double(max(10, min(72, canvasLineHeight * 0.72)))
+        return TextStyle.clampedFontSize(Double(canvasLineHeight * 0.82))
     }
     #endif
 

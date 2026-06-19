@@ -8,6 +8,13 @@
 import SwiftUI
 
 struct TextStyle {
+    static let minimumFontSize: Double = 10
+    static let maximumFontSize: Double = 240
+
+    static func clampedFontSize(_ size: Double) -> Double {
+        max(minimumFontSize, min(maximumFontSize, size))
+    }
+
     var text: String
     var fontSize: Double
     var isBold: Bool

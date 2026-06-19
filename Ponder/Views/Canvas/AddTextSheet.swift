@@ -208,14 +208,19 @@ struct AddTextSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 label("FONT SIZE"); Spacer()
-                Text("\(Int(fontSize))pt").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                fontSizePresetMenu
             }
             HStack(spacing: 12) {
                 Button { fontSize = max(10, fontSize - 2) } label: {
                     Image(systemName: "minus.circle").font(.title3).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
-                Slider(value: $fontSize, in: 10...72, step: 1).tint(.accentColor)
-                Button { fontSize = min(72, fontSize + 2) } label: {
+                Slider(
+                    value: $fontSize,
+                    in: TextStyle.minimumFontSize...TextStyle.maximumFontSize,
+                    step: 1
+                )
+                .tint(.accentColor)
+                Button { fontSize = TextStyle.clampedFontSize(fontSize + fontSizeStep) } label: {
                     Image(systemName: "plus.circle").font(.title3).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
             }
@@ -469,6 +474,27 @@ struct AddTextSheet: View {
         case "trailing": alignment = .trailing
         default: alignment = .leading
         }
+    }
+
+    private var fontSizeStep: Double {
+        fontSize >= 72 ? 8 : 2
+    }
+
+    private var fontSizePresetMenu: some View {
+        Menu {
+            ForEach([10, 12, 14, 16, 18, 24, 32, 48, 72, 96, 144, 192, 240], id: \.self) { size in
+                Button("\(size) pt") { fontSize = Double(size) }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("\(Int(fontSize))pt")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+        }
+        .buttonStyle(.plain)
     }
 
     private func colorFromName(_ name: String) -> Color {

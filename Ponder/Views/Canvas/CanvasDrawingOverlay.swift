@@ -33,6 +33,8 @@ struct CanvasDrawingOverlay: View {
     @State private var redrawShield: RedrawShield?
 
     let smartShapeSnappingEnabled: Bool
+    let showsHandwritingTextGrouping: Bool
+    @Binding var handwritingTextGrouping: HandwritingTextGrouping
     let isCanvasNavigationGestureActive: Bool
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
@@ -48,6 +50,8 @@ struct CanvasDrawingOverlay: View {
         initialDrawing: PKDrawing = PKDrawing(),
         isCanvasNavigationGestureActive: Bool = false,
         smartShapeSnappingEnabled: Bool,
+        showsHandwritingTextGrouping: Bool = false,
+        handwritingTextGrouping: Binding<HandwritingTextGrouping>,
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
         self._isActive       = isActive
@@ -58,6 +62,8 @@ struct CanvasDrawingOverlay: View {
         self._liveOffset     = liveOffset
         self.isCanvasNavigationGestureActive = isCanvasNavigationGestureActive
         self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
+        self.showsHandwritingTextGrouping = showsHandwritingTextGrouping
+        self._handwritingTextGrouping = handwritingTextGrouping
         self.onSave          = onSave
         self._drawing         = State(initialValue: initialDrawing)
         self._effectiveScale  = State(initialValue: startScale)
@@ -215,6 +221,34 @@ struct CanvasDrawingOverlay: View {
                 isActive: isPickingColor
             ) {
                 isPickingColor.toggle()
+            }
+
+            if showsHandwritingTextGrouping {
+                Menu {
+                    Picker("Text grouping", selection: $handwritingTextGrouping) {
+                        ForEach(HandwritingTextGrouping.allCases) { grouping in
+                            Label(grouping.title, systemImage: grouping.icon)
+                                .tag(grouping)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: handwritingTextGrouping.icon)
+                            .font(.system(size: 13, weight: .semibold))
+                        if !usesCompactToolbar {
+                            Text(handwritingTextGrouping.shortTitle)
+                                .font(.caption.weight(.semibold))
+                        }
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, usesCompactToolbar ? 10 : 12)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Text grouping: \(handwritingTextGrouping.title)")
             }
 
             Spacer(minLength: usesCompactToolbar ? 6 : 12)

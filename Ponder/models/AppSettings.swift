@@ -123,6 +123,49 @@ enum GridStyle: String, CaseIterable, Identifiable {
     }
 }
 
+enum HandwritingTextGrouping: String, CaseIterable, Identifiable {
+    case oneBlock
+    case automatic
+    case eachLine
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .oneBlock:  return "One Block"
+        case .automatic: return "Automatic"
+        case .eachLine:  return "Each Line"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .oneBlock:  return "Block"
+        case .automatic: return "Auto"
+        case .eachLine:  return "Lines"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .oneBlock:  return "text.alignleft"
+        case .automatic: return "wand.and.stars"
+        case .eachLine:  return "text.line.first.and.arrowtriangle.forward"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .oneBlock:
+            return "Keep everything written in the session together as one editable text object."
+        case .automatic:
+            return "Keep nearby lines together and separate text that is written farther apart."
+        case .eachLine:
+            return "Create an independently editable text object for every recognized line."
+        }
+    }
+}
+
 enum CanvasBackgroundMode: String, CaseIterable, Identifiable {
     case adaptive
     case light
@@ -308,6 +351,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
     @AppStorage("ponder.handwritingToTextEnabled") private var handwritingToTextEnabledRaw: Bool = true
     @AppStorage("ponder.handwritingToTextStrictness") private var handwritingToTextStrictnessRaw: Double = 0.35
+    @AppStorage("ponder.handwritingTextGrouping") private var handwritingTextGroupingRaw: String = HandwritingTextGrouping.automatic.rawValue
     @AppStorage("ponder.lastTextFontName") private var lastTextFontNameRaw: String = "system"
     @AppStorage("ponder.lastTextFontSize") private var lastTextFontSizeRaw: Double = 16
     @AppStorage("ponder.lastTextColorName") private var lastTextColorNameRaw: String = "primary"
@@ -379,6 +423,11 @@ class AppSettings: ObservableObject {
         set { handwritingToTextStrictnessRaw = max(0, min(1, newValue)); objectWillChange.send() }
     }
 
+    var handwritingTextGrouping: HandwritingTextGrouping {
+        get { HandwritingTextGrouping(rawValue: handwritingTextGroupingRaw) ?? .automatic }
+        set { handwritingTextGroupingRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
     var lastTextFontName: String {
         get { lastTextFontNameRaw }
         set { lastTextFontNameRaw = newValue; objectWillChange.send() }
@@ -386,7 +435,7 @@ class AppSettings: ObservableObject {
 
     var lastTextFontSize: Double {
         get { lastTextFontSizeRaw }
-        set { lastTextFontSizeRaw = max(10, min(72, newValue)); objectWillChange.send() }
+        set { lastTextFontSizeRaw = TextStyle.clampedFontSize(newValue); objectWillChange.send() }
     }
 
     var lastTextColorName: String {
@@ -445,7 +494,7 @@ class AppSettings: ObservableObject {
 
     func rememberTextStyle(_ style: TextStyle) {
         lastTextFontNameRaw = style.fontName
-        lastTextFontSizeRaw = max(10, min(72, style.fontSize))
+        lastTextFontSizeRaw = TextStyle.clampedFontSize(style.fontSize)
         lastTextColorNameRaw = style.colorName
         lastTextIsBoldRaw = style.isBold
         lastTextIsItalicRaw = style.isItalic
@@ -460,7 +509,7 @@ class AppSettings: ObservableObject {
     func lastTextStyle(text: String, estimatedFontSize: Double? = nil) -> TextStyle {
         TextStyle(
             text: text,
-            fontSize: estimatedFontSize.map { max(10, min(72, $0)) } ?? lastTextFontSizeRaw,
+            fontSize: estimatedFontSize.map(TextStyle.clampedFontSize) ?? lastTextFontSizeRaw,
             isBold: lastTextIsBoldRaw,
             isItalic: lastTextIsItalicRaw,
             isUnderline: lastTextIsUnderlineRaw,

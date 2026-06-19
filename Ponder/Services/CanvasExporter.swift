@@ -496,12 +496,15 @@ final class CanvasExporter {
     }
 
     fileprivate static func estimatedTextSize(for element: TextElementModel) -> CGSize {
-        let fontSize = CGFloat(max(10, min(72, element.fontSize)))
+        let fontSize = CGFloat(TextStyle.clampedFontSize(element.fontSize))
         let lines = element.text.split(separator: "\n", omittingEmptySubsequences: false)
         let longestLineLength = max(lines.map(\.count).max() ?? 0, 1)
         let lineCount = max(lines.count, 1)
         let padding: CGFloat = element.hasCard ? 32 : 20
-        let width = min(900, max(80, CGFloat(longestLineLength) * fontSize * 0.62 + padding))
+        let width = min(
+            20_000,
+            max(80, CGFloat(longestLineLength) * fontSize * 0.62 + padding)
+        )
         let height = max(36, CGFloat(lineCount) * fontSize * 1.25 + padding)
         return CGSize(width: width, height: height)
     }

@@ -166,7 +166,7 @@ struct TextElementView: View {
             TextEditor(text: $inlineText)
                 .font(elementFont)
                 .foregroundStyle(vm.colorFromName(element.colorName))
-                .multilineTextAlignment(.leading)
+                .multilineTextAlignment(element.textAlignment)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .focused($inlineFocused)
@@ -231,11 +231,15 @@ struct TextElementView: View {
 
                 toolbarDivider
 
-                formatButton(icon: "minus", active: false) { vm.adjustFontSize(by: -2, element: element, context: context) }
+                formatButton(icon: "minus", active: false) {
+                    vm.adjustFontSize(by: -fontSizeStep, element: element, context: context)
+                }
                 Text("\(Int(element.fontSize))")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary).frame(width: 28)
-                formatButton(icon: "plus", active: false) { vm.adjustFontSize(by: 2, element: element, context: context) }
+                    .foregroundStyle(.secondary).frame(width: 34)
+                formatButton(icon: "plus", active: false) {
+                    vm.adjustFontSize(by: fontSizeStep, element: element, context: context)
+                }
 
                 toolbarDivider
 
@@ -494,7 +498,9 @@ struct TextElementView: View {
                 }
                 .onEnded { value in
                     let delta = (value.translation.width + value.translation.height) / 2
-                    element.fontSize = max(10, min(72, element.fontSize + delta * 0.15))
+                    element.fontSize = TextStyle.clampedFontSize(
+                        element.fontSize + delta * 0.15
+                    )
                     resizeDelta = 0
                     try? context.save()
                 })
@@ -572,12 +578,18 @@ struct TextElementView: View {
     }
 
     private var elementFont: Font {
-        let size = max(10, min(72, element.fontSize + Double(resizeDelta) * 0.15))
+        let size = TextStyle.clampedFontSize(
+            element.fontSize + Double(resizeDelta) * 0.15
+        )
         var f: Font = element.fontName == "system"
             ? .system(size: size)
             : .custom(element.fontName, size: size)
         if element.isBold   { f = f.bold()   }
         if element.isItalic { f = f.italic() }
         return f
+    }
+
+    private var fontSizeStep: Double {
+        element.fontSize >= 72 ? 8 : 2
     }
 }

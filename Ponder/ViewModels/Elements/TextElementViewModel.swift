@@ -7,6 +7,19 @@ import SwiftUI
 import SwiftData
 import Combine
 
+struct RecognizedHandwritingTextPlacement {
+    let style: TextStyle
+    let canvasPoint: CGPoint
+    let zIndex: Int
+}
+
+private struct RecognizedHandwritingTextRecord {
+    let id: UUID
+    let style: TextStyle
+    let canvasPoint: CGPoint
+    let zIndex: Int
+}
+
 @MainActor
 class TextElementViewModel: ObservableObject {
     @Published var editingID: UUID?       = nil
@@ -69,12 +82,117 @@ class TextElementViewModel: ObservableObject {
     func addRecognizedHandwritingText(canvasID: UUID, style: TextStyle, canvasPoint: CGPoint,
                                       zIndex: Int, context: ModelContext,
                                       undoManager: CanvasUndoManager? = nil) -> UUID? {
-        let trimmed = style.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        addRecognizedHandwritingTexts(
+            canvasID: canvasID,
+            placements: [RecognizedHandwritingTextPlacement(
+                style: style,
+                canvasPoint: canvasPoint,
+                zIndex: zIndex
+            )],
+            context: context,
+            undoManager: undoManager
+        ).first
+    }
 
-        let element = TextElementModel(canvasID: canvasID, text: trimmed,
-                                       x: canvasPoint.x, y: canvasPoint.y)
+    @discardableResult
+    func addRecognizedHandwritingTexts(
+        canvasID: UUID,
+        placements: [RecognizedHandwritingTextPlacement],
+        context: ModelContext,
+        undoManager: CanvasUndoManager? = nil
+    ) -> [UUID] {
+        let records = placements.compactMap { placement -> RecognizedHandwritingTextRecord? in
+            let trimmed = placement.style.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            var style = placement.style
+            style.text = trimmed
+            style.fontSize = TextStyle.clampedFontSize(style.fontSize)
+            return RecognizedHandwritingTextRecord(
+                id: UUID(),
+                style: style,
+                canvasPoint: placement.canvasPoint,
+                zIndex: placement.zIndex
+            )
+        }
+        guard !records.isEmpty else { return [] }
+
+        let elements = records.map { record in
+            makeRecognizedHandwritingElement(canvasID: canvasID, record: record)
+        }
+        for element in elements { context.insert(element) }
+        try? context.save()
+        editingID = elements.last?.id
+        Task {
+            for element in elements {
+                await TextSyncService.shared.upsert(element)
+            }
+        }
+
+        let ids = records.map(\.id)
+        undoManager?.push(CanvasAction(
+            undo: {
+                let allText = (try? context.fetch(FetchDescriptor<TextElementModel>())) ?? []
+                let matches = allText.filter { ids.contains($0.id) }
+                for element in matches { context.delete(element) }
+                try? context.save()
+                Task {
+                    for element in matches {
+                        await TextSyncService.shared.delete(element)
+                    }
+                }
+            },
+            redo: {
+                let restored = records.map { record in
+                    self.makeRecognizedHandwritingElement(canvasID: canvasID, record: record)
+                }
+                for element in restored { context.insert(element) }
+                try? context.save()
+                Task {
+                    for element in restored {
+                        await TextSyncService.shared.upsert(element)
+                    }
+                }
+            }
+        ))
+
+        return ids
+    }
+
+    private func makeRecognizedHandwritingElement(
+        canvasID: UUID,
+        record: RecognizedHandwritingTextRecord
+    ) -> TextElementModel {
+        let style = record.style
+        let element = TextElementModel(
+            canvasID: canvasID,
+            text: style.text,
+            x: record.canvasPoint.x,
+            y: record.canvasPoint.y
+        )
+        element.id = record.id
         element.fontSize = style.fontSize
+        element.isBold = style.isBold
+        element.isItalic = style.isItalic
+        element.isUnderline = style.isUnderline
+        element.colorName = style.colorName
+        element.fontName = style.fontName
+        element.alignmentRaw = style.alignmentRaw
+        element.bgColorName = style.bgColorName
+        element.strokeColorName = style.strokeColorName
+        element.strokeWidth = style.strokeWidth
+        element.zIndex = record.zIndex
+        element.updatedAt = Date()
+        return element
+    }
+
+    // MARK: - Add inline (double-tap on canvas)
+
+    func addInlineText(canvasID: UUID, style: TextStyle, canvasPoint: CGPoint, zIndex: Int,
+                       context: ModelContext,
+                       undoManager: CanvasUndoManager? = nil) -> TextElementModel {
+        let element = TextElementModel(canvasID: canvasID, text: "",
+                                       x: canvasPoint.x, y: canvasPoint.y)
+        element.fontSize = TextStyle.clampedFontSize(style.fontSize)
         element.isBold = style.isBold
         element.isItalic = style.isItalic
         element.isUnderline = style.isUnderline
@@ -86,56 +204,6 @@ class TextElementViewModel: ObservableObject {
         element.strokeWidth = style.strokeWidth
         element.zIndex = zIndex
         element.updatedAt = Date()
-        context.insert(element)
-        try? context.save()
-        editingID = element.id
-        Task { await TextSyncService.shared.upsert(element) }
-
-        let id = element.id
-        undoManager?.push(CanvasAction(
-            undo: {
-                if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
-                    .first(where: { $0.id == id }) {
-                    context.delete(el)
-                    try? context.save()
-                    Task { await TextSyncService.shared.delete(el) }
-                }
-            },
-            redo: {
-                let el = TextElementModel(canvasID: canvasID, text: trimmed,
-                                          x: canvasPoint.x, y: canvasPoint.y)
-                el.id = id
-                el.fontSize = style.fontSize
-                el.isBold = style.isBold
-                el.isItalic = style.isItalic
-                el.isUnderline = style.isUnderline
-                el.colorName = style.colorName
-                el.fontName = style.fontName
-                el.alignmentRaw = style.alignmentRaw
-                el.bgColorName = style.bgColorName
-                el.strokeColorName = style.strokeColorName
-                el.strokeWidth = style.strokeWidth
-                el.zIndex = zIndex
-                el.updatedAt = Date()
-                context.insert(el)
-                try? context.save()
-                Task { await TextSyncService.shared.upsert(el) }
-            }
-        ))
-
-        return id
-    }
-
-    // MARK: - Add inline (double-tap on canvas)
-
-    func addInlineText(canvasID: UUID, canvasPoint: CGPoint, zIndex: Int,
-                       context: ModelContext,
-                       undoManager: CanvasUndoManager? = nil) -> TextElementModel {
-        let element = TextElementModel(canvasID: canvasID, text: "",
-                                       x: canvasPoint.x, y: canvasPoint.y)
-        element.fontSize   = 16
-        element.zIndex     = zIndex
-        element.updatedAt  = Date()
         context.insert(element)
         try? context.save()
         inlineEditingID    = element.id
@@ -171,6 +239,15 @@ class TextElementViewModel: ObservableObject {
             let y        = element.y
             let zIndex   = element.zIndex
             let fontSize = element.fontSize
+            let isBold = element.isBold
+            let isItalic = element.isItalic
+            let isUnderline = element.isUnderline
+            let colorName = element.colorName
+            let fontName = element.fontName
+            let alignmentRaw = element.alignmentRaw
+            let bgColorName = element.bgColorName
+            let strokeColorName = element.strokeColorName
+            let strokeWidth = element.strokeWidth
             undoManager?.push(CanvasAction(
                 undo: {
                     if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
@@ -181,7 +258,18 @@ class TextElementViewModel: ObservableObject {
                 },
                 redo: {
                     let el = TextElementModel(canvasID: canvasID, text: trimmed, x: x, y: y)
-                    el.id = id; el.zIndex = zIndex; el.fontSize = fontSize
+                    el.id = id
+                    el.zIndex = zIndex
+                    el.fontSize = fontSize
+                    el.isBold = isBold
+                    el.isItalic = isItalic
+                    el.isUnderline = isUnderline
+                    el.colorName = colorName
+                    el.fontName = fontName
+                    el.alignmentRaw = alignmentRaw
+                    el.bgColorName = bgColorName
+                    el.strokeColorName = strokeColorName
+                    el.strokeWidth = strokeWidth
                     el.updatedAt = Date()
                     context.insert(el); try? context.save()
                     Task { await TextSyncService.shared.upsert(el) }
@@ -305,7 +393,7 @@ class TextElementViewModel: ObservableObject {
     }
 
     func adjustFontSize(by delta: Double, element: TextElementModel, context: ModelContext) {
-        element.fontSize = max(10, min(72, element.fontSize + delta))
+        element.fontSize = TextStyle.clampedFontSize(element.fontSize + delta)
         element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
     }

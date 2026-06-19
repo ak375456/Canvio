@@ -201,6 +201,31 @@ struct SettingsSheet: View {
                             step: 0.05
                         )
                         .tint(.accentColor)
+
+                        Divider()
+                            .padding(.vertical, 2)
+
+                        Text("TEXT GROUPING")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        Picker(
+                            "Text grouping",
+                            selection: Binding(
+                                get: { settings.handwritingTextGrouping },
+                                set: { settings.handwritingTextGrouping = $0 }
+                            )
+                        ) {
+                            ForEach(HandwritingTextGrouping.allCases) { grouping in
+                                Text(grouping.shortTitle).tag(grouping)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text(settings.handwritingTextGrouping.explanation)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, 28)
                     .transition(.opacity.combined(with: .move(edge: .top)))
