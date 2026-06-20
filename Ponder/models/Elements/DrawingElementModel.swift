@@ -51,4 +51,11 @@ class DrawingElementModel: LayerableElement {
         get { (try? PKDrawing(data: drawingData)) ?? PKDrawing() }
         set { drawingData = (try? newValue.dataRepresentation()) ?? Data() }
     }
+
+    /// Marker-only freehand canvas drawings always belong behind normal items.
+    var isCanvasHighlighterDrawing: Bool {
+        isCanvasDrawing
+            && !pkDrawing.strokes.isEmpty
+            && pkDrawing.strokes.contains { $0.ink.inkType == .marker }
+    }
 }

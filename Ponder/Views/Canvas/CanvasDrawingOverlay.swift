@@ -35,6 +35,7 @@ struct CanvasDrawingOverlay: View {
     let smartShapeSnappingEnabled: Bool
     let showsHandwritingTextGrouping: Bool
     @Binding var handwritingTextGrouping: HandwritingTextGrouping
+    @Binding var isHighlighterToolSelected: Bool
     let isCanvasNavigationGestureActive: Bool
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
 
@@ -52,6 +53,7 @@ struct CanvasDrawingOverlay: View {
         smartShapeSnappingEnabled: Bool,
         showsHandwritingTextGrouping: Bool = false,
         handwritingTextGrouping: Binding<HandwritingTextGrouping>,
+        isHighlighterToolSelected: Binding<Bool>,
         onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
     ) {
         self._isActive       = isActive
@@ -64,6 +66,7 @@ struct CanvasDrawingOverlay: View {
         self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         self.showsHandwritingTextGrouping = showsHandwritingTextGrouping
         self._handwritingTextGrouping = handwritingTextGrouping
+        self._isHighlighterToolSelected = isHighlighterToolSelected
         self.onSave          = onSave
         self._drawing         = State(initialValue: initialDrawing)
         self._effectiveScale  = State(initialValue: startScale)
@@ -105,7 +108,8 @@ struct CanvasDrawingOverlay: View {
                         && navigationSnapshot == nil
                         && redrawShield == nil,
                     selectedColor: $selectedColor,
-                    colorRevision: pickedColorRevision
+                    colorRevision: pickedColorRevision,
+                    isHighlighterToolSelected: $isHighlighterToolSelected
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scaleEffect(visualRatio, anchor: .topLeading)
@@ -378,12 +382,14 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     let smartShapeSnappingEnabled: Bool
     @Binding var selectedColor: UIColor
     let colorRevision: Int
+    @Binding var isHighlighterToolSelected: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             drawing: $drawing,
             selectedColor: $selectedColor,
-            smartShapeSnappingEnabled: smartShapeSnappingEnabled
+            smartShapeSnappingEnabled: smartShapeSnappingEnabled,
+            isHighlighterToolSelected: $isHighlighterToolSelected
         )
     }
 
@@ -406,6 +412,11 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         context.coordinator.markAppliedColorRevision(colorRevision)
         picker.setVisible(true, forFirstResponder: canvas)
         context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
+        let coordinator = context.coordinator
+        DispatchQueue.main.async { [weak canvas] in
+            guard let canvas else { return }
+            coordinator.syncHighlighterToolSelection(from: canvas)
+        }
         canvas.becomeFirstResponder()
         return canvas
     }
@@ -435,6 +446,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         @Binding var drawing: PKDrawing
         @Binding var selectedColor: UIColor
+        @Binding var isHighlighterToolSelected: Bool
         weak var canvasView: PKCanvasView?
         var toolPicker: PKToolPicker?
         var smartShapeSnappingEnabled: Bool {
@@ -451,9 +463,11 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         init(drawing: Binding<PKDrawing>,
              selectedColor: Binding<UIColor>,
-             smartShapeSnappingEnabled: Bool) {
+             smartShapeSnappingEnabled: Bool,
+             isHighlighterToolSelected: Binding<Bool>) {
             self._drawing = drawing
             self._selectedColor = selectedColor
+            self._isHighlighterToolSelected = isHighlighterToolSelected
             self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
@@ -514,21 +528,33 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             selectedColor = color
         }
 
+        func syncHighlighterToolSelection(from canvas: PKCanvasView) {
+            if currentInkingTool(for: canvas)?.inkType == .marker {
+                isHighlighterToolSelected = true
+            }
+        }
+
         func rememberPickerSelection(_ toolPicker: PKToolPicker) {
             _ = updatePickerSelectionState(toolPicker)
         }
 
         private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
-            let didSwitchTool = updatePickerSelectionState(toolPicker)
-            let didSwitchToInkingTool = didSwitchTool && pickerInkingTool(from: toolPicker) != nil
+            _ = updatePickerSelectionState(toolPicker)
+            let selectedInkingTool = pickerInkingTool(from: toolPicker)
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let canvas = self.canvasView else { return }
 
-                if didSwitchToInkingTool {
-                    self.applyColor(self.selectedColor, to: canvas, switchToPenIfNeeded: false)
+                if let selectedInkingTool {
+                    let toolColor = selectedInkingTool.color.withAlphaComponent(1)
+                    if !self.selectedColor.isDrawingEquivalent(to: toolColor) {
+                        self.selectedColor = toolColor
+                    }
                 } else {
                     self.syncSelectedColorFromCurrentInkingTool(canvas)
+                }
+                if selectedInkingTool?.inkType == .marker {
+                    self.isHighlighterToolSelected = true
                 }
             }
         }
@@ -554,6 +580,9 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             isApplyingPickedColor = true
             canvas.tool = nextTool
             isApplyingPickedColor = false
+            if nextTool.inkType == .marker {
+                isHighlighterToolSelected = true
+            }
         }
 
         private func currentInkingTool(for canvas: PKCanvasView) -> PKInkingTool? {

@@ -604,7 +604,12 @@ struct CanvasExportView: View {
         elements += audioElements as [any LayerableElement]
         elements += youtubeElements as [any LayerableElement]
         elements += symbols as [any LayerableElement]
-        return elements.sorted { $0.zIndex < $1.zIndex }
+        return elements.sorted { lhs, rhs in
+            let lhsIsHighlight = (lhs as? DrawingElementModel)?.isCanvasHighlighterDrawing == true
+            let rhsIsHighlight = (rhs as? DrawingElementModel)?.isCanvasHighlighterDrawing == true
+            if lhsIsHighlight != rhsIsHighlight { return lhsIsHighlight }
+            return lhs.zIndex < rhs.zIndex
+        }
     }
 
     private var boundsMap: [UUID: CGRect] {

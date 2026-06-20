@@ -169,6 +169,7 @@ struct CanvasView: View {
     @State private var canvasDrawingInitialDrawing = PKDrawing()
     @State private var canvasDrawingCaptureMode: CanvasDrawingCaptureMode = .drawing
     @State private var continuingCanvasDrawingID: UUID?
+    @State private var isCanvasHighlighterToolSelected = false
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var isCanvasNavigationGestureInProgress = false
@@ -290,7 +291,15 @@ struct CanvasView: View {
     }
 
     private var sortedElements: [any LayerableElement] {
-        allLayerableElements.sorted { $0.zIndex < $1.zIndex }
+        allLayerableElements.sorted(by: canvasLayerSortsBefore)
+    }
+
+    private func canvasLayerSortsBefore(_ lhs: any LayerableElement,
+                                        _ rhs: any LayerableElement) -> Bool {
+        let lhsIsHighlight = (lhs as? DrawingElementModel)?.isCanvasHighlighterDrawing == true
+        let rhsIsHighlight = (rhs as? DrawingElementModel)?.isCanvasHighlighterDrawing == true
+        if lhsIsHighlight != rhsIsHighlight { return lhsIsHighlight }
+        return lhs.zIndex < rhs.zIndex
     }
 
     private var boundsMap: [UUID: ElementBounds] {
@@ -326,7 +335,7 @@ struct CanvasView: View {
             pinnedIDs.contains(element.id)
             || elementBounds(for: element).intersects(canvasRect: viewportRect)
         }
-        .sorted { $0.zIndex < $1.zIndex }
+        .sorted(by: canvasLayerSortsBefore)
     }
 
     private func visibleCanvasRect(viewportSize: CGSize) -> CGRect {
@@ -506,6 +515,7 @@ struct CanvasView: View {
                         )
                     )
                     #endif
+                    .zIndex(-2)
 
                 if !canvas.isInfinite { pageBoundaryOverlay(geo: geo) }
 
@@ -906,6 +916,7 @@ struct CanvasView: View {
         }
         .scaleEffect(vm.scale, anchor: .topLeading)
         .offset(vm.offset)
+        .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .simultaneousGesture(
             SpatialTapGesture(count: 1, coordinateSpace: .named(canvasViewportCoordinateSpace))
                 .onEnded { tap in
@@ -959,11 +970,12 @@ struct CanvasView: View {
             handwritingTextGrouping: Binding(
                 get: { settings.handwritingTextGrouping },
                 set: { settings.handwritingTextGrouping = $0 }
-            )
+            ),
+            isHighlighterToolSelected: $isCanvasHighlighterToolSelected
         ) { pkDrawing, effectiveScale, effectiveOffset in
             saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
         }
-        .zIndex(200)
+        .zIndex(isCanvasHighlighterToolSelected ? -1 : 200)
         .transition(.opacity)
         #else
         EmptyView()
@@ -2863,6 +2875,7 @@ struct CanvasView: View {
 
     private func startCanvasDrawing(mode: CanvasDrawingCaptureMode = .drawing) {
         dismissEverything()
+        isCanvasHighlighterToolSelected = false
         continuingCanvasDrawingID = nil
         canvasDrawingInitialDrawing = PKDrawing()
         canvasDrawingCaptureMode = mode
@@ -2880,6 +2893,7 @@ struct CanvasView: View {
 
         let initialDrawing = viewportDrawing(for: element)
         dismissEverything()
+        isCanvasHighlighterToolSelected = element.isCanvasHighlighterDrawing
         continuingCanvasDrawingID = element.id
         canvasDrawingInitialDrawing = initialDrawing
         canvasDrawingCaptureMode = .drawing
@@ -2931,8 +2945,16 @@ struct CanvasView: View {
 
     private func persistCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {
         let strokeBounds = pkDrawing.bounds
-        guard !pkDrawing.strokes.isEmpty,
+        guard canvasDrawingHasVisibleInk(pkDrawing),
               strokeBounds.width > 0, strokeBounds.height > 0 else {
+            if let id = continuingCanvasDrawingID,
+               let element = drawings.first(where: { $0.id == id }) {
+                vm.drawingVM.delete(
+                    element: element,
+                    context: context,
+                    undoManager: vm.undoManager
+                )
+            }
             continuingCanvasDrawingID = nil
             canvasDrawingInitialDrawing = PKDrawing()
             canvasDrawingCaptureMode = .drawing
@@ -2987,6 +3009,17 @@ struct CanvasView: View {
         continuingCanvasDrawingID = nil
         canvasDrawingInitialDrawing = PKDrawing()
         canvasDrawingCaptureMode = .drawing
+    }
+
+    /// PencilKit can keep a fully erased stroke as a masked record, so checking
+    /// `strokes.isEmpty` is not enough. This follows the stroke's rendered mask
+    /// ranges and only reports ink that still has at least one drawable point.
+    private func canvasDrawingHasVisibleInk(_ drawing: PKDrawing) -> Bool {
+        drawing.strokes.contains { stroke in
+            stroke.maskedPathRanges.contains { range in
+                !Array(stroke.path.interpolatedPoints(in: range, by: .distance(8))).isEmpty
+            }
+        }
     }
 
     #if os(iOS)
@@ -3516,6 +3549,7 @@ struct CanvasView: View {
         .opacity(vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
                  ? 0
                  : layersVM.highlightedID == element.id ? 0.5 : 1)
+        .zIndex((element as? DrawingElementModel)?.isCanvasHighlighterDrawing == true ? -2 : 0)
         .offset(selectionDragOffset(for: element))
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
