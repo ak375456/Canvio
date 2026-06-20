@@ -135,12 +135,21 @@ struct DrawingElementView: View {
                 }
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))
+        .contentShape(drawingInteractionRegion)
         .onTapGesture {
             if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
                 onExternalTap?(); vm.editingID = element.id; vm.isDrawingModeActive = false
             }
         }
+    }
+
+    private var drawingInteractionRegion: DrawingInteractionRegion {
+        DrawingInteractionRegion(
+            drawing: element.pkDrawing,
+            capturesBounds: isSelected || !element.isCanvasDrawing,
+            cornerRadius: element.isCanvasDrawing ? 0 : 12,
+            minimumStrokeWidth: 28 / max(canvasScale, 0.1)
+        )
     }
 
     private var deleteHandle: some View {
@@ -281,5 +290,61 @@ struct DrawingElementView: View {
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
         }
+    }
+}
+
+private struct DrawingInteractionRegion: Shape {
+    let drawing: PKDrawing
+    let capturesBounds: Bool
+    let cornerRadius: CGFloat
+    let minimumStrokeWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        if capturesBounds {
+            return RoundedRectangle(cornerRadius: cornerRadius).path(in: rect)
+        }
+
+        var interactionPath = Path()
+        for stroke in drawing.strokes {
+            let transformScale = max(
+                hypot(stroke.transform.a, stroke.transform.b),
+                hypot(stroke.transform.c, stroke.transform.d)
+            )
+
+            for range in stroke.maskedPathRanges {
+                let samples = Array(
+                    stroke.path.interpolatedPoints(in: range, by: .distance(4))
+                )
+                guard let first = samples.first else { continue }
+
+                let renderedWidth = samples.reduce(CGFloat(0)) { current, point in
+                    max(current, max(point.size.width, point.size.height))
+                } * max(transformScale, 0.01)
+                let hitWidth = max(minimumStrokeWidth, renderedWidth)
+                let firstLocation = first.location.applying(stroke.transform)
+
+                if samples.count == 1 {
+                    interactionPath.addEllipse(in: CGRect(
+                        x: firstLocation.x - hitWidth / 2,
+                        y: firstLocation.y - hitWidth / 2,
+                        width: hitWidth,
+                        height: hitWidth
+                    ))
+                    continue
+                }
+
+                var centerline = Path()
+                centerline.move(to: firstLocation)
+                for sample in samples.dropFirst() {
+                    centerline.addLine(to: sample.location.applying(stroke.transform))
+                }
+                interactionPath.addPath(
+                    centerline.strokedPath(
+                        StrokeStyle(lineWidth: hitWidth, lineCap: .round, lineJoin: .round)
+                    )
+                )
+            }
+        }
+        return interactionPath
     }
 }
