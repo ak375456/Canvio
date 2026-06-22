@@ -11,6 +11,7 @@ import Supabase
 
 private struct PDFRow: Codable {
     let id:                  String
+    let document_id:         String
     let canvas_id:           String
     let user_id:             String
     let pdf_file_name:       String
@@ -29,6 +30,20 @@ private struct PDFRow: Codable {
     let is_deleted:          Bool
 }
 
+private struct PDFDocumentAssetRow: Codable {
+    let id: String
+    let user_id: String
+    let pdf_file_name: String
+    let thumbnail_file_name: String
+    let original_name: String
+    let page_count: Int
+    let file_size_bytes: Int64?
+    let sha256: String?
+    let created_at: String
+    let updated_at: String
+    let is_deleted: Bool
+}
+
 private struct PDFDeleteUpdate: Encodable {
     let is_deleted: Bool
     let updated_at: String
@@ -40,6 +55,7 @@ private struct PDFDeletePayload: Codable {
     let updated_at:          String
     let pdf_file_name:       String
     let thumbnail_file_name: String
+    let delete_asset: Bool
 }
 
 // MARK: - PDFSyncService
@@ -66,6 +82,7 @@ final class PDFSyncService {
     func upsert(_ element: PDFElementModel) async {
         guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
+        let documentRow = makeDocumentRow(element: element, userID: userID)
 
         Task { await media.uploadPDF(pdfFileName: element.pdfFileName,
                                      thumbnailFileName: element.thumbnailFileName) }
@@ -78,6 +95,10 @@ final class PDFSyncService {
         }
 
         do {
+            try await supabase
+                .from("pdf_documents")
+                .upsert(documentRow, onConflict: "id")
+                .execute()
             try await supabase
                 .from("pdf_elements")
                 .upsert(row, onConflict: "id")
@@ -92,7 +113,7 @@ final class PDFSyncService {
 
     // MARK: - Soft delete
 
-    func delete(_ element: PDFElementModel) async {
+    func delete(_ element: PDFElementModel, deleteAsset: Bool = true) async {
         guard let userID = AuthService.shared.syncUserID else { return }
         let elementID = element.id.uuidString
         let now       = iso.string(from: Date())
@@ -100,7 +121,8 @@ final class PDFSyncService {
         guard network.isConnected else {
             let payload = PDFDeletePayload(id: elementID, user_id: userID, updated_at: now,
                                            pdf_file_name: element.pdfFileName,
-                                           thumbnail_file_name: element.thumbnailFileName)
+                                           thumbnail_file_name: element.thumbnailFileName,
+                                           delete_asset: deleteAsset)
             if let data = try? JSONEncoder().encode(payload) {
                 queue.enqueue(SyncOperation(type: .deletePDF, payload: data))
             }
@@ -114,12 +136,15 @@ final class PDFSyncService {
                 .eq("id",      value: elementID)
                 .eq("user_id", value: userID)
                 .execute()
-            Task { await media.deletePDF(pdfFileName: element.pdfFileName,
-                                         thumbnailFileName: element.thumbnailFileName) }
+            if deleteAsset {
+                Task { await media.deletePDF(pdfFileName: element.pdfFileName,
+                                             thumbnailFileName: element.thumbnailFileName) }
+            }
         } catch {
             let payload = PDFDeletePayload(id: elementID, user_id: userID, updated_at: now,
                                            pdf_file_name: element.pdfFileName,
-                                           thumbnail_file_name: element.thumbnailFileName)
+                                           thumbnail_file_name: element.thumbnailFileName,
+                                           delete_asset: deleteAsset)
             if let data = try? JSONEncoder().encode(payload) {
                 queue.enqueue(SyncOperation(type: .deletePDF, payload: data))
             }
@@ -160,6 +185,7 @@ final class PDFSyncService {
                     let remoteUpdated = iso.date(from: row.updated_at) ?? .distantPast
                     if remoteUpdated > local.updatedAt {
                         local.x         = row.x
+                        local.documentID = UUID(uuidString: row.document_id)
                         local.y         = row.y
                         local.width     = row.width
                         local.height    = row.height
@@ -180,6 +206,7 @@ final class PDFSyncService {
                         x: row.x, y: row.y
                     )
                     element.id        = rowID
+                    element.documentID = UUID(uuidString: row.document_id)
                     element.width     = row.width
                     element.height    = row.height
                     element.rotation  = row.rotation
@@ -212,6 +239,19 @@ final class PDFSyncService {
             case .upsertPDF:
                 if let row = try? JSONDecoder().decode(PDFRow.self, from: operation.payload) {
                     do {
+                        let fileURL = PDFStorageService.pdfsDirectory.appendingPathComponent(row.pdf_file_name)
+                        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                        let documentRow = PDFDocumentAssetRow(
+                            id: row.document_id, user_id: row.user_id,
+                            pdf_file_name: row.pdf_file_name,
+                            thumbnail_file_name: row.thumbnail_file_name,
+                            original_name: row.original_name, page_count: max(1, row.page_count),
+                            file_size_bytes: fileSize, sha256: nil,
+                            created_at: row.created_at, updated_at: row.updated_at,
+                            is_deleted: false
+                        )
+                        try await supabase.from("pdf_documents")
+                            .upsert(documentRow, onConflict: "id").execute()
                         try await supabase
                             .from("pdf_elements")
                             .upsert(row, onConflict: "id")
@@ -233,8 +273,10 @@ final class PDFSyncService {
                             .eq("id",      value: payload.id)
                             .eq("user_id", value: payload.user_id)
                             .execute()
-                        Task { await media.deletePDF(pdfFileName: payload.pdf_file_name,
-                                                     thumbnailFileName: payload.thumbnail_file_name) }
+                        if payload.delete_asset {
+                            Task { await media.deletePDF(pdfFileName: payload.pdf_file_name,
+                                                         thumbnailFileName: payload.thumbnail_file_name) }
+                        }
                         succeeded = true
                     } catch {
                         print("⚠️ Queue flush PDF delete failed: \(error.localizedDescription)")
@@ -255,6 +297,7 @@ final class PDFSyncService {
         let now = iso.string(from: Date())
         return PDFRow(
             id:                  element.id.uuidString,
+            document_id:         element.resolvedDocumentID.uuidString,
             canvas_id:           element.canvasID.uuidString,
             user_id:             userID,
             pdf_file_name:       element.pdfFileName,
@@ -271,6 +314,24 @@ final class PDFSyncService {
             created_at:          iso.string(from: element.createdAt),
             updated_at:          now,
             is_deleted:          false
+        )
+    }
+
+    private func makeDocumentRow(element: PDFElementModel, userID: String) -> PDFDocumentAssetRow {
+        let fileURL = PDFStorageService.pdfsDirectory.appendingPathComponent(element.pdfFileName)
+        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+        return PDFDocumentAssetRow(
+            id: element.resolvedDocumentID.uuidString,
+            user_id: userID,
+            pdf_file_name: element.pdfFileName,
+            thumbnail_file_name: element.thumbnailFileName,
+            original_name: element.originalName,
+            page_count: max(1, element.pageCount),
+            file_size_bytes: fileSize,
+            sha256: nil,
+            created_at: iso.string(from: element.createdAt),
+            updated_at: iso.string(from: element.updatedAt),
+            is_deleted: false
         )
     }
 }

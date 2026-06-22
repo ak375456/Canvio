@@ -47,6 +47,7 @@ enum AppFontImportError: LocalizedError {
 
 enum AppFontRegistry {
     private static let customFontsFolderName = "Custom Fonts"
+    private static var registeredURLs = Set<URL>()
 
     static func registerBundledFonts() {
         guard let resourcePath = Bundle.main.resourcePath else { return }
@@ -119,8 +120,11 @@ enum AppFontRegistry {
 
     @discardableResult
     private static func registerFont(at url: URL, isCustom: Bool = false) -> [AppFont] {
-        var error: Unmanaged<CFError>?
-        _ = CTFontManagerRegisterFontsForURL(url as CFURL, .process, &error)
+        let canonicalURL = url.standardizedFileURL
+        if registeredURLs.insert(canonicalURL).inserted {
+            var error: Unmanaged<CFError>?
+            _ = CTFontManagerRegisterFontsForURL(canonicalURL as CFURL, .process, &error)
+        }
         return fontDescriptors(at: url, isCustom: isCustom)
     }
 

@@ -48,6 +48,13 @@ enum SyncOperationType: String, Codable {
     case deleteImage
     case upsertPDF
     case deletePDF
+    case upsertPDFPage
+    case deletePDFPage
+    case upsertPDFHighlight
+    case deletePDFHighlight
+    case upsertPDFInk
+    case deletePDFInk
+    case upsertPDFReadingState
     case upsertAudio
     case deleteAudio
     case upsertYouTube
@@ -73,7 +80,16 @@ final class SyncQueue {
     var count:   Int  { operations.count }
 
     func enqueue(_ operation: SyncOperation) {
-        operations.append(operation); save()
+        // Keep only the newest pending mutation of a given type for one row.
+        // Reconciliation can retry the same failed row many times; appending
+        // every retry makes the queue and UserDefaults grow without bound.
+        if let rowID = entityID(in: operation.payload) {
+            operations.removeAll {
+                $0.type == operation.type && entityID(in: $0.payload) == rowID
+            }
+        }
+        operations.append(operation)
+        save()
     }
 
     func all() -> [SyncOperation] { operations }
@@ -86,6 +102,21 @@ final class SyncQueue {
         operations.removeAll(); save()
     }
 
+    /// A persisted queue can survive sign-out. Never replay user A's payload
+    /// while authenticated as user B; Supabase correctly rejects that via RLS.
+    @discardableResult
+    func discardOperationsOwnedByAnotherUser(currentUserID: String) -> Int {
+        let normalizedCurrent = currentUserID.lowercased()
+        let oldCount = operations.count
+        operations.removeAll { operation in
+            guard let owner = ownerUserID(in: operation.payload) else { return false }
+            return owner.lowercased() != normalizedCurrent
+        }
+        let removed = oldCount - operations.count
+        if removed > 0 { save() }
+        return removed
+    }
+
     private func save() {
         guard let data = try? JSONEncoder().encode(operations) else { return }
         UserDefaults.standard.set(data, forKey: key)
@@ -96,5 +127,17 @@ final class SyncQueue {
               let ops  = try? JSONDecoder().decode([SyncOperation].self, from: data)
         else { return }
         operations = ops
+    }
+
+    private func entityID(in payload: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        else { return nil }
+        return object["id"] as? String
+    }
+
+    private func ownerUserID(in payload: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        else { return nil }
+        return object["user_id"] as? String
     }
 }

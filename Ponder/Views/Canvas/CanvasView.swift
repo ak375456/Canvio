@@ -132,6 +132,9 @@ struct CanvasView: View {
     @Query private var allShapes: [ShapeElementModel]
     @Query private var allImages: [ImageElementModel]
     @Query private var allPDFs: [PDFElementModel]
+    @Query private var allPDFPages: [PDFPageElementModel]
+    @Query private var allPDFHighlights: [PDFHighlightModel]
+    @Query private var allPDFInkLayers: [PDFInkLayerModel]
     @Query private var allTables: [TableElementModel]
     @Query private var allTableCells: [TableCellModel]
     @Query private var allAudio: [AudioElementModel]
@@ -163,6 +166,7 @@ struct CanvasView: View {
     @State private var pagePendingDeletion: CanvasPageModel?
     @State private var lastMenuLocation: CGPoint? = nil
     @State private var openPDFElement: PDFElementModel? = nil
+    @State private var openPDFPageIndex = 0
     @State private var showPDFImporter = false
     @State private var drawingStartScale:  CGFloat = 1.0
     @State private var drawingStartOffset: CGSize  = .zero
@@ -188,6 +192,9 @@ struct CanvasView: View {
     @State private var isProcessingDocumentScan = false
     @State private var ocrScanAlertMessage: String?
     #if os(iOS)
+    @State private var showOCRSourcePicker = false
+    @State private var showOCRImagePicker = false
+    @State private var selectedOCRPhotoItem: PhotosPickerItem?
     @State private var keyboardAvoidanceOffset: CGFloat = 0
     #endif
 
@@ -207,6 +214,9 @@ struct CanvasView: View {
     private var shapes: [ShapeElementModel]         { allShapes.filter       { $0.canvasID == activeContentCanvasID } }
     private var images: [ImageElementModel]         { allImages.filter       { $0.canvasID == activeContentCanvasID } }
     private var pdfs: [PDFElementModel]             { allPDFs.filter         { $0.canvasID == activeContentCanvasID } }
+    private var pdfPages: [PDFPageElementModel]     { allPDFPages.filter     { $0.canvasID == activeContentCanvasID } }
+    private var pdfHighlights: [PDFHighlightModel]  { allPDFHighlights.filter { $0.canvasID == activeContentCanvasID } }
+    private var pdfInkLayers: [PDFInkLayerModel]    { allPDFInkLayers.filter { $0.canvasID == activeContentCanvasID } }
     private var tables: [TableElementModel]         { allTables.filter       { $0.canvasID == activeContentCanvasID } }
     private var tableCells: [TableCellModel] {
         let ids = Set(tables.map { $0.id })
@@ -261,6 +271,7 @@ struct CanvasView: View {
         arr += shapes          as [any LayerableElement]
         arr += images          as [any LayerableElement]
         arr += pdfs            as [any LayerableElement]
+        arr += pdfPages        as [any LayerableElement]
         arr += tables          as [any LayerableElement]
         arr += audioElements   as [any LayerableElement]
         arr += youtubeElements as [any LayerableElement]
@@ -377,6 +388,8 @@ struct CanvasView: View {
             return ElementBounds(id: image.id, cx: image.x, cy: image.y, width: image.width, height: image.height)
         } else if let pdf = element as? PDFElementModel {
             return ElementBounds(id: pdf.id, cx: pdf.x, cy: pdf.y, width: pdf.width, height: pdf.height)
+        } else if let page = element as? PDFPageElementModel {
+            return ElementBounds(id: page.id, cx: page.x, cy: page.y, width: page.width, height: page.height)
         } else if let table = element as? TableElementModel {
             return ElementBounds(id: table.id, cx: table.x, cy: table.y, width: table.totalWidth, height: table.totalHeight)
         } else if let audio = element as? AudioElementModel {
@@ -400,6 +413,7 @@ struct CanvasView: View {
         if let id = vm.shapeVM.editingID { return id }
         if let id = vm.imageVM.editingID { return id }
         if let id = vm.pdfVM.editingID { return id }
+        if let id = vm.pdfPageVM.editingID { return id }
         if let id = vm.tableVM.selectedTableID { return id }
         if let id = vm.audioVM.editingID { return id }
         if let id = vm.youtubeVM.editingID { return id }
@@ -677,7 +691,8 @@ struct CanvasView: View {
                     Minimap(
                         textElements: textElements, stickyNotes: stickyNotes,
                         todoLists: todoLists, shapes: shapes, images: images,
-                        pdfs: pdfs, tables: tables, audioElements: audioElements,
+                        pdfs: pdfs, pdfPages: pdfPages,
+                        tables: tables, audioElements: audioElements,
                         youtubeElements: youtubeElements, drawings: drawings,
                         symbols: symbols, viewportSize: geo.size,
                         canvasOffset: vm.offset, canvasScale: vm.scale,
@@ -822,6 +837,15 @@ struct CanvasView: View {
                 .presentationCornerRadius(24)
             }
             #if os(iOS)
+            .sheet(isPresented: $showOCRSourcePicker) {
+                OCRSourcePickerSheet(
+                    onPhotos: { showOCRImagePicker = true },
+                    onCamera: { beginOCRCameraScan() }
+                )
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
             .sheet(isPresented: $vm.showImageSourcePicker) {
                 ImageSourcePickerSheet(
                     onCamera: { vm.showCameraPicker = true },
@@ -880,6 +904,26 @@ struct CanvasView: View {
             }
             #endif
             .photosPicker(isPresented: $vm.showImagePicker, selection: $vm.selectedPhotoItem, matching: .images)
+            #if os(iOS)
+            .photosPicker(
+                isPresented: $showOCRImagePicker,
+                selection: $selectedOCRPhotoItem,
+                matching: .images
+            )
+            .onChange(of: selectedOCRPhotoItem) { _, newItem in
+                guard let item = newItem else { return }
+                Task {
+                    defer { selectedOCRPhotoItem = nil }
+                    guard let data = try? await item.loadTransferable(type: Data.self),
+                          let image = UIImage(data: data) else {
+                        vm.pendingOCRLocation = nil
+                        ocrScanAlertMessage = "Could not open this image."
+                        return
+                    }
+                    createOCRText(from: [image], viewportSize: geo.size)
+                }
+            }
+            #endif
             .onChange(of: vm.selectedPhotoItem) { _, newItem in
                 guard let item = newItem else { return }
                 Task {
@@ -1064,16 +1108,7 @@ struct CanvasView: View {
     }
 
     private func canvasDocumentSheets<Content: View>(_ content: Content) -> some View {
-        content
-            .sheet(isPresented: $showPDFReader, onDismiss: { openPDFElement = nil }) {
-                if let pdf = openPDFElement {
-                    PDFReaderSheet(
-                        pdfFileName: pdf.pdfFileName,
-                        originalName: pdf.originalName,
-                        pageCount: pdf.pageCount
-                    )
-                }
-            }
+        pdfReaderPresentation(content)
             .sheet(isPresented: $showPDFImporter) {
                 pdfImporterSheet
             }
@@ -1083,6 +1118,74 @@ struct CanvasView: View {
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(24)
             }
+    }
+
+    @ViewBuilder
+    private func pdfReaderPresentation<Content: View>(_ content: Content) -> some View {
+        #if os(iOS)
+        content.fullScreenCover(isPresented: $showPDFReader, onDismiss: {
+            openPDFElement = nil
+            openPDFPageIndex = 0
+        }) {
+            pdfWorkspaceContent
+        }
+        #else
+        content.sheet(isPresented: $showPDFReader, onDismiss: {
+            openPDFElement = nil
+            openPDFPageIndex = 0
+        }) {
+            pdfWorkspaceContent
+                .frame(minWidth: 900, minHeight: 700)
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var pdfWorkspaceContent: some View {
+                if let pdf = openPDFElement {
+                    PDFWorkspaceView(
+                        element: pdf,
+                        canvasID: activeContentCanvasID,
+                        initialPageIndex: openPDFPageIndex,
+                        onExtract: { payload in
+                            createTextCard(from: payload, source: pdf)
+                        },
+                        onPlacePages: { requests in
+                            placePDFPages(requests, source: pdf)
+                        }
+                    )
+                }
+    }
+
+    private func createTextCard(from payload: PDFSelectionPayload, source: PDFElementModel) {
+        let existingExtracts = textElements.filter {
+            $0.sourcePDFDocumentID == source.resolvedDocumentID
+        }.count
+        let point = CGPoint(
+            x: source.x + source.width / 2 + 210,
+            y: source.y + Double(existingExtracts % 5) * 54
+        )
+        _ = vm.textVM.addPDFExtract(
+            canvasID: activeContentCanvasID,
+            payload: payload,
+            documentID: source.resolvedDocumentID,
+            canvasPoint: point,
+            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            context: context,
+            undoManager: vm.undoManager
+        )
+    }
+
+    private func placePDFPages(_ requests: [PDFPagePlacementRequest], source: PDFElementModel) {
+        _ = vm.pdfPageVM.addPages(
+            source: source,
+            requests: requests,
+            canvasID: activeContentCanvasID,
+            zIndex: LayersViewModel.nextZ(among: allLayerableElements),
+            boundary: elementInteractionBoundary,
+            context: context,
+            undoManager: vm.undoManager
+        )
     }
 
     private func canvasAlerts<Content: View>(_ content: Content) -> some View {
@@ -1385,6 +1488,9 @@ struct CanvasView: View {
         let shapes = allShapes.filter { $0.canvasID == contentCanvasID }
         let images = allImages.filter { $0.canvasID == contentCanvasID }
         let pdfs = allPDFs.filter { $0.canvasID == contentCanvasID }
+        let pdfPages = allPDFPages.filter { $0.canvasID == contentCanvasID }
+        let pdfHighlights = allPDFHighlights.filter { $0.canvasID == contentCanvasID }
+        let pdfInkLayers = allPDFInkLayers.filter { $0.canvasID == contentCanvasID }
         let tables = allTables.filter { $0.canvasID == contentCanvasID }
         let tableIDs = Set(tables.map(\.id))
         let cells = allTableCells.filter { tableIDs.contains($0.tableID) }
@@ -1405,6 +1511,9 @@ struct CanvasView: View {
             for shape in shapes { await ShapeSyncService.shared.delete(shape) }
             for image in images { await ImageSyncService.shared.delete(image) }
             for pdf in pdfs { await PDFSyncService.shared.delete(pdf) }
+            for page in pdfPages { await PDFWorkspaceSyncService.shared.delete(page) }
+            for highlight in pdfHighlights { await PDFWorkspaceSyncService.shared.delete(highlight) }
+            for ink in pdfInkLayers { await PDFWorkspaceSyncService.shared.delete(ink) }
             for table in tables {
                 let tableCells = cells.filter { $0.tableID == table.id }
                 await TableSyncService.shared.deleteTable(table, cells: tableCells)
@@ -1424,6 +1533,9 @@ struct CanvasView: View {
         shapes.forEach { context.delete($0) }
         images.forEach { context.delete($0) }
         pdfs.forEach { context.delete($0) }
+        pdfPages.forEach { context.delete($0) }
+        pdfHighlights.forEach { context.delete($0) }
+        pdfInkLayers.forEach { context.delete($0) }
         cells.forEach { context.delete($0) }
         tables.forEach { context.delete($0) }
         audio.forEach { context.delete($0) }
@@ -2295,6 +2407,10 @@ struct CanvasView: View {
                          canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
             ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
         }
+        appendStackItems((try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? [],
+                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
+            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
+        }
         appendStackItems((try? context.fetch(FetchDescriptor<TableElementModel>())) ?? [],
                          canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
             ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.totalWidth, height: $0.totalHeight)
@@ -2747,6 +2863,8 @@ struct CanvasView: View {
             await ImageSyncService.shared.upsert(element)
         } else if let element = element as? PDFElementModel {
             await PDFSyncService.shared.upsert(element)
+        } else if let element = element as? PDFPageElementModel {
+            await PDFWorkspaceSyncService.shared.upsert(element)
         } else if let element = element as? TableElementModel {
             await TableSyncService.shared.upsertTable(element)
         } else if let element = element as? AudioElementModel {
@@ -3320,6 +3438,7 @@ struct CanvasView: View {
         await TableSyncService.shared.pullAll(canvasID: canvasID, context: context)
         await ImageSyncService.shared.pullAll(canvasID: canvasID, context: context)
         await PDFSyncService.shared.pullAll(canvasID: canvasID, context: context)
+        await PDFWorkspaceSyncService.shared.pullAll(canvasID: canvasID, context: context)
         await AudioSyncService.shared.pullAll(canvasID: canvasID, context: context)
         await YouTubeSyncService.shared.pullAll(canvasID: canvasID, context: context)
         await SymbolSyncService.shared.pullAll(canvasID: canvasID, context: context)
@@ -3498,9 +3617,44 @@ struct CanvasView: View {
                 PDFElementView(element: pdf, canvasScale: vm.scale, canvasBoundary: boundary,
                                vm: vm.pdfVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
-                               onOpenReader: { openPDFElement = pdf; showPDFReader = true },
+                               onOpenReader: {
+                                   openPDFElement = pdf
+                                   openPDFPageIndex = 0
+                                   showPDFReader = true
+                               },
                                onExternalTap: { dismissEverything() },
                                isCanvasGestureActive: childInteractionLocked)
+            } else if let page = element as? PDFPageElementModel {
+                let source = allPDFs.first { $0.resolvedDocumentID == page.documentID }
+                PDFPageElementView(
+                    element: page,
+                    source: source,
+                    highlights: pdfHighlights.filter {
+                        $0.documentID == page.documentID && $0.pageIndex == page.pageIndex
+                    },
+                    inkLayer: pdfInkLayers.first {
+                        $0.documentID == page.documentID && $0.pageIndex == page.pageIndex
+                    },
+                    canvasScale: vm.scale,
+                    canvasBoundary: boundary,
+                    vm: vm.pdfPageVM,
+                    isMultiSelectMode: multiSelect,
+                    isSelectedInMultiSelect: isElemSelected,
+                    onOpenReader: {
+                        guard let source else { return }
+                        openPDFElement = source
+                        openPDFPageIndex = page.pageIndex
+                        showPDFReader = true
+                    },
+                    onRecrop: {
+                        guard let source else { return }
+                        openPDFElement = source
+                        openPDFPageIndex = page.pageIndex
+                        showPDFReader = true
+                    },
+                    onExternalTap: { dismissEverything() },
+                    isCanvasGestureActive: childInteractionLocked
+                )
             } else if let table = element as? TableElementModel {
                 TableElementView(
                     table: table, allCells: tableCells,
@@ -3788,7 +3942,7 @@ struct CanvasView: View {
         }
         vm.textVM.stopEditing()
         vm.stickyVM.stopEditing(); vm.todoVM.stopEditing()
-        vm.shapeVM.stopEditing(); vm.imageVM.stopEditing(); vm.pdfVM.stopEditing()
+        vm.shapeVM.stopEditing(); vm.imageVM.stopEditing(); vm.pdfVM.stopEditing(); vm.pdfPageVM.stopEditing()
         vm.tableVM.stopAll(); vm.audioVM.stopEditing(); vm.youtubeVM.stopEditing(); vm.drawingVM.stopEditing()
         vm.connectorVM.stopEditing(); vm.symbolVM.stopEditing()  // ← NEW
         vm.hideAddMenu()
@@ -3812,6 +3966,7 @@ struct CanvasView: View {
         else if shapes.contains(where:         { $0.id == id }) { vm.shapeVM.editingID = id }
         else if images.contains(where:         { $0.id == id }) { vm.imageVM.editingID = id }
         else if pdfs.contains(where:           { $0.id == id }) { vm.pdfVM.editingID = id }
+        else if pdfPages.contains(where:        { $0.id == id }) { vm.pdfPageVM.editingID = id }
         else if tables.contains(where:         { $0.id == id }) { vm.tableVM.selectTable(id: id) }
         else if audioElements.contains(where:  { $0.id == id }) { vm.audioVM.editingID = id }
         else if youtubeElements.contains(where:{ $0.id == id }) { vm.youtubeVM.editingID = id }
@@ -3905,16 +4060,22 @@ struct CanvasView: View {
     private func openOCRScanner(at point: CGPoint) {
         dismissEverything()
         #if os(iOS)
-        guard VNDocumentCameraViewController.isSupported else {
-            ocrScanAlertMessage = "Document scanning is not available on this device."
-            return
-        }
         vm.pendingOCRLocation = point
-        vm.showOCRScanner = true
+        showOCRSourcePicker = true
         #else
-        ocrScanAlertMessage = "Document scanning is available on iPhone and iPad."
+        ocrScanAlertMessage = "Text extraction is available on iPhone and iPad."
         #endif
     }
+    #if os(iOS)
+    private func beginOCRCameraScan() {
+        guard VNDocumentCameraViewController.isSupported else {
+            ocrScanAlertMessage = "Document scanning is not available on this device."
+            vm.pendingOCRLocation = nil
+            return
+        }
+        vm.showOCRScanner = true
+    }
+    #endif
     private func openDocumentScanner(at point: CGPoint) {
         dismissEverything()
         #if os(iOS)
@@ -3990,6 +4151,10 @@ struct CanvasView: View {
 
     #if os(iOS)
     private func createOCRTextFromScan(images: [UIImage], geo: GeometryProxy) {
+        createOCRText(from: images, viewportSize: geo.size)
+    }
+
+    private func createOCRText(from images: [UIImage], viewportSize: CGSize) {
         guard !images.isEmpty else {
             vm.pendingOCRLocation = nil
             ocrScanAlertMessage = "No scanned pages were found."
@@ -4008,7 +4173,10 @@ struct CanvasView: View {
                     return
                 }
 
-                let screenPoint = vm.pendingOCRLocation ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+                let screenPoint = vm.pendingOCRLocation ?? CGPoint(
+                    x: viewportSize.width / 2,
+                    y: viewportSize.height / 2
+                )
                 let canvasPoint = CGPoint(
                     x: (screenPoint.x - vm.offset.width) / vm.scale,
                     y: (screenPoint.y - vm.offset.height) / vm.scale
@@ -4120,6 +4288,9 @@ struct CanvasView: View {
             if let duplicatedID, selectCopy {
                 vm.pdfVM.editingID = duplicatedID
             }
+        } else if let el = element as? PDFPageElementModel {
+            duplicatedID = vm.pdfPageVM.duplicate(element: el, zIndex: z, offset: offset, context: context)
+            if let duplicatedID, selectCopy { vm.pdfPageVM.editingID = duplicatedID }
         } else if let el = element as? TableElementModel {
             duplicatedID = vm.tableVM.duplicate(table: el, cells: tableCells, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
             if let duplicatedID, selectCopy {
@@ -4162,6 +4333,7 @@ struct CanvasView: View {
             else if let el = shapes.first(where:        { $0.id == id }) { vm.shapeVM.delete(shape: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = images.first(where:        { $0.id == id }) { vm.imageVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = pdfs.first(where:          { $0.id == id }) { vm.pdfVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
+            else if let el = pdfPages.first(where:      { $0.id == id }) { vm.pdfPageVM.delete(element: el, context: context); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.delete(table: el, cells: tableCells.filter { $0.tableID == el.id }, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
             else if let el = youtubeElements.first(where: { $0.id == id }) { vm.youtubeVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }

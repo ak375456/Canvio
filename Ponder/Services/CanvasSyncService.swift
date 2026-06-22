@@ -268,6 +268,10 @@ final class CanvasSyncService {
                     $0.canvasID == contentCanvasID
                 } ?? []
                 for el in pdfs { await PDFSyncService.shared.upsert(el) }
+                await PDFWorkspaceSyncService.shared.reconcile(
+                    canvasID: contentCanvasID,
+                    context: context
+                )
 
                 let todos = (try? context.fetch(FetchDescriptor<TodoListModel>()))?.filter {
                     $0.canvasID == contentCanvasID

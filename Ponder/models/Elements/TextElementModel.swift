@@ -25,6 +25,11 @@ class TextElementModel: LayerableElement {
     var groupID: UUID? = nil
     var updatedAt: Date = Date()
 
+    // Optional provenance for text extracted from a PDF selection.
+    var sourcePDFDocumentID: UUID? = nil
+    var sourcePDFPageIndex: Int? = nil
+    var sourcePDFRectsData: Data? = nil
+
     // Card background & stroke — default "none" = no card
     var bgColorName: String     = "none"
     var strokeColorName: String = "none"
@@ -46,6 +51,9 @@ class TextElementModel: LayerableElement {
         self.zIndex         = 0
         self.groupID        = nil
         self.updatedAt      = Date()
+        self.sourcePDFDocumentID = nil
+        self.sourcePDFPageIndex = nil
+        self.sourcePDFRectsData = nil
         self.bgColorName     = "none"
         self.strokeColorName = "none"
         self.strokeWidth     = 2.0
@@ -79,6 +87,14 @@ class TextElementModel: LayerableElement {
     }
 
     var hasCard: Bool { bgColorName != "none" || strokeColorName != "none" }
+
+    var sourcePDFRects: [PDFNormalizedRect] {
+        get {
+            guard let sourcePDFRectsData else { return [] }
+            return (try? JSONDecoder().decode([PDFNormalizedRect].self, from: sourcePDFRectsData)) ?? []
+        }
+        set { sourcePDFRectsData = try? JSONEncoder().encode(newValue) }
+    }
 
     // MARK: - LayerableElement
     var layerTitle: String {

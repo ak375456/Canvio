@@ -31,6 +31,9 @@ private struct TextElementRow: Codable {
     let bg_color_name:     String
     let stroke_color_name: String
     let stroke_width:      Double
+    let source_pdf_document_id: String?
+    let source_pdf_page_index: Int?
+    let source_pdf_rects: [PDFNormalizedRect]?
 }
 
 private struct TextDeleteUpdate: Encodable {
@@ -164,6 +167,9 @@ final class TextSyncService {
                         local.bgColorName     = row.bg_color_name
                         local.strokeColorName = row.stroke_color_name
                         local.strokeWidth     = row.stroke_width
+                        local.sourcePDFDocumentID = row.source_pdf_document_id.flatMap(UUID.init(uuidString:))
+                        local.sourcePDFPageIndex = row.source_pdf_page_index
+                        local.sourcePDFRects = row.source_pdf_rects ?? []
                         local.updatedAt       = remoteUpdated
                     }
                 } else {
@@ -182,6 +188,9 @@ final class TextSyncService {
                     el.bgColorName    = row.bg_color_name
                     el.strokeColorName = row.stroke_color_name
                     el.strokeWidth    = row.stroke_width
+                    el.sourcePDFDocumentID = row.source_pdf_document_id.flatMap(UUID.init(uuidString:))
+                    el.sourcePDFPageIndex = row.source_pdf_page_index
+                    el.sourcePDFRects = row.source_pdf_rects ?? []
                     el.updatedAt      = iso.date(from: row.updated_at) ?? Date()
                     context.insert(el)
                 }
@@ -267,7 +276,10 @@ final class TextSyncService {
             is_deleted:        false,
             bg_color_name:     element.bgColorName,
             stroke_color_name: element.strokeColorName,
-            stroke_width:      element.strokeWidth
+            stroke_width:      element.strokeWidth,
+            source_pdf_document_id: element.sourcePDFDocumentID?.uuidString,
+            source_pdf_page_index: element.sourcePDFPageIndex,
+            source_pdf_rects: element.sourcePDFDocumentID == nil ? nil : element.sourcePDFRects
         )
     }
 }

@@ -15,13 +15,8 @@ struct PonderApp: App {
     @StateObject private var proManager     = ProManager.shared
 
     init() {
-        registerCustomFonts()
-        AuthService.shared.listenToAuthChanges()
-    }
-
-    private func registerCustomFonts() {
-        AppFontRegistry.registerBundledFonts()
         AppFontRegistry.registerStoredCustomFonts()
+        AuthService.shared.listenToAuthChanges()
     }
 
     var body: some Scene {
@@ -42,6 +37,10 @@ struct PonderApp: App {
             ShapeElementModel.self,
             ImageElementModel.self,
             PDFElementModel.self,
+            PDFPageElementModel.self,
+            PDFHighlightModel.self,
+            PDFInkLayerModel.self,
+            PDFReadingStateModel.self,
             TableElementModel.self,
             TableCellModel.self,
             AudioElementModel.self,
@@ -58,6 +57,7 @@ private struct SyncCoordinatorView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var auth = AuthService.shared
     @ObservedObject private var pro  = ProManager.shared
+    @State private var isFullSyncRunning = false
 
     private let accountCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
 
@@ -122,7 +122,20 @@ private struct SyncCoordinatorView: View {
 
     private func fullSyncAfterAuth() async {
         guard ProManager.shared.isPro,
-              AuthService.shared.currentUser != nil else { return }
+              let currentUserID = AuthService.shared.syncUserID else { return }
+        guard !isFullSyncRunning else {
+            print("⏭️ Full sync already running — skipped duplicate trigger")
+            return
+        }
+        isFullSyncRunning = true
+        defer { isFullSyncRunning = false }
+
+        let discarded = SyncQueue.shared.discardOperationsOwnedByAnotherUser(
+            currentUserID: currentUserID
+        )
+        if discarded > 0 {
+            print("🧹 Discarded \(discarded) queued operation(s) from another account")
+        }
 
         // Step 1 — flush offline queue
         await CanvasSyncService.shared.flushQueue()
@@ -136,6 +149,7 @@ private struct SyncCoordinatorView: View {
         await TableSyncService.shared.flushQueue()
         await ImageSyncService.shared.flushQueue()
         await PDFSyncService.shared.flushQueue()
+        await PDFWorkspaceSyncService.shared.flushQueue()
         await AudioSyncService.shared.flushQueue()
         await YouTubeSyncService.shared.flushQueue()
         await SymbolSyncService.shared.flushQueue()
@@ -176,6 +190,7 @@ private struct SyncCoordinatorView: View {
         await TableSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
         await ImageSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
         await PDFSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
+        await PDFWorkspaceSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
         await AudioSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
         await YouTubeSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)
         await SymbolSyncService.shared.pullAll(canvasID: canvasID, context: modelContext)

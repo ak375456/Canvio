@@ -163,6 +163,7 @@ final class MediaSyncService {
         let thumbDest = PDFStorageService.thumbnailsDirectory.appendingPathComponent(thumbnailFileName)
         await downloadFile(storagePath: pdfPath(for: pdfFileName),           destinationURL: pdfDest)
         await downloadFile(storagePath: pdfThumbPath(for: thumbnailFileName), destinationURL: thumbDest)
+        NotificationCenter.default.post(name: .pdfFileDidBecomeAvailable, object: pdfFileName)
     }
 
     func deletePDF(pdfFileName: String, thumbnailFileName: String) async {

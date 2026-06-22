@@ -47,7 +47,7 @@ class PDFElementViewModel: ObservableObject {
                                              originalName: result.originalName,
                                              pageCount: result.pageCount,
                                              x: canvasX, y: canvasY)
-                    el.id = id; el.zIndex = zIndex
+                    el.id = id; el.documentID = id; el.zIndex = zIndex
                     context.insert(el); try? context.save()
                     Task { await PDFSyncService.shared.upsert(el) }
                 }
@@ -96,6 +96,7 @@ class PDFElementViewModel: ObservableObject {
                                              pageCount: result.pageCount,
                                              x: canvasX, y: canvasY)
                     el.id = id
+                    el.documentID = id
                     el.zIndex = zIndex
                     context.insert(el)
                     try? context.save()
@@ -178,7 +179,7 @@ class PDFElementViewModel: ObservableObject {
                                          originalName: element.originalName, pageCount: element.pageCount,
                                          x: element.x + Double(offset.width),
                                          y: element.y + Double(offset.height))
-                el.id = id; el.zIndex = zIndex
+                el.id = id; el.documentID = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await PDFSyncService.shared.upsert(el) }
             }
@@ -213,12 +214,15 @@ class PDFElementViewModel: ObservableObject {
     func delete(element: PDFElementModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: element.id, canvasID: element.canvasID,
+                    documentID: element.resolvedDocumentID,
                     pdfFileName: element.pdfFileName, thumbFileName: element.thumbnailFileName,
                     originalName: element.originalName, pageCount: element.pageCount,
                     x: element.x, y: element.y, width: element.width,
                     height: element.height, zIndex: element.zIndex)
 
-        Task { await PDFSyncService.shared.delete(element) }
+        let hasDerivedPages = ((try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? [])
+            .contains { $0.documentID == element.resolvedDocumentID }
+        Task { await PDFSyncService.shared.delete(element, deleteAsset: !hasDerivedPages) }
         context.delete(element); try? context.save()
         if editingID == snap.id { editingID = nil }
 
@@ -230,15 +234,18 @@ class PDFElementViewModel: ObservableObject {
                                          originalName: snap.originalName,
                                          pageCount: snap.pageCount,
                                          x: snap.x, y: snap.y)
-                el.id = snap.id; el.width = snap.width; el.height = snap.height
+                el.id = snap.id; el.documentID = snap.documentID
+                el.width = snap.width; el.height = snap.height
                 el.zIndex = snap.zIndex
                 context.insert(el); try? context.save()
                 Task { await PDFSyncService.shared.upsert(el) }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<PDFElementModel>()).first(where: { $0.id == snap.id }) {
-                    Task { await PDFSyncService.shared.delete(el) }
-                    PDFStorageService.delete(pdfFileName: snap.pdfFileName, thumbnailFileName: snap.thumbFileName)
+                    Task { await PDFSyncService.shared.delete(el, deleteAsset: !hasDerivedPages) }
+                    if !hasDerivedPages {
+                        PDFStorageService.delete(pdfFileName: snap.pdfFileName, thumbnailFileName: snap.thumbFileName)
+                    }
                     context.delete(el); try? context.save()
                 }
             }

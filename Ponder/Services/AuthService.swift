@@ -236,6 +236,7 @@ final class AuthService: NSObject, ObservableObject {
 
     func clearLocalData(context: ModelContext) {
         try? context.delete(model: CanvasModel.self)
+        try? context.delete(model: CanvasPageModel.self)
         try? context.delete(model: TextElementModel.self)
         try? context.delete(model: StickyNoteModel.self)
         try? context.delete(model: TodoListModel.self)
@@ -243,12 +244,20 @@ final class AuthService: NSObject, ObservableObject {
         try? context.delete(model: ShapeElementModel.self)
         try? context.delete(model: ImageElementModel.self)
         try? context.delete(model: PDFElementModel.self)
+        try? context.delete(model: PDFPageElementModel.self)
+        try? context.delete(model: PDFHighlightModel.self)
+        try? context.delete(model: PDFInkLayerModel.self)
+        try? context.delete(model: PDFReadingStateModel.self)
         try? context.delete(model: TableElementModel.self)
         try? context.delete(model: TableCellModel.self)
         try? context.delete(model: AudioElementModel.self)
+        try? context.delete(model: YouTubeElementModel.self)
         try? context.delete(model: DrawingElementModel.self)
         try? context.delete(model: ConnectorModel.self)
+        try? context.delete(model: SymbolElementModel.self)
+        try? context.delete(model: CanvasElementGroupModel.self)
         try? context.save()
+        SyncQueue.shared.clear()
     }
 
     func clearLocalFiles() {

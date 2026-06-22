@@ -101,6 +101,102 @@ struct ImageSourcePickerSheet: View {
     }
 }
 
+// MARK: - OCR source picker sheet
+
+struct OCRSourcePickerSheet: View {
+    let onPhotos: () -> Void
+    let onCamera: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            Text("Extract Text")
+                .font(.headline.weight(.bold))
+
+            Text("Choose where the text should come from")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+                .padding(.bottom, 18)
+
+            VStack(spacing: 10) {
+                sourceButton(
+                    icon: "photo.on.rectangle.angled",
+                    color: .purple,
+                    title: "Choose Image",
+                    subtitle: "Extract text from your photo library",
+                    action: onPhotos
+                )
+
+                sourceButton(
+                    icon: "camera.fill",
+                    color: .teal,
+                    title: "Take Photo",
+                    subtitle: "Scan text with your camera",
+                    action: onCamera
+                )
+
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private func sourceButton(
+        icon: String,
+        color: Color,
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                action()
+            }
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(color.opacity(0.12))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: icon)
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 // MARK: - Camera picker (UIImagePickerController wrapper)
 
 struct CameraPickerView: UIViewControllerRepresentable {

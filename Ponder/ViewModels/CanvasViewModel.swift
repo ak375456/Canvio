@@ -52,6 +52,7 @@ class CanvasViewModel: ObservableObject {
     let shapeVM     = ShapeElementViewModel()
     let imageVM     = ImageElementViewModel()
     let pdfVM       = PDFElementViewModel()
+    let pdfPageVM   = PDFPageElementViewModel()
     let tableVM     = TableElementViewModel()
     let audioVM     = AudioElementViewModel()
     let youtubeVM   = YouTubeElementViewModel()

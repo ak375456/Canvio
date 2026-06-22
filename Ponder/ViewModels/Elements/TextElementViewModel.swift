@@ -331,6 +331,71 @@ class TextElementViewModel: ObservableObject {
         return id
     }
 
+    @discardableResult
+    func addPDFExtract(canvasID: UUID, payload: PDFSelectionPayload,
+                       documentID: UUID, canvasPoint: CGPoint,
+                       zIndex: Int, context: ModelContext,
+                       undoManager: CanvasUndoManager? = nil) -> UUID? {
+        let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let element = TextElementModel(
+            canvasID: canvasID,
+            text: trimmed,
+            x: canvasPoint.x,
+            y: canvasPoint.y
+        )
+        element.fontSize = 17
+        element.colorName = "black"
+        element.bgColorName = "white"
+        element.strokeColorName = "gray"
+        element.strokeWidth = 1
+        element.zIndex = zIndex
+        element.sourcePDFDocumentID = documentID
+        element.sourcePDFPageIndex = payload.firstPageIndex
+        element.sourcePDFRects = payload.firstPageRects
+        element.updatedAt = Date()
+        context.insert(element)
+        try? context.save()
+        editingID = element.id
+        Task { await TextSyncService.shared.upsert(element) }
+
+        let id = element.id
+        undoManager?.push(CanvasAction(
+            undo: {
+                if let local = try? context.fetch(FetchDescriptor<TextElementModel>())
+                    .first(where: { $0.id == id }) {
+                    Task { await TextSyncService.shared.delete(local) }
+                    context.delete(local)
+                    try? context.save()
+                }
+            },
+            redo: {
+                let restored = TextElementModel(
+                    canvasID: canvasID,
+                    text: trimmed,
+                    x: canvasPoint.x,
+                    y: canvasPoint.y
+                )
+                restored.id = id
+                restored.fontSize = 17
+                restored.colorName = "black"
+                restored.bgColorName = "white"
+                restored.strokeColorName = "gray"
+                restored.strokeWidth = 1
+                restored.zIndex = zIndex
+                restored.sourcePDFDocumentID = documentID
+                restored.sourcePDFPageIndex = payload.firstPageIndex
+                restored.sourcePDFRects = payload.firstPageRects
+                restored.updatedAt = Date()
+                context.insert(restored)
+                try? context.save()
+                Task { await TextSyncService.shared.upsert(restored) }
+            }
+        ))
+        return id
+    }
+
     // MARK: - Position
 
     func updatePosition(element: TextElementModel, translation: CGSize,

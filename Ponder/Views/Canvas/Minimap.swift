@@ -12,6 +12,7 @@ struct Minimap: View {
     let shapes: [ShapeElementModel]
     let images: [ImageElementModel]
     let pdfs: [PDFElementModel]
+    let pdfPages: [PDFPageElementModel]
     let tables: [TableElementModel]
     let audioElements: [AudioElementModel]
     let youtubeElements: [YouTubeElementModel]
@@ -101,6 +102,9 @@ struct Minimap: View {
                 }
                 ForEach(pdfs) { pdf in
                     dotHit(canvasPoint: CGPoint(x: pdf.x, y: pdf.y), color: .red, mapSize: geo.size, worldBounds: worldBounds, size: 6)
+                }
+                ForEach(pdfPages) { page in
+                    dotHit(canvasPoint: CGPoint(x: page.x, y: page.y), color: .red.opacity(0.75), mapSize: geo.size, worldBounds: worldBounds, size: 5)
                 }
                 ForEach(tables) { tbl in
                     dotHit(canvasPoint: CGPoint(x: tbl.x, y: tbl.y), color: .indigo, mapSize: geo.size, worldBounds: worldBounds, size: 7)
@@ -204,6 +208,7 @@ struct Minimap: View {
         rects += shapes.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += images.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += pdfs.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+        rects += pdfPages.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += tables.map { centeredRect(x: $0.x, y: $0.y, width: $0.totalWidth, height: $0.totalHeight) }
         rects += audioElements.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
         rects += youtubeElements.map { centeredRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }

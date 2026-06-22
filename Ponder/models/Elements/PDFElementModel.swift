@@ -11,6 +11,9 @@ import SwiftUI
 class PDFElementModel: LayerableElement {
     var id: UUID
     var canvasID: UUID
+    // The reusable document asset. Existing records resolve to `id` until the
+    // PDF workspace migration has synced them.
+    var documentID: UUID?
     var pdfFileName: String
     var thumbnailFileName: String
     var originalName: String
@@ -28,8 +31,10 @@ class PDFElementModel: LayerableElement {
     init(canvasID: UUID, pdfFileName: String, thumbnailFileName: String,
          originalName: String, pageCount: Int,
          x: Double = 0, y: Double = 0) {
-        self.id = UUID()
+        let newID = UUID()
+        self.id = newID
         self.canvasID = canvasID
+        self.documentID = newID
         self.pdfFileName = pdfFileName
         self.thumbnailFileName = thumbnailFileName
         self.originalName = originalName
@@ -48,4 +53,6 @@ class PDFElementModel: LayerableElement {
     var layerTitle: String { originalName.isEmpty ? "PDF" : originalName }
     var layerIcon: String { "doc.richtext" }
     var layerTint: Color { .red }
+
+    var resolvedDocumentID: UUID { documentID ?? id }
 }
