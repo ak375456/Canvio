@@ -33,6 +33,33 @@ private struct CanvasStackPickerState: Identifiable {
     let items: [CanvasStackPickerItem]
 }
 
+/// Limits live pan/zoom invalidation to the tiny views that actually need the transform.
+/// The canvas document itself remains stable while a finger is moving.
+private struct CanvasNavigationObserver<Content: View>: View {
+    @ObservedObject var navigation: CanvasNavigationState
+    @ViewBuilder let content: (CGSize, CGFloat) -> Content
+
+    var body: some View {
+        content(navigation.offset, navigation.scale)
+    }
+}
+
+private struct CanvasNavigationTransform<Content: View>: View {
+    @ObservedObject var navigation: CanvasNavigationState
+    let content: Content
+
+    init(navigation: CanvasNavigationState, @ViewBuilder content: () -> Content) {
+        self.navigation = navigation
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .scaleEffect(navigation.scale, anchor: .topLeading)
+            .offset(navigation.offset)
+    }
+}
+
 private struct ElementPositionSnapshot {
     let id: UUID
     let x: Double
@@ -177,9 +204,7 @@ struct CanvasView: View {
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var isCanvasNavigationGestureInProgress = false
-    @State private var canvasNavigationGesturePanTranslation: CGSize = .zero
-    @State private var canvasNavigationGestureMagnification: CGFloat = 1
-    @State private var canvasNavigationGestureFocalPoint: CGPoint?
+    @State private var viewportContentRevision = 0
     @State private var canvasGestureSuppressionID = UUID()
     @State private var selectedGroupID: UUID?
     @State private var draggingGroupID: UUID?
@@ -350,15 +375,21 @@ struct CanvasView: View {
     }
 
     private func visibleCanvasRect(viewportSize: CGSize) -> CGRect {
-        guard vm.scale > 0, viewportSize.width > 0, viewportSize.height > 0 else {
+        // Keep the culling window stable while a gesture is in flight. Changing the
+        // ForEach membership every few pixels forces SwiftUI to rebuild rich elements
+        // (PDFs, drawings, tables) at display-link frequency.
+        let renderScale = isCanvasNavigationGestureInProgress ? vm.lastScale : vm.scale
+        let renderOffset = isCanvasNavigationGestureInProgress ? vm.lastOffset : vm.offset
+
+        guard renderScale > 0, viewportSize.width > 0, viewportSize.height > 0 else {
             return CGRect(origin: .zero, size: viewportSize)
         }
 
-        let width = viewportSize.width / vm.scale
-        let height = viewportSize.height / vm.scale
+        let width = viewportSize.width / renderScale
+        let height = viewportSize.height / renderScale
         let rect = CGRect(
-            x: -vm.offset.width / vm.scale,
-            y: -vm.offset.height / vm.scale,
+            x: -renderOffset.width / renderScale,
+            y: -renderOffset.height / renderScale,
             width: width,
             height: height
         )
@@ -422,6 +453,13 @@ struct CanvasView: View {
         return nil
     }
 
+    /// Child controls only need the final zoom for hit targets and drag math. Freezing
+    /// this value during navigation lets SwiftUI move/scale the parent layer without
+    /// invalidating every individual element on every pinch frame.
+    private var elementRenderScale: CGFloat {
+        isCanvasNavigationGestureInProgress ? vm.lastScale : vm.scale
+    }
+
     private var selectedElementGestureFrame: CGRect? {
         if let selectedGroupID,
            let bounds = groupBounds(for: selectedGroupID) {
@@ -476,13 +514,15 @@ struct CanvasView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
 
-                CanvasGridView(
-                    offset: vm.offset,
-                    scale: vm.scale,
-                    style: settings.effectiveGridStyle,
-                    backgroundMode: settings.canvasBackgroundMode,
-                    backgroundPalette: settings.canvasBackgroundPalette
-                )
+                CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+                    CanvasGridView(
+                        offset: offset,
+                        scale: scale,
+                        style: settings.effectiveGridStyle,
+                        backgroundMode: settings.canvasBackgroundMode,
+                        backgroundPalette: settings.canvasBackgroundPalette
+                    )
+                }
                     .contentShape(Rectangle())
                     .onTapGesture {
                         stackPicker = nil
@@ -531,7 +571,11 @@ struct CanvasView: View {
                     #endif
                     .zIndex(-2)
 
-                if !canvas.isInfinite { pageBoundaryOverlay(geo: geo) }
+                if !canvas.isInfinite {
+                    CanvasNavigationObserver(navigation: vm.navigation) { _, _ in
+                        pageBoundaryOverlay(geo: geo)
+                    }
+                }
 
                 canvasElementsSurface(geo: geo)
 
@@ -626,12 +670,14 @@ struct CanvasView: View {
                         if !canvas.isInfinite {
                             vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
+                        scheduleViewportContentRefresh()
                     } else {
                         vm.offset = CGSize(width: vm.offset.width + deltaX, height: vm.offset.height + deltaY)
                         vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
                             vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                         }
+                        scheduleViewportContentRefresh()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -688,18 +734,23 @@ struct CanvasView: View {
             .overlay(alignment: .topTrailing) {
                 if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive
                     && !vm.connectorVM.isConnectModeActive {
-                    Minimap(
-                        textElements: textElements, stickyNotes: stickyNotes,
-                        todoLists: todoLists, shapes: shapes, images: images,
-                        pdfs: pdfs, pdfPages: pdfPages,
-                        tables: tables, audioElements: audioElements,
-                        youtubeElements: youtubeElements, drawings: drawings,
-                        symbols: symbols, viewportSize: geo.size,
-                        canvasOffset: vm.offset, canvasScale: vm.scale,
-                        onTapElement: { vm.centerOn(canvasPoint: $0, viewportSize: geo.size) },
-                        isExpanded: $vm.isMinimapExpanded,
-                        isNavigationActive: isCanvasGestureActive
-                    )
+                    CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+                        Minimap(
+                            textElements: textElements, stickyNotes: stickyNotes,
+                            todoLists: todoLists, shapes: shapes, images: images,
+                            pdfs: pdfs, pdfPages: pdfPages,
+                            tables: tables, audioElements: audioElements,
+                            youtubeElements: youtubeElements, drawings: drawings,
+                            symbols: symbols, viewportSize: geo.size,
+                            canvasOffset: offset, canvasScale: scale,
+                            onTapElement: {
+                                vm.centerOn(canvasPoint: $0, viewportSize: geo.size)
+                                refreshViewportContent()
+                            },
+                            isExpanded: $vm.isMinimapExpanded,
+                            isNavigationActive: isCanvasGestureActive
+                        )
+                    }
                     .padding(.trailing, 12).padding(.top, 12)
                 }
             }
@@ -953,13 +1004,13 @@ struct CanvasView: View {
 
     @ViewBuilder
     private func canvasElementsSurface(geo: GeometryProxy) -> some View {
-        ZStack {
-            connectorOverlayLayer
-            connectorAnchorLayer
-            visibleElementsLayer(viewportSize: geo.size)
+        CanvasNavigationTransform(navigation: vm.navigation) {
+            ZStack {
+                connectorOverlayLayer
+                connectorAnchorLayer
+                visibleElementsLayer(viewportSize: geo.size)
+            }
         }
-        .scaleEffect(vm.scale, anchor: .topLeading)
-        .offset(vm.offset)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .simultaneousGesture(
             SpatialTapGesture(count: 1, coordinateSpace: .named(canvasViewportCoordinateSpace))
@@ -980,7 +1031,7 @@ struct CanvasView: View {
             vm: vm.connectorVM,
             undoManager: vm.undoManager,
             canvasID: activeContentCanvasID,
-            canvasScale: vm.scale
+            canvasScale: elementRenderScale
         )
         .zIndex(-1)
     }
@@ -991,7 +1042,7 @@ struct CanvasView: View {
             vm: vm.connectorVM,
             undoManager: vm.undoManager,
             canvasID: activeContentCanvasID,
-            canvasScale: vm.scale,
+            canvasScale: elementRenderScale,
             connectors: connectors
         )
         .zIndex(9999)
@@ -1000,24 +1051,26 @@ struct CanvasView: View {
     @ViewBuilder
     private var canvasDrawingOverlayLayer: some View {
         #if os(iOS)
-        CanvasDrawingOverlay(
-            isActive: $vm.showCanvasDrawingOverlay,
-            isDrawingInputActive: $isCanvasDrawingInputActive,
-            startScale: drawingStartScale,
-            startOffset: drawingStartOffset,
-            liveScale: $vm.scale,
-            liveOffset: $vm.offset,
-            initialDrawing: canvasDrawingInitialDrawing,
-            isCanvasNavigationGestureActive: isCanvasNavigationGestureInProgress,
-            smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled,
-            showsHandwritingTextGrouping: canvasDrawingCaptureMode == .handwritingText,
-            handwritingTextGrouping: Binding(
-                get: { settings.handwritingTextGrouping },
-                set: { settings.handwritingTextGrouping = $0 }
-            ),
-            isHighlighterToolSelected: $isCanvasHighlighterToolSelected
-        ) { pkDrawing, effectiveScale, effectiveOffset in
-            saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
+        CanvasNavigationObserver(navigation: vm.navigation) { _, _ in
+            CanvasDrawingOverlay(
+                isActive: $vm.showCanvasDrawingOverlay,
+                isDrawingInputActive: $isCanvasDrawingInputActive,
+                startScale: drawingStartScale,
+                startOffset: drawingStartOffset,
+                liveScale: Binding(get: { vm.scale }, set: { vm.scale = $0 }),
+                liveOffset: Binding(get: { vm.offset }, set: { vm.offset = $0 }),
+                initialDrawing: canvasDrawingInitialDrawing,
+                isCanvasNavigationGestureActive: isCanvasNavigationGestureInProgress,
+                smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled,
+                showsHandwritingTextGrouping: canvasDrawingCaptureMode == .handwritingText,
+                handwritingTextGrouping: Binding(
+                    get: { settings.handwritingTextGrouping },
+                    set: { settings.handwritingTextGrouping = $0 }
+                ),
+                isHighlighterToolSelected: $isCanvasHighlighterToolSelected
+            ) { pkDrawing, effectiveScale, effectiveOffset in
+                saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
+            }
         }
         .zIndex(isCanvasHighlighterToolSelected ? -1 : 200)
         .transition(.opacity)
@@ -1028,6 +1081,7 @@ struct CanvasView: View {
 
     @ViewBuilder
     private func visibleElementsLayer(viewportSize: CGSize) -> some View {
+        let _ = viewportContentRevision
         let visibleElements = visibleSortedElements(viewportSize: viewportSize)
         let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
 
@@ -1599,6 +1653,7 @@ struct CanvasView: View {
         } else {
             applyFocus()
         }
+        refreshViewportContent()
     }
 
     private var connectModeOverlay: some View {
@@ -2892,6 +2947,7 @@ struct CanvasView: View {
                     vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                 }
                 endCanvasGestureSuppression()
+                refreshViewportContent()
             }
     }
 
@@ -2909,6 +2965,7 @@ struct CanvasView: View {
                     vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
                 }
                 endCanvasGestureSuppression()
+                refreshViewportContent()
             }
     }
 
@@ -2919,31 +2976,31 @@ struct CanvasView: View {
         guard !wasInProgress else { return }
         vm.lastOffset = vm.offset
         vm.lastScale = vm.scale
-        canvasNavigationGesturePanTranslation = .zero
-        canvasNavigationGestureMagnification = 1
-        canvasNavigationGestureFocalPoint = nil
+        vm.navigation.panTranslation = .zero
+        vm.navigation.magnification = 1
+        vm.navigation.focalPoint = nil
     }
 
     private func updateCanvasNavigationPan(_ translation: CGSize) {
-        canvasNavigationGesturePanTranslation = translation
+        vm.navigation.panTranslation = translation
         applyCanvasNavigationGesture()
     }
 
     private func updateCanvasNavigationMagnification(_ magnification: CGFloat, focalPoint: CGPoint) {
-        canvasNavigationGestureMagnification = magnification
-        if canvasNavigationGestureFocalPoint == nil {
-            canvasNavigationGestureFocalPoint = focalPoint
+        vm.navigation.magnification = magnification
+        if vm.navigation.focalPoint == nil {
+            vm.navigation.focalPoint = focalPoint
         }
         applyCanvasNavigationGesture()
     }
 
     private func applyCanvasNavigationGesture() {
         let baseScale = max(vm.lastScale, 0.0001)
-        let nextScale = max(0.3, min(baseScale * canvasNavigationGestureMagnification, 5.0))
+        let nextScale = max(0.3, min(baseScale * vm.navigation.magnification, 5.0))
         let scaleDelta = nextScale / baseScale
 
         let zoomedOffset: CGSize
-        if let focal = canvasNavigationGestureFocalPoint {
+        if let focal = vm.navigation.focalPoint {
             zoomedOffset = CGSize(
                 width: focal.x - (focal.x - vm.lastOffset.width) * scaleDelta,
                 height: focal.y - (focal.y - vm.lastOffset.height) * scaleDelta
@@ -2954,8 +3011,8 @@ struct CanvasView: View {
 
         vm.scale = nextScale
         vm.offset = CGSize(
-            width: zoomedOffset.width + canvasNavigationGesturePanTranslation.width,
-            height: zoomedOffset.height + canvasNavigationGesturePanTranslation.height
+            width: zoomedOffset.width + vm.navigation.panTranslation.width,
+            height: zoomedOffset.height + vm.navigation.panTranslation.height
         )
     }
 
@@ -2966,14 +3023,17 @@ struct CanvasView: View {
             vm.clampOffset(to: canvasNavigationBoundary, viewportSize: viewportSize, scale: vm.scale)
         }
 
-        canvasNavigationGesturePanTranslation = .zero
-        canvasNavigationGestureMagnification = 1
-        canvasNavigationGestureFocalPoint = nil
+        vm.navigation.panTranslation = .zero
+        vm.navigation.magnification = 1
+        vm.navigation.focalPoint = nil
         endCanvasGestureSuppression()
+        refreshViewportContent()
     }
 
     private func beginCanvasGestureSuppression() {
-        isCanvasNavigationGestureInProgress = true
+        if !isCanvasNavigationGestureInProgress {
+            isCanvasNavigationGestureInProgress = true
+        }
         if isCanvasGestureActive { return }
         canvasGestureSuppressionID = UUID()
         isCanvasGestureActive = true
@@ -2988,6 +3048,21 @@ struct CanvasView: View {
             if canvasGestureSuppressionID == token {
                 isCanvasGestureActive = false
             }
+        }
+    }
+
+    private func refreshViewportContent() {
+        viewportContentRevision &+= 1
+    }
+
+    /// Trackpad scroll events do not always deliver a reliable ended phase. Debounce the
+    /// culling refresh while the lightweight transform continues immediately.
+    private func scheduleViewportContentRefresh() {
+        let token = UUID()
+        vm.navigation.pendingViewportRefreshID = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard vm.navigation.pendingViewportRefreshID == token else { return }
+            refreshViewportContent()
         }
     }
 
@@ -3581,32 +3656,32 @@ struct CanvasView: View {
 
         Group {
             if let text = element as? TextElementModel {
-                TextElementView(element: text, canvasScale: vm.scale, canvasBoundary: boundary,
+                TextElementView(element: text, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                 vm: vm.textVM, isMultiSelectMode: multiSelect,
                                 isSelectedInMultiSelect: isElemSelected,
                                 onExternalTap: { dismissEverything() },
                                 isCanvasGestureActive: childInteractionLocked)
             } else if let sticky = element as? StickyNoteModel {
-                StickyNoteView(note: sticky, canvasScale: vm.scale, canvasBoundary: boundary,
+                StickyNoteView(note: sticky, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                vm: vm.stickyVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onExternalTap: { dismissEverything() },
                                isCanvasGestureActive: childInteractionLocked)
             } else if let todo = element as? TodoListModel {
-                TodoListView(list: todo, allTasks: todoTasks, canvasScale: vm.scale,
+                TodoListView(list: todo, allTasks: todoTasks, canvasScale: elementRenderScale,
                              canvasBoundary: boundary, vm: vm.todoVM,
                              isMultiSelectMode: multiSelect,
                              isSelectedInMultiSelect: isElemSelected,
                              onExternalTap: { dismissEverything() },
                              isCanvasGestureActive: childInteractionLocked)
             } else if let shape = element as? ShapeElementModel {
-                ShapeElementView(shape: shape, canvasScale: vm.scale, canvasBoundary: boundary,
+                ShapeElementView(shape: shape, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                  vm: vm.shapeVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: childInteractionLocked)
             } else if let img = element as? ImageElementModel {
-                ImageElementView(element: img, canvasScale: vm.scale, canvasBoundary: boundary,
+                ImageElementView(element: img, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
                                  ocrTextZIndex: nextZIndex,
                                  undoManager: vm.undoManager,
@@ -3614,7 +3689,7 @@ struct CanvasView: View {
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: childInteractionLocked)
             } else if let pdf = element as? PDFElementModel {
-                PDFElementView(element: pdf, canvasScale: vm.scale, canvasBoundary: boundary,
+                PDFElementView(element: pdf, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                vm: vm.pdfVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onOpenReader: {
@@ -3635,7 +3710,7 @@ struct CanvasView: View {
                     inkLayer: pdfInkLayers.first {
                         $0.documentID == page.documentID && $0.pageIndex == page.pageIndex
                     },
-                    canvasScale: vm.scale,
+                    canvasScale: elementRenderScale,
                     canvasBoundary: boundary,
                     vm: vm.pdfPageVM,
                     isMultiSelectMode: multiSelect,
@@ -3658,7 +3733,7 @@ struct CanvasView: View {
             } else if let table = element as? TableElementModel {
                 TableElementView(
                     table: table, allCells: tableCells,
-                    canvasScale: vm.scale, canvasBoundary: boundary,
+                    canvasScale: elementRenderScale, canvasBoundary: boundary,
                     vm: vm.tableVM, isMultiSelectMode: multiSelect,
                     isSelectedInMultiSelect: isElemSelected,
                     onImportCSV: { vm.pendingCSVTableID = table.id; vm.showTableCSVImporter = true },
@@ -3673,19 +3748,19 @@ struct CanvasView: View {
                     isCanvasGestureActive: childInteractionLocked,
                     isCanvasNavigationActive: isCanvasGestureActive)
             } else if let audio = element as? AudioElementModel {
-                AudioElementView(element: audio, canvasScale: vm.scale, canvasBoundary: boundary,
+                AudioElementView(element: audio, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                  vm: vm.audioVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: childInteractionLocked)
             } else if let youtube = element as? YouTubeElementModel {
-                YouTubeElementView(element: youtube, canvasScale: vm.scale, canvasBoundary: boundary,
+                YouTubeElementView(element: youtube, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                    vm: vm.youtubeVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },
                                    isCanvasGestureActive: childInteractionLocked)
             } else if let drawing = element as? DrawingElementModel {
-                DrawingElementView(element: drawing, canvasScale: vm.scale, canvasBoundary: boundary,
+                DrawingElementView(element: drawing, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },
@@ -3693,7 +3768,7 @@ struct CanvasView: View {
                                    isCanvasGestureActive: childInteractionLocked)
             } else if let symbol = element as? SymbolElementModel {
                 // ── NEW ────────────────────────────────────────────────────────
-                SymbolElementView(element: symbol, canvasScale: vm.scale, canvasBoundary: boundary,
+                SymbolElementView(element: symbol, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                   vm: vm.symbolVM, isMultiSelectMode: multiSelect,
                                   isSelectedInMultiSelect: isElemSelected,
                                   onExternalTap: { dismissEverything() },

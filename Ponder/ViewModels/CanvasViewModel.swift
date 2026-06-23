@@ -8,11 +8,39 @@ import Combine
 import PhotosUI
 
 @MainActor
-class CanvasViewModel: ObservableObject {
+final class CanvasNavigationState: ObservableObject {
     @Published var offset: CGSize = .zero
-    @Published var lastOffset: CGSize = .zero
-    @Published var scale: CGFloat = 1.0
-    @Published var lastScale: CGFloat = 1.0
+    @Published var scale: CGFloat = 1
+
+    // Gesture baselines do not affect rendering and therefore should not publish.
+    var lastOffset: CGSize = .zero
+    var lastScale: CGFloat = 1
+    var panTranslation: CGSize = .zero
+    var magnification: CGFloat = 1
+    var focalPoint: CGPoint?
+    var pendingViewportRefreshID = UUID()
+}
+
+@MainActor
+class CanvasViewModel: ObservableObject {
+    let navigation = CanvasNavigationState()
+
+    var offset: CGSize {
+        get { navigation.offset }
+        set { navigation.offset = newValue }
+    }
+    var lastOffset: CGSize {
+        get { navigation.lastOffset }
+        set { navigation.lastOffset = newValue }
+    }
+    var scale: CGFloat {
+        get { navigation.scale }
+        set { navigation.scale = newValue }
+    }
+    var lastScale: CGFloat {
+        get { navigation.lastScale }
+        set { navigation.lastScale = newValue }
+    }
     @Published var showTextSheet: Bool = false
     @Published var showShapePicker: Bool = false
     @Published var showSymbolPicker: Bool = false          // ← NEW

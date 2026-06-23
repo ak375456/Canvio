@@ -27,6 +27,28 @@ typealias PlatformImage = UIImage
 typealias PlatformImage = NSImage
 #endif
 
+struct ImageFreeformCutoutResult {
+    let fileName: String
+    let normalizedBounds: CGRect
+}
+
+enum ImageFreeformCutoutError: LocalizedError {
+    case imageUnavailable
+    case invalidSelection
+    case renderingFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .imageUnavailable:
+            return "The original image is not available on this device yet."
+        case .invalidSelection:
+            return "Draw a larger closed loop inside the image."
+        case .renderingFailed:
+            return "The cutout could not be created."
+        }
+    }
+}
+
 enum ImageStorageService {
     private static let imageCache: NSCache<NSString, PlatformImage> = {
         let cache = NSCache<NSString, PlatformImage>()
@@ -168,6 +190,151 @@ enum ImageStorageService {
         let url = imagesDirectory.appendingPathComponent(fileName)
         try? FileManager.default.removeItem(at: url)
         invalidateCache(fileName: fileName)
+    }
+
+    // MARK: - Freeform cutout
+
+    /// Keeps the pixels inside a normalized, image-space polygon and trims the
+    /// transparent result to the polygon's bounds. Points use a top-left origin.
+    static func createFreeformCutout(
+        fileName: String,
+        normalizedPolygon: [CGPoint]
+    ) throws -> ImageFreeformCutoutResult {
+        guard normalizedPolygon.count >= 3 else {
+            throw ImageFreeformCutoutError.invalidSelection
+        }
+
+        let polygon = normalizedPolygon.map {
+            CGPoint(x: min(max($0.x, 0), 1), y: min(max($0.y, 0), 1))
+        }
+        guard let first = polygon.first else {
+            throw ImageFreeformCutoutError.invalidSelection
+        }
+
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+        for point in polygon.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+
+        let bounds = CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        ).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+
+        guard bounds.width >= 0.01, bounds.height >= 0.01 else {
+            throw ImageFreeformCutoutError.invalidSelection
+        }
+
+        let sourceURL = url(for: fileName)
+        guard let sourceData = try? Data(contentsOf: sourceURL) else {
+            throw ImageFreeformCutoutError.imageUnavailable
+        }
+
+        #if canImport(UIKit)
+        guard let image = UIImage(data: sourceData) else {
+            throw ImageFreeformCutoutError.imageUnavailable
+        }
+
+        let fullSize = CGSize(
+            width: max(1, image.size.width * image.scale),
+            height: max(1, image.size.height * image.scale)
+        )
+        let outputSize = CGSize(
+            width: max(1, (fullSize.width * bounds.width).rounded(.up)),
+            height: max(1, (fullSize.height * bounds.height).rounded(.up))
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
+        let outputImage = renderer.image { _ in
+            let path = UIBezierPath()
+            for (index, point) in polygon.enumerated() {
+                let localPoint = CGPoint(
+                    x: (point.x - bounds.minX) * fullSize.width,
+                    y: (point.y - bounds.minY) * fullSize.height
+                )
+                if index == 0 { path.move(to: localPoint) }
+                else { path.addLine(to: localPoint) }
+            }
+            path.close()
+            path.addClip()
+
+            image.draw(in: CGRect(
+                x: -bounds.minX * fullSize.width,
+                y: -bounds.minY * fullSize.height,
+                width: fullSize.width,
+                height: fullSize.height
+            ))
+        }
+        guard let pngData = outputImage.pngData() else {
+            throw ImageFreeformCutoutError.renderingFailed
+        }
+
+        #elseif canImport(AppKit)
+        guard let image = NSImage(data: sourceData),
+              let sourceCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            throw ImageFreeformCutoutError.imageUnavailable
+        }
+
+        let fullSize = CGSize(width: sourceCGImage.width, height: sourceCGImage.height)
+        let outputWidth = max(1, Int((fullSize.width * bounds.width).rounded(.up)))
+        let outputHeight = max(1, Int((fullSize.height * bounds.height).rounded(.up)))
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: outputWidth,
+            pixelsHigh: outputHeight,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ), let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            throw ImageFreeformCutoutError.renderingFailed
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        graphicsContext.cgContext.clear(CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+
+        let path = NSBezierPath()
+        for (index, point) in polygon.enumerated() {
+            let localPoint = CGPoint(
+                x: (point.x - bounds.minX) * fullSize.width,
+                y: CGFloat(outputHeight) - (point.y - bounds.minY) * fullSize.height
+            )
+            if index == 0 { path.move(to: localPoint) }
+            else { path.line(to: localPoint) }
+        }
+        path.close()
+        path.addClip()
+
+        image.draw(in: CGRect(
+            x: -bounds.minX * fullSize.width,
+            y: -(1 - bounds.maxY) * fullSize.height,
+            width: fullSize.width,
+            height: fullSize.height
+        ), from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            throw ImageFreeformCutoutError.renderingFailed
+        }
+        #endif
+
+        let newFileName = try save(data: pngData)
+        return ImageFreeformCutoutResult(fileName: newFileName, normalizedBounds: bounds)
     }
 
     // MARK: - Encode

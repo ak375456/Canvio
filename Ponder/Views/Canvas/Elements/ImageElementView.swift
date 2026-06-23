@@ -27,6 +27,7 @@ struct ImageElementView: View {
     @State private var displayImage: PlatformImage? = nil
     @State private var lastLoadedFileName: String = ""
     @State private var showOpacityControls = false
+    @State private var showCutoutEditor = false
     @State private var isExtractingText = false
     @State private var ocrAlertMessage: String?
 
@@ -71,6 +72,13 @@ struct ImageElementView: View {
             Button("OK", role: .cancel) { ocrAlertMessage = nil }
         } message: {
             Text(ocrAlertMessage ?? "")
+        }
+        .sheet(isPresented: $showCutoutEditor) {
+            ImageFreeformCutoutEditor(
+                element: element,
+                vm: vm,
+                undoManager: undoManager
+            )
         }
     }
 
@@ -168,6 +176,22 @@ struct ImageElementView: View {
                     Text("\(Int(element.cornerRadius))").font(.caption.weight(.semibold))
                 }.foregroundStyle(Color.primary.opacity(0.7)).padding(.horizontal, 6).frame(height: 26)
             }
+            Divider().frame(height: 18)
+            Button {
+                showCutoutEditor = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "scissors")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("Cutout")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(Color.primary.opacity(0.75))
+                .padding(.horizontal, 6)
+                .frame(height: 26)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Freeform image cutout")
             Divider().frame(height: 18)
             Button {
                 showOpacityControls = true

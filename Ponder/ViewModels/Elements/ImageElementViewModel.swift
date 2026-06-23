@@ -174,6 +174,84 @@ class ImageElementViewModel: ObservableObject {
         Task { await ImageSyncService.shared.upsert(element) }
     }
 
+    func applyFreeformCutout(
+        element: ImageElementModel,
+        normalizedPolygon: [CGPoint],
+        context: ModelContext,
+        undoManager: CanvasUndoManager? = nil
+    ) async throws {
+        let oldFileName = element.imageFileName
+        await Task.yield()
+        let result = try ImageStorageService.createFreeformCutout(
+            fileName: oldFileName,
+            normalizedPolygon: normalizedPolygon
+        )
+
+        let oldX = element.x
+        let oldY = element.y
+        let oldWidth = element.width
+        let oldHeight = element.height
+        let oldCornerRadius = element.cornerRadius
+
+        let bounds = result.normalizedBounds
+        let naturalWidth = max(1, oldWidth * Double(bounds.width))
+        let naturalHeight = max(1, oldHeight * Double(bounds.height))
+        let minimumDisplayScale = max(1, max(40 / naturalWidth, 40 / naturalHeight))
+        let newWidth = naturalWidth * minimumDisplayScale
+        let newHeight = naturalHeight * minimumDisplayScale
+
+        // Preserve the selected pixels' visual center on the canvas, including
+        // images that have already been rotated.
+        let localDX = Double(bounds.midX - 0.5) * oldWidth
+        let localDY = Double(bounds.midY - 0.5) * oldHeight
+        let radians = element.rotation * .pi / 180
+        let rotatedDX = localDX * cos(radians) - localDY * sin(radians)
+        let rotatedDY = localDX * sin(radians) + localDY * cos(radians)
+        let newX = oldX + rotatedDX
+        let newY = oldY + rotatedDY
+        let newFileName = result.fileName
+
+        element.imageFileName = newFileName
+        element.x = newX
+        element.y = newY
+        element.width = newWidth
+        element.height = newHeight
+        element.cornerRadius = 0
+        element.updatedAt = Date()
+        try context.save()
+        Task { await ImageSyncService.shared.upsert(element, uploadFile: true) }
+
+        let id = element.id
+        undoManager?.push(CanvasAction(
+            undo: {
+                if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
+                    el.imageFileName = oldFileName
+                    el.x = oldX
+                    el.y = oldY
+                    el.width = oldWidth
+                    el.height = oldHeight
+                    el.cornerRadius = oldCornerRadius
+                    el.updatedAt = Date()
+                    try? context.save()
+                    Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                }
+            },
+            redo: {
+                if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
+                    el.imageFileName = newFileName
+                    el.x = newX
+                    el.y = newY
+                    el.width = newWidth
+                    el.height = newHeight
+                    el.cornerRadius = 0
+                    el.updatedAt = Date()
+                    try? context.save()
+                    Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                }
+            }
+        ))
+    }
+
     @discardableResult
     func createTextElementFromOCR(image element: ImageElementModel, text: String,
                                   zIndex: Int, context: ModelContext,

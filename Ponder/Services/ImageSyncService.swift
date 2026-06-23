@@ -161,6 +161,7 @@ final class ImageSyncService {
                 if let local = localMap[rowID] {
                     let remoteUpdated = iso.date(from: row.updated_at) ?? .distantPast
                     if remoteUpdated > local.updatedAt {
+                        local.imageFileName = row.image_file_name
                         local.x            = row.x
                         local.y            = row.y
                         local.width        = row.width
