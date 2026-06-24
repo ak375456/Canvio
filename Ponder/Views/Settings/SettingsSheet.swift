@@ -107,23 +107,34 @@ struct SettingsSheet: View {
         }
     }
 
-    // MARK: - Toolbar position
+    // MARK: - Toolbar
     private var toolbarSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             label("TOOLBAR")
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 78))], spacing: 10) {
-                ForEach(ToolbarPosition.allCases) { pos in
-                    optionCard(
-                        title: pos.title,
-                        icon: pos.icon,
-                        isSelected: settings.toolbarPosition == pos
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            settings.toolbarPosition = pos
-                        }
+            Toggle(isOn: Binding(
+                get: { settings.toolbarPosition != .hidden },
+                set: { settings.toolbarPosition = $0 ? .bottom : .hidden }
+            )) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "dock.rectangle")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 18, height: 18)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Show toolbar")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Display the canvas toolbar at the bottom of the screen.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
+            .toggleStyle(.switch)
+            .padding(12)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+
             Toggle(isOn: Binding(
                 get: { settings.toolbarStyle == .compactButtons },
                 set: { settings.toolbarStyle = $0 ? .compactButtons : .floatingBar }

@@ -27,7 +27,6 @@ struct CanvasToolbar: View {
     var isConnectModeActive: Bool = false
     var showsWriteTextTool = false
     var lockedTools: Set<CanvasTool> = []
-    let isVertical: Bool
 
     @State private var isCollapsed = false
 
@@ -36,9 +35,6 @@ struct CanvasToolbar: View {
             if isCollapsed {
                 collapsedLayout
                     .transition(.scale(scale: 0.82).combined(with: .opacity))
-            } else if isVertical {
-                verticalLayout
-                    .transition(.scale(scale: 0.96).combined(with: .opacity))
             } else {
                 horizontalLayout
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -74,29 +70,9 @@ struct CanvasToolbar: View {
         .shadow(color: .black.opacity(0.18), radius: 22, x: 0, y: 12)
     }
 
-    private var verticalLayout: some View {
-        VStack(spacing: 2) {
-            toolbarItems
-
-            Divider()
-                .padding(.horizontal, 10)
-
-            collapseButton(systemImage: isVertical ? "chevron.left" : "chevron.down")
-        }
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.14), radius: 18, x: 0, y: 8)
-    }
-
-    @ViewBuilder
     private var collapsedLayout: some View {
-        if isVertical {
-            collapsedButton
-        } else {
-            collapsedButton
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
+        collapsedButton
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     @ViewBuilder
@@ -137,7 +113,7 @@ struct CanvasToolbar: View {
                 isCollapsed = false
             }
         } label: {
-            Image(systemName: isVertical ? "chevron.right" : "chevron.up")
+            Image(systemName: "chevron.up")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .frame(width: 58, height: 58)

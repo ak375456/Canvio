@@ -682,7 +682,7 @@ struct CanvasDrawingOverlay: View {
                 .contentShape(Rectangle())
                 .ignoresSafeArea()
 
-            MacDrawingEditor(drawing: drawing) { newDrawing in
+            MacDrawingEditor(drawing: drawing, canvasScale: 1) { newDrawing in
                 drawing = newDrawing
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -566,6 +566,7 @@ private struct PencilShapeSnapper {
 struct DrawingCanvasView: View {
     let drawing: PKDrawing
     let isEditing: Bool
+    let canvasScale: CGFloat
     let smartShapeSnappingEnabled: Bool
     let onDrawingChanged: (PKDrawing) -> Void
 
@@ -608,7 +609,7 @@ struct DrawingCanvasView: View {
                 }
             }
         } else {
-            DrawingSnapshot(drawing: drawing)
+            DrawingSnapshot(drawing: drawing, canvasScale: canvasScale)
         }
     }
 }
@@ -616,19 +617,105 @@ struct DrawingCanvasView: View {
 // MARK: - Static snapshot
 private struct DrawingSnapshot: View {
     let drawing: PKDrawing
+    let canvasScale: CGFloat
+
+    @Environment(\.displayScale) private var displayScale
+    @State private var renderedImage: UIImage?
 
     var body: some View {
         GeometryReader { geo in
+            let request = renderRequest(for: geo.size)
+
             if drawing.strokes.isEmpty {
                 Color.clear
+            } else if let renderedImage {
+                Image(uiImage: renderedImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .antialiased(true)
+                    .scaledToFill()
+                    .task(id: request) {
+                        render(request: request, size: geo.size)
+                    }
             } else {
-                let image = drawing.image(
-                    from: CGRect(origin: .zero, size: geo.size),
-                    scale: UIScreen.main.scale
-                )
-                Image(uiImage: image).resizable().scaledToFill()
+                Color.clear
+                    .task(id: request) {
+                        render(request: request, size: geo.size)
+                    }
             }
         }
+    }
+
+    private func renderRequest(for size: CGSize) -> DrawingSnapshotRenderRequest {
+        let data = drawing.dataRepresentation()
+        let zoomBucket = ceil(max(canvasScale, 1) * 2) / 2
+        let desiredScale = max(displayScale, 1) * zoomBucket
+        let longestSide = max(max(size.width, size.height), 1)
+        let renderScale = min(desiredScale, DrawingSnapshotImageCache.maxPixelDimension / longestSide)
+
+        return DrawingSnapshotRenderRequest(
+            drawingHash: data.hashValue,
+            drawingByteCount: data.count,
+            width: Int((size.width * 100).rounded()),
+            height: Int((size.height * 100).rounded()),
+            scale: Int((max(renderScale, 0.01) * 100).rounded())
+        )
+    }
+
+    @MainActor
+    private func render(request: DrawingSnapshotRenderRequest, size: CGSize) {
+        guard size.width > 0, size.height > 0 else {
+            renderedImage = nil
+            return
+        }
+
+        if let cached = DrawingSnapshotImageCache.shared.image(for: request) {
+            renderedImage = cached
+            return
+        }
+
+        let image = drawing.image(
+            from: CGRect(origin: .zero, size: size),
+            scale: request.renderScale
+        )
+        DrawingSnapshotImageCache.shared.insert(image, for: request)
+        renderedImage = image
+    }
+}
+
+private struct DrawingSnapshotRenderRequest: Hashable {
+    let drawingHash: Int
+    let drawingByteCount: Int
+    let width: Int
+    let height: Int
+    let scale: Int
+
+    var renderScale: CGFloat { CGFloat(scale) / 100 }
+}
+
+@MainActor
+private final class DrawingSnapshotImageCache {
+    static let shared = DrawingSnapshotImageCache()
+    static let maxPixelDimension: CGFloat = 4_096
+
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 24
+        cache.totalCostLimit = 64 * 1_024 * 1_024
+    }
+
+    func image(for request: DrawingSnapshotRenderRequest) -> UIImage? {
+        cache.object(forKey: key(for: request))
+    }
+
+    func insert(_ image: UIImage, for request: DrawingSnapshotRenderRequest) {
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        cache.setObject(image, forKey: key(for: request), cost: cost)
+    }
+
+    private func key(for request: DrawingSnapshotRenderRequest) -> NSString {
+        "\(request.drawingHash):\(request.drawingByteCount):\(request.width)x\(request.height)@\(request.scale)" as NSString
     }
 }
 
@@ -875,6 +962,7 @@ extension UIColor {
 struct DrawingCanvasView: View {
     let drawing: PKDrawing
     let isEditing: Bool
+    let canvasScale: CGFloat
     let smartShapeSnappingEnabled: Bool
     let onDrawingChanged: (PKDrawing) -> Void
 
@@ -883,13 +971,14 @@ struct DrawingCanvasView: View {
             if isEditing {
                 MacDrawingEditor(
                     drawing: drawing,
+                    canvasScale: canvasScale,
                     onDrawingChanged: onDrawingChanged
                 )
             } else {
                 if drawing.strokes.isEmpty {
                     Color.clear
                 } else {
-                    DrawingImage(drawing: drawing, size: geo.size)
+                    DrawingImage(drawing: drawing, size: geo.size, canvasScale: canvasScale)
                 }
             }
         }
@@ -1050,6 +1139,7 @@ enum MacDrawingColor: String, CaseIterable, Identifiable {
 
 struct MacDrawingEditor: View {
     let drawing: PKDrawing
+    let canvasScale: CGFloat
     let onDrawingChanged: (PKDrawing) -> Void
 
     @State private var tool = MacDrawingToolState()
@@ -1059,6 +1149,7 @@ struct MacDrawingEditor: View {
             MacFreehandPKDrawingView(
                 drawing: drawing,
                 tool: tool,
+                canvasScale: canvasScale,
                 onDrawingChanged: onDrawingChanged
             )
 
@@ -1227,6 +1318,7 @@ private struct MacDrawingToolControls: View {
 private struct MacFreehandPKDrawingView: View {
     let drawing: PKDrawing
     let tool: MacDrawingToolState
+    let canvasScale: CGFloat
     var onDrawingChanged: (PKDrawing) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -1241,7 +1333,11 @@ private struct MacFreehandPKDrawingView: View {
                 if workingDrawing.strokes.isEmpty {
                     Color.clear
                 } else {
-                    DrawingImage(drawing: workingDrawing, size: geo.size)
+                    DrawingImage(
+                        drawing: workingDrawing,
+                        size: geo.size,
+                        canvasScale: canvasScale
+                    )
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
@@ -1385,6 +1481,7 @@ private struct MacFreehandPKDrawingView: View {
 private struct DrawingImage: View {
     let drawing: PKDrawing
     let size: CGSize
+    let canvasScale: CGFloat
 
     var body: some View {
         if let nsImage = renderedImage {
@@ -1397,7 +1494,8 @@ private struct DrawingImage: View {
     private var renderedImage: NSImage? {
         guard size.width > 0, size.height > 0 else { return nil }
         let rect  = CGRect(origin: .zero, size: size)
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let desiredScale = (NSScreen.main?.backingScaleFactor ?? 2.0) * max(canvasScale, 1)
+        let scale = min(desiredScale, 4_096 / max(max(size.width, size.height), 1))
         return drawing.image(from: rect, scale: scale)
     }
 }

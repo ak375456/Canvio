@@ -105,6 +105,7 @@ struct DrawingElementView: View {
             DrawingCanvasView(
                 drawing: element.pkDrawing,
                 isEditing: isEditing,
+                canvasScale: canvasScale,
                 smartShapeSnappingEnabled: settings.smartShapeSnappingEnabled,
                 onDrawingChanged: { vm.saveDrawing(element: element, drawing: $0, context: context) }
             )

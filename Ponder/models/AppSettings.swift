@@ -45,31 +45,9 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 }
 
-enum ToolbarPosition: String, CaseIterable, Identifiable {
+enum ToolbarPosition: String {
     case bottom
-    case left
-    case right
     case hidden
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .bottom: return "Bottom"
-        case .left:   return "Left"
-        case .right:  return "Right"
-        case .hidden: return "Hidden"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .bottom: return "dock.rectangle"
-        case .left:   return "sidebar.left"
-        case .right:  return "sidebar.right"
-        case .hidden: return "eye.slash"
-        }
-    }
 }
 
 enum ToolbarStyle: String, CaseIterable, Identifiable {

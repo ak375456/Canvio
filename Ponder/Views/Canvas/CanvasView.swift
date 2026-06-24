@@ -3839,12 +3839,9 @@ struct CanvasView: View {
             )
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
         } else {
-            switch settings.toolbarPosition {
-            case .hidden: EmptyView()
-            case .bottom:
-                VStack {
-                    Spacer()
-                    CanvasToolbar(
+            VStack {
+                Spacer()
+                CanvasToolbar(
                     showTextSheet:  $vm.showTextSheet,
                     onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
                     onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
@@ -3865,70 +3862,10 @@ struct CanvasView: View {
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
                     showsWriteTextTool: settings.handwritingToTextEnabled,
-                    lockedTools: lockedCanvasTools,
-                    isVertical: false
+                    lockedTools: lockedCanvasTools
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 12)
-            }
-            case .left:
-                HStack {
-                    CanvasToolbar(
-                    showTextSheet:  $vm.showTextSheet,
-                    onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
-                    onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
-                    onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onLasso:        { startLassoSelection() },
-                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
-                    onDrawOnCanvas: { startCanvasDrawing() },
-                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
-                    onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
-                    onConnect:      { toggleConnectMode() },
-                    isConnectModeActive: connectActive,
-                    showsWriteTextTool: settings.handwritingToTextEnabled,
-                    lockedTools: lockedCanvasTools,
-                    isVertical: true
-                )
-                .padding(.leading, 16)
-                Spacer()
-            }
-            case .right:
-                HStack {
-                    Spacer()
-                    CanvasToolbar(
-                    showTextSheet:  $vm.showTextSheet,
-                    onAddSticky:    { addStickyAtCenter(viewportSize: geo.size) },
-                    onAddTodo:      { addTodoAtCenter(viewportSize: geo.size) },
-                    onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onLasso:        { startLassoSelection() },
-                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
-                    onDrawOnCanvas: { startCanvasDrawing() },
-                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
-                    onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
-                    onConnect:      { toggleConnectMode() },
-                    isConnectModeActive: connectActive,
-                    showsWriteTextTool: settings.handwritingToTextEnabled,
-                    lockedTools: lockedCanvasTools,
-                    isVertical: true
-                )
-                .padding(.trailing, 16)
-            }
             }
         }
     }
