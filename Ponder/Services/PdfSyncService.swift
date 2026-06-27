@@ -84,8 +84,12 @@ final class PDFSyncService {
         let row = makeRow(element: element, userID: userID)
         let documentRow = makeDocumentRow(element: element, userID: userID)
 
-        Task { await media.uploadPDF(pdfFileName: element.pdfFileName,
-                                     thumbnailFileName: element.thumbnailFileName) }
+        Task {
+            await media.uploadBundle(.pdf(
+                pdfFileName: element.pdfFileName,
+                thumbnailFileName: element.thumbnailFileName
+            ))
+        }
 
         guard network.isConnected else {
             if let data = try? JSONEncoder().encode(row) {
@@ -137,8 +141,12 @@ final class PDFSyncService {
                 .eq("user_id", value: userID)
                 .execute()
             if deleteAsset {
-                Task { await media.deletePDF(pdfFileName: element.pdfFileName,
-                                             thumbnailFileName: element.thumbnailFileName) }
+                Task {
+                    await media.deleteBundle(.pdf(
+                        pdfFileName: element.pdfFileName,
+                        thumbnailFileName: element.thumbnailFileName
+                    ))
+                }
             }
         } catch {
             let payload = PDFDeletePayload(id: elementID, user_id: userID, updated_at: now,
@@ -194,8 +202,12 @@ final class PDFSyncService {
                         local.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt = remoteUpdated
                     }
-                    Task { await media.downloadPDFIfNeeded(pdfFileName: row.pdf_file_name,
-                                                           thumbnailFileName: row.thumbnail_file_name) }
+                    Task {
+                        await media.downloadBundleIfNeeded(.pdf(
+                            pdfFileName: row.pdf_file_name,
+                            thumbnailFileName: row.thumbnail_file_name
+                        ))
+                    }
                 } else {
                     let element = PDFElementModel(
                         canvasID: canvasID,
@@ -215,8 +227,12 @@ final class PDFSyncService {
                     element.createdAt = iso.date(from: row.created_at) ?? Date()
                     element.updatedAt = iso.date(from: row.updated_at) ?? Date()
                     context.insert(element)
-                    Task { await media.downloadPDFIfNeeded(pdfFileName: row.pdf_file_name,
-                                                           thumbnailFileName: row.thumbnail_file_name) }
+                    Task {
+                        await media.downloadBundleIfNeeded(.pdf(
+                            pdfFileName: row.pdf_file_name,
+                            thumbnailFileName: row.thumbnail_file_name
+                        ))
+                    }
                 }
             }
 
@@ -238,48 +254,70 @@ final class PDFSyncService {
             switch operation.type {
             case .upsertPDF:
                 if let row = try? JSONDecoder().decode(PDFRow.self, from: operation.payload) {
-                    do {
-                        let fileURL = PDFStorageService.pdfsDirectory.appendingPathComponent(row.pdf_file_name)
-                        let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
-                        let documentRow = PDFDocumentAssetRow(
-                            id: row.document_id, user_id: row.user_id,
-                            pdf_file_name: row.pdf_file_name,
-                            thumbnail_file_name: row.thumbnail_file_name,
-                            original_name: row.original_name, page_count: max(1, row.page_count),
-                            file_size_bytes: fileSize, sha256: nil,
-                            created_at: row.created_at, updated_at: row.updated_at,
-                            is_deleted: false
-                        )
-                        try await supabase.from("pdf_documents")
-                            .upsert(documentRow, onConflict: "id").execute()
-                        try await supabase
-                            .from("pdf_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        Task { await media.uploadPDF(pdfFileName: row.pdf_file_name,
-                                                     thumbnailFileName: row.thumbnail_file_name) }
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "pdf_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            let fileURL = PDFStorageService.pdfsDirectory.appendingPathComponent(row.pdf_file_name)
+                            let fileSize = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                            let documentRow = PDFDocumentAssetRow(
+                                id: row.document_id, user_id: row.user_id,
+                                pdf_file_name: row.pdf_file_name,
+                                thumbnail_file_name: row.thumbnail_file_name,
+                                original_name: row.original_name, page_count: max(1, row.page_count),
+                                file_size_bytes: fileSize, sha256: nil,
+                                created_at: row.created_at, updated_at: row.updated_at,
+                                is_deleted: false
+                            )
+                            try await supabase.from("pdf_documents")
+                                .upsert(documentRow, onConflict: "id").execute()
+                            try await supabase
+                                .from("pdf_elements")
+                                .upsert(row, onConflict: "id")
+                                .execute()
+                            Task {
+                                await media.uploadBundle(.pdf(
+                                    pdfFileName: row.pdf_file_name,
+                                    thumbnailFileName: row.thumbnail_file_name
+                                ))
+                            }
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush PDF upsert failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush PDF upsert failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
             case .deletePDF:
                 if let payload = try? JSONDecoder().decode(PDFDeletePayload.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("pdf_elements")
-                            .update(PDFDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        if payload.delete_asset {
-                            Task { await media.deletePDF(pdfFileName: payload.pdf_file_name,
-                                                         thumbnailFileName: payload.thumbnail_file_name) }
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "pdf_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase
+                                .from("pdf_elements")
+                                .update(PDFDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
+                                .eq("id",      value: payload.id)
+                                .eq("user_id", value: payload.user_id)
+                                .execute()
+                            if payload.delete_asset {
+                                Task {
+                                    await media.deleteBundle(.pdf(
+                                        pdfFileName: payload.pdf_file_name,
+                                        thumbnailFileName: payload.thumbnail_file_name
+                                    ))
+                                }
+                            }
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush PDF delete failed: \(error.localizedDescription)")
                         }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush PDF delete failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
@@ -294,7 +332,6 @@ final class PDFSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: PDFElementModel, userID: String) -> PDFRow {
-        let now = iso.string(from: Date())
         return PDFRow(
             id:                  element.id.uuidString,
             document_id:         element.resolvedDocumentID.uuidString,
@@ -312,7 +349,7 @@ final class PDFSyncService {
             z_index:             element.zIndex,
             group_id:            element.groupID?.uuidString,
             created_at:          iso.string(from: element.createdAt),
-            updated_at:          now,
+            updated_at:          iso.string(from: element.updatedAt),
             is_deleted:          false
         )
     }

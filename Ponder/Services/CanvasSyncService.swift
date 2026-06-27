@@ -179,21 +179,22 @@ final class CanvasSyncService {
         guard let userID = AuthService.shared.syncUserID else { return }
 
         do {
-            struct IDOnly: Codable { let id: String }
-            let remoteRows: [IDOnly] = try await supabase
-                .from("canvases").select("id")
-                .eq("user_id",    value: userID)
-                .eq("is_deleted", value: false)
-                .execute().value
-
-            let remoteIDs      = Set(remoteRows.map { $0.id.lowercased() })
+            let metadata = await SyncStalenessGuard.loadMetadata(
+                supabase: supabase,
+                userID: userID,
+                tables: ["canvases"]
+            )
             let localCanvases  = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
             let orphans        = localCanvases.filter {
-                !remoteIDs.contains($0.id.uuidString.lowercased())
+                metadata.shouldUpload(
+                    table: "canvases",
+                    id: $0.id,
+                    localUpdatedAt: $0.updatedAt
+                )
             }
 
             if !orphans.isEmpty {
-                print("🔁 Reconciling \(orphans.count) local canvas(es) missing from Supabase")
+                print("🔁 Reconciling \(orphans.count) local canvas(es) newer than Supabase")
                 for canvas in orphans {
                     let row = makeRow(canvas: canvas, userID: userID)
                     try? await supabase.from("canvases").upsert(row, onConflict: "id").execute()
@@ -212,13 +213,45 @@ final class CanvasSyncService {
 
     func reconcileAllLocalData(context: ModelContext) async {
         guard network.isConnected else { return }
-        guard AuthService.shared.syncUserID != nil else { return }
+        guard let userID = AuthService.shared.syncUserID else { return }
 
-        print("🔁 reconcileAllLocalData — pushing all local data to Supabase")
+        print("🔁 reconcileAllLocalData — reconciling local data with remote metadata")
+
+        let metadata = await SyncStalenessGuard.loadMetadata(
+            supabase: supabase,
+            userID: userID,
+            tables: [
+                "canvases",
+                "canvas_pages",
+                "element_groups",
+                "text_elements",
+                "sticky_notes",
+                "shapes",
+                "image_elements",
+                "pdf_elements",
+                "todo_lists",
+                "todo_tasks",
+                "table_elements",
+                "table_cells",
+                "audio_elements",
+                "youtube_elements",
+                "drawings",
+                "connectors",
+                "symbol_elements"
+            ]
+        )
+
+        var uploaded = 0
+        var skipped = 0
+        func shouldUpload(table: String, id: UUID, updatedAt: Date) -> Bool {
+            let canUpload = metadata.shouldUpload(table: table, id: id, localUpdatedAt: updatedAt)
+            if canUpload { uploaded += 1 } else { skipped += 1 }
+            return canUpload
+        }
 
         // 1. Canvases
         let canvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
-        for canvas in canvases {
+        for canvas in canvases where shouldUpload(table: "canvases", id: canvas.id, updatedAt: canvas.updatedAt) {
             await upsert(canvas)
         }
 
@@ -232,7 +265,9 @@ final class CanvasSyncService {
             let pages = (try? context.fetch(FetchDescriptor<CanvasPageModel>()))?.filter {
                 $0.canvasID == parentCanvasID
             } ?? []
-            for page in pages { await CanvasPageSyncService.shared.upsert(page) }
+            for page in pages where shouldUpload(table: "canvas_pages", id: page.id, updatedAt: page.updatedAt) {
+                await CanvasPageSyncService.shared.upsert(page)
+            }
 
             let contentCanvasIDs = pages.isEmpty
                 ? [parentCanvasID]
@@ -242,32 +277,44 @@ final class CanvasSyncService {
                 let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for group in groups { await ElementGroupSyncService.shared.upsert(group) }
+                for group in groups where shouldUpload(table: "element_groups", id: group.id, updatedAt: group.updatedAt) {
+                    await ElementGroupSyncService.shared.upsert(group)
+                }
 
                 let texts = (try? context.fetch(FetchDescriptor<TextElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in texts { await TextSyncService.shared.upsert(el) }
+                for el in texts where shouldUpload(table: "text_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await TextSyncService.shared.upsert(el)
+                }
 
                 let stickies = (try? context.fetch(FetchDescriptor<StickyNoteModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in stickies { await StickyNoteSyncService.shared.upsert(el) }
+                for el in stickies where shouldUpload(table: "sticky_notes", id: el.id, updatedAt: el.updatedAt) {
+                    await StickyNoteSyncService.shared.upsert(el)
+                }
 
                 let shapes = (try? context.fetch(FetchDescriptor<ShapeElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in shapes { await ShapeSyncService.shared.upsert(el) }
+                for el in shapes where shouldUpload(table: "shapes", id: el.id, updatedAt: el.updatedAt) {
+                    await ShapeSyncService.shared.upsert(el)
+                }
 
                 let images = (try? context.fetch(FetchDescriptor<ImageElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in images { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                for el in images where shouldUpload(table: "image_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await ImageSyncService.shared.upsert(el, uploadFile: true)
+                }
 
                 let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in pdfs { await PDFSyncService.shared.upsert(el) }
+                for el in pdfs where shouldUpload(table: "pdf_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await PDFSyncService.shared.upsert(el)
+                }
                 await PDFWorkspaceSyncService.shared.reconcile(
                     canvasID: contentCanvasID,
                     context: context
@@ -276,53 +323,69 @@ final class CanvasSyncService {
                 let todos = (try? context.fetch(FetchDescriptor<TodoListModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in todos { await TodoSyncService.shared.upsertList(el) }
+                for el in todos where shouldUpload(table: "todo_lists", id: el.id, updatedAt: el.updatedAt) {
+                    await TodoSyncService.shared.upsertList(el)
+                }
 
                 let tasks = (try? context.fetch(FetchDescriptor<TodoTaskModel>())) ?? []
                 let todoIDs = Set(todos.map { $0.id })
-                for el in tasks.filter({ todoIDs.contains($0.listID) }) {
+                for el in tasks.filter({ todoIDs.contains($0.listID) })
+                    where shouldUpload(table: "todo_tasks", id: el.id, updatedAt: el.updatedAt) {
                     await TodoSyncService.shared.upsertTask(el)
                 }
 
                 let tables = (try? context.fetch(FetchDescriptor<TableElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in tables { await TableSyncService.shared.upsertTable(el) }
+                for el in tables where shouldUpload(table: "table_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await TableSyncService.shared.upsertTable(el)
+                }
 
                 let cells = (try? context.fetch(FetchDescriptor<TableCellModel>())) ?? []
                 let tableIDs = Set(tables.map { $0.id })
-                for el in cells.filter({ tableIDs.contains($0.tableID) }) {
+                for el in cells.filter({ tableIDs.contains($0.tableID) })
+                    where shouldUpload(table: "table_cells", id: el.id, updatedAt: el.updatedAt) {
                     await TableSyncService.shared.upsertCell(el)
                 }
 
                 let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in audio { await AudioSyncService.shared.upsert(el) }
+                for el in audio where shouldUpload(table: "audio_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await AudioSyncService.shared.upsert(el)
+                }
 
                 let youtube = (try? context.fetch(FetchDescriptor<YouTubeElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in youtube { await YouTubeSyncService.shared.upsert(el) }
+                for el in youtube where shouldUpload(table: "youtube_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await YouTubeSyncService.shared.upsert(el)
+                }
 
                 let drawings = (try? context.fetch(FetchDescriptor<DrawingElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in drawings { await DrawingSyncService.shared.upsert(el) }
+                for el in drawings where shouldUpload(table: "drawings", id: el.id, updatedAt: el.updatedAt) {
+                    await DrawingSyncService.shared.upsert(el)
+                }
 
                 let connectors = (try? context.fetch(FetchDescriptor<ConnectorModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in connectors { await ConnectorSyncService.shared.upsert(el) }
+                for el in connectors where shouldUpload(table: "connectors", id: el.id, updatedAt: el.updatedAt) {
+                    await ConnectorSyncService.shared.upsert(el)
+                }
 
                 let symbols = (try? context.fetch(FetchDescriptor<SymbolElementModel>()))?.filter {
                     $0.canvasID == contentCanvasID
                 } ?? []
-                for el in symbols { await SymbolSyncService.shared.upsert(el) }
+                for el in symbols where shouldUpload(table: "symbol_elements", id: el.id, updatedAt: el.updatedAt) {
+                    await SymbolSyncService.shared.upsert(el)
+                }
             }
         }
 
-        print("✅ reconcileAllLocalData complete")
+        print("✅ reconcileAllLocalData complete — uploaded \(uploaded), skipped \(skipped) stale/current row(s)")
     }
 
     // MARK: - Flush offline queue
@@ -336,24 +399,38 @@ final class CanvasSyncService {
             switch operation.type {
             case .upsertCanvas:
                 if let row = try? JSONDecoder().decode(CanvasRow.self, from: operation.payload) {
-                    do {
-                        try await supabase.from("canvases").upsert(row, onConflict: "id").execute()
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "canvases", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase.from("canvases").upsert(row, onConflict: "id").execute()
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush canvas upsert failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush canvas upsert failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
             case .deleteCanvas:
                 if let payload = try? JSONDecoder().decode(DeletePayload.self, from: operation.payload) {
-                    do {
-                        try await supabase.from("canvases")
-                            .update(DeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id", value: payload.id).eq("user_id", value: payload.user_id)
-                            .execute()
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "canvases", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase.from("canvases")
+                                .update(DeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
+                                .eq("id", value: payload.id).eq("user_id", value: payload.user_id)
+                                .execute()
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush canvas delete failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush canvas delete failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
@@ -368,7 +445,6 @@ final class CanvasSyncService {
     // MARK: - Helpers
 
     private func makeRow(canvas: CanvasModel, userID: String) -> CanvasRow {
-        let now = iso.string(from: Date())
         return CanvasRow(
             id:              canvas.id.uuidString,
             user_id:         userID,
@@ -379,7 +455,7 @@ final class CanvasSyncService {
             custom_width:    canvas.customWidth,
             custom_height:   canvas.customHeight,
             created_at:      iso.string(from: canvas.createdAt),
-            updated_at:      now,
+            updated_at:      iso.string(from: canvas.updatedAt),
             is_deleted:      false
         )
     }

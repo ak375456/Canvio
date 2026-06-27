@@ -101,10 +101,6 @@ struct HomeView: View {
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(24)
             }
-            .onChange(of: auth.currentUser?.id.uuidString) { _, newValue in
-                guard newValue != nil, pro.isPro else { return }
-                Task { await syncAll() }
-            }
         }
     }
 

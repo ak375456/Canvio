@@ -345,62 +345,38 @@ final class TodoSyncService {
 
             switch operation.type {
             case .upsertTodoList:
-                if let row = try? JSONDecoder().decode(DBTodoListRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("todo_lists")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush todo list upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: DBTodoListRow.self,
+                    table: "todo_lists",
+                    supabase: supabase,
+                    label: "todo list"
+                )
 
             case .deleteTodoList:
-                if let payload = try? JSONDecoder().decode(ListDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("todo_lists")
-                            .update(ListDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush todo list delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "todo_lists",
+                    supabase: supabase,
+                    label: "todo list"
+                )
 
             case .upsertTodoTask:
-                if let row = try? JSONDecoder().decode(DBTodoTaskRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("todo_tasks")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush todo task upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: DBTodoTaskRow.self,
+                    table: "todo_tasks",
+                    supabase: supabase,
+                    label: "todo task"
+                )
 
             case .deleteTodoTask:
-                if let payload = try? JSONDecoder().decode(TaskDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("todo_tasks")
-                            .update(TaskDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush todo task delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "todo_tasks",
+                    supabase: supabase,
+                    label: "todo task"
+                )
 
             default:
                 break
@@ -413,7 +389,6 @@ final class TodoSyncService {
     // MARK: - Helpers
 
     private func makeListRow(list: TodoListModel, userID: String) -> DBTodoListRow {
-        let now = iso.string(from: Date())
         return DBTodoListRow(
             id:         list.id.uuidString,
             canvas_id:  list.canvasID.uuidString,
@@ -427,13 +402,12 @@ final class TodoSyncService {
             z_index:    list.zIndex,
             group_id:   list.groupID?.uuidString,
             created_at: iso.string(from: list.createdAt),
-            updated_at: now,
+            updated_at: iso.string(from: list.updatedAt),
             is_deleted: false
         )
     }
 
     private func makeTaskRow(task: TodoTaskModel, userID: String) -> DBTodoTaskRow {
-        let now = iso.string(from: Date())
         return DBTodoTaskRow(
             id:             task.id.uuidString,
             list_id:        task.listID.uuidString,
@@ -446,7 +420,7 @@ final class TodoSyncService {
             tags_raw:       task.tagsRaw,
             sort_order:     task.order,
             created_at:     iso.string(from: task.createdAt),
-            updated_at:     now,
+            updated_at:     iso.string(from: task.updatedAt),
             is_deleted:     false
         )
     }

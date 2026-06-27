@@ -177,36 +177,21 @@ final class CanvasPageSyncService {
 
             switch operation.type {
             case .upsertCanvasPage:
-                if let row = try? JSONDecoder().decode(CanvasPageRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("canvas_pages")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush canvas page upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: CanvasPageRow.self,
+                    table: "canvas_pages",
+                    supabase: supabase,
+                    label: "canvas page"
+                )
 
             case .deleteCanvasPage:
-                if let payload = try? JSONDecoder().decode(CanvasPageDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("canvas_pages")
-                            .update(CanvasPageDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id", value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush canvas page delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "canvas_pages",
+                    supabase: supabase,
+                    label: "canvas page"
+                )
 
             default:
                 break
@@ -217,7 +202,6 @@ final class CanvasPageSyncService {
     }
 
     private func makeRow(page: CanvasPageModel, userID: String) -> CanvasPageRow {
-        let now = iso.string(from: Date())
         return CanvasPageRow(
             id: page.id.uuidString,
             canvas_id: page.canvasID.uuidString,
@@ -230,7 +214,7 @@ final class CanvasPageSyncService {
             height: page.height,
             order_index: page.orderIndex,
             created_at: iso.string(from: page.createdAt),
-            updated_at: now,
+            updated_at: iso.string(from: page.updatedAt),
             is_deleted: false
         )
     }

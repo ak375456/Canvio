@@ -196,36 +196,21 @@ final class DrawingSyncService {
 
             switch operation.type {
             case .upsertDrawing:
-                if let row = try? JSONDecoder().decode(DrawingRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("drawings")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush drawing upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: DrawingRow.self,
+                    table: "drawings",
+                    supabase: supabase,
+                    label: "drawing"
+                )
 
             case .deleteDrawing:
-                if let payload = try? JSONDecoder().decode(DrawingDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("drawings")
-                            .update(DrawingDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush drawing delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "drawings",
+                    supabase: supabase,
+                    label: "drawing"
+                )
 
             default:
                 break
@@ -238,7 +223,6 @@ final class DrawingSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: DrawingElementModel, userID: String) -> DrawingRow {
-        let now = iso.string(from: Date())
         // Encode PKDrawing data as base64 for safe JSON transport
         let base64 = element.drawingData.base64EncodedString()
         return DrawingRow(
@@ -255,7 +239,7 @@ final class DrawingSyncService {
             group_id:          element.groupID?.uuidString,
             is_canvas_drawing: element.isCanvasDrawing,
             created_at:        iso.string(from: element.createdAt),
-            updated_at:        now,
+            updated_at:        iso.string(from: element.updatedAt),
             is_deleted:        false
         )
     }

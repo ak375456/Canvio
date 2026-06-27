@@ -15,7 +15,7 @@ struct AddElementMenu: View {
         #if os(iOS)
         return CanvasTool.allCases
         #else
-        return CanvasTool.allCases.filter { $0 != .ocrScan }
+        return CanvasTool.allCases.filter { $0 != .scanner }
         #endif
     }
 
@@ -98,8 +98,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case templates
     case shape
     case image
-    case ocrScan
-    case documentScan
+    case scanner
     case pdf
     case table
     case audio
@@ -117,8 +116,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .templates:  return "Templates"
         case .shape:      return "Shape"
         case .image:      return "Image"
-        case .ocrScan:    return "OCR Scan"
-        case .documentScan: return "Scan Document"
+        case .scanner:    return "Scanner"
         case .pdf:        return "PDF"
         case .table:      return "Table"
         case .audio:      return "Audio"
@@ -136,8 +134,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .templates:  return "Add a ready-made layout"
         case .shape:      return "Lines, rectangles, polygons"
         case .image:      return "Add a photo from your library"
-        case .ocrScan:    return "Scan a page into editable text"
-        case .documentScan: return "Place scanned pages as a PDF"
+        case .scanner:    return "Scan to text or PDF"
         case .pdf:        return "Add a PDF document"
         case .table:      return "Spreadsheet with rows & columns"
         case .audio:      return "Record or import audio"
@@ -155,8 +152,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .templates:  return "square.grid.2x2"
         case .shape:      return "square.on.circle"
         case .image:      return "photo"
-        case .ocrScan:    return "doc.text.viewfinder"
-        case .documentScan: return "doc.viewfinder"
+        case .scanner:    return "doc.viewfinder"
         case .pdf:        return "doc.richtext"
         case .table:      return "tablecells"
         case .audio:      return "waveform"
@@ -174,8 +170,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .templates:  return .indigo
         case .shape:      return .purple
         case .image:      return .cyan
-        case .ocrScan:    return .teal
-        case .documentScan: return .red
+        case .scanner:    return .teal
         case .pdf:        return .red
         case .table:      return .indigo
         case .audio:      return .pink

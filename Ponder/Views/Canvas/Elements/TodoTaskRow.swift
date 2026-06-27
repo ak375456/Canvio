@@ -17,6 +17,7 @@ struct TodoTaskRow: View {
     let onDelete: () -> Void
 
     @FocusState private var isFocused: Bool
+    @State private var remoteSyncTask: Task<Void, Never>?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -53,7 +54,10 @@ struct TodoTaskRow: View {
                     .onChange(of: task.title) { _, _ in
                         task.updatedAt = Date()
                         try? context.save()
-                        Task { await TodoSyncService.shared.upsertTask(task) }
+                        scheduleRemoteSync()
+                    }
+                    .onChange(of: isFocused) { _, focused in
+                        if !focused { flushRemoteSync() }
                     }
 
                 if hasMeta {
@@ -126,6 +130,26 @@ struct TodoTaskRow: View {
                 Label("Details", systemImage: "info.circle")
             }
         }
+        .onDisappear {
+            flushRemoteSync()
+        }
+    }
+
+    private func scheduleRemoteSync() {
+        remoteSyncTask?.cancel()
+        remoteSyncTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await TodoSyncService.shared.upsertTask(task)
+            remoteSyncTask = nil
+        }
+    }
+
+    private func flushRemoteSync() {
+        guard remoteSyncTask != nil else { return }
+        remoteSyncTask?.cancel()
+        remoteSyncTask = nil
+        Task { await TodoSyncService.shared.upsertTask(task) }
     }
 
     private var hasMeta: Bool {

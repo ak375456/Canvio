@@ -47,8 +47,7 @@ class CanvasViewModel: ObservableObject {
     @Published var showImagePicker: Bool = false
     @Published var showImageSourcePicker: Bool = false
     @Published var showCameraPicker: Bool = false
-    @Published var showOCRScanner: Bool = false
-    @Published var showDocumentScanner: Bool = false
+    @Published var showScanner: Bool = false
     @Published var showPDFPicker: Bool = false
     @Published var showAudioPicker: Bool = false
     @Published var showYouTubeLinkSheet: Bool = false
@@ -59,13 +58,10 @@ class CanvasViewModel: ObservableObject {
     @Published var pendingShapeLocation: CGPoint? = nil
     @Published var pendingSymbolLocation: CGPoint? = nil   // ← NEW
     @Published var pendingImageLocation: CGPoint? = nil
-    @Published var pendingOCRLocation: CGPoint? = nil
-    @Published var pendingDocumentScanLocation: CGPoint? = nil
     @Published var pendingPDFLocation: CGPoint? = nil
     @Published var pendingAudioLocation: CGPoint? = nil
     @Published var pendingYouTubeLocation: CGPoint? = nil
     @Published var pendingTemplateLocation: CGPoint? = nil
-    @Published var pendingDrawingLocation: CGPoint? = nil
     @Published var addMenuPosition: CGPoint? = nil
     @Published var isMinimapExpanded: Bool = true
     @Published var selectedPhotoItem: PhotosPickerItem? = nil

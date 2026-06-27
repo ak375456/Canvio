@@ -101,9 +101,9 @@ struct ImageSourcePickerSheet: View {
     }
 }
 
-// MARK: - OCR source picker sheet
+// MARK: - Scan source picker sheet
 
-struct OCRSourcePickerSheet: View {
+struct ScanSourcePickerSheet: View {
     let onPhotos: () -> Void
     let onCamera: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -116,10 +116,10 @@ struct OCRSourcePickerSheet: View {
                 .padding(.top, 10)
                 .padding(.bottom, 18)
 
-            Text("Extract Text")
+            Text("Scan Source")
                 .font(.headline.weight(.bold))
 
-            Text("Choose where the text should come from")
+            Text("Choose camera or photos")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
@@ -129,16 +129,16 @@ struct OCRSourcePickerSheet: View {
                 sourceButton(
                     icon: "photo.on.rectangle.angled",
                     color: .purple,
-                    title: "Choose Image",
-                    subtitle: "Extract text from your photo library",
+                    title: "Choose Images",
+                    subtitle: "Use your photo library",
                     action: onPhotos
                 )
 
                 sourceButton(
                     icon: "camera.fill",
                     color: .teal,
-                    title: "Take Photo",
-                    subtitle: "Scan text with your camera",
+                    title: "Use Camera",
+                    subtitle: "Scan pages with your camera",
                     action: onCamera
                 )
 

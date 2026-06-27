@@ -195,36 +195,21 @@ final class ConnectorSyncService {
 
             switch operation.type {
             case .upsertConnector:
-                if let row = try? JSONDecoder().decode(ConnectorRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("connectors")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush connector upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: ConnectorRow.self,
+                    table: "connectors",
+                    supabase: supabase,
+                    label: "connector"
+                )
 
             case .deleteConnector:
-                if let payload = try? JSONDecoder().decode(ConnectorDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("connectors")
-                            .update(ConnectorDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush connector delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "connectors",
+                    supabase: supabase,
+                    label: "connector"
+                )
 
             default:
                 break
@@ -237,7 +222,6 @@ final class ConnectorSyncService {
     // MARK: - Helpers
 
     private func makeRow(connector: ConnectorModel, userID: String) -> ConnectorRow {
-        let now = iso.string(from: Date())
         return ConnectorRow(
             id:              connector.id.uuidString,
             canvas_id:       connector.canvasID.uuidString,
@@ -251,7 +235,7 @@ final class ConnectorSyncService {
             stroke_width:    connector.strokeWidth,
             has_arrow_head:  connector.hasArrowHead,
             created_at:      iso.string(from: connector.createdAt),
-            updated_at:      now,
+            updated_at:      iso.string(from: connector.updatedAt),
             is_deleted:      false
         )
     }

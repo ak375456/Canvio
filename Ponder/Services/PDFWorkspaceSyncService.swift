@@ -163,15 +163,43 @@ final class PDFWorkspaceSyncService {
     }
 
     func reconcile(canvasID: UUID, context: ModelContext) async {
+        guard let userID = AuthService.shared.syncUserID else { return }
+        let metadata = await SyncStalenessGuard.loadMetadata(
+            supabase: supabase,
+            userID: userID,
+            tables: [
+                "pdf_page_elements",
+                "pdf_highlights",
+                "pdf_ink_layers"
+            ]
+        )
         let pages = ((try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? [])
             .filter { $0.canvasID == canvasID }
         let highlights = ((try? context.fetch(FetchDescriptor<PDFHighlightModel>())) ?? [])
             .filter { $0.canvasID == canvasID }
         let inks = ((try? context.fetch(FetchDescriptor<PDFInkLayerModel>())) ?? [])
             .filter { $0.canvasID == canvasID }
-        for item in pages { await upsert(item) }
-        for item in highlights { await upsert(item) }
-        for item in inks { await upsert(item) }
+        for item in pages where metadata.shouldUpload(
+            table: "pdf_page_elements",
+            id: item.id,
+            localUpdatedAt: item.updatedAt
+        ) {
+            await upsert(item)
+        }
+        for item in highlights where metadata.shouldUpload(
+            table: "pdf_highlights",
+            id: item.id,
+            localUpdatedAt: item.updatedAt
+        ) {
+            await upsert(item)
+        }
+        for item in inks where metadata.shouldUpload(
+            table: "pdf_ink_layers",
+            id: item.id,
+            localUpdatedAt: item.updatedAt
+        ) {
+            await upsert(item)
+        }
     }
 
     func flushQueue() async {
@@ -240,28 +268,22 @@ final class PDFWorkspaceSyncService {
 
     private func flushUpsert<Row: Codable>(_ operation: SyncOperation, as type: Row.Type,
                                             table: String) async -> Bool {
-        guard let row = try? JSONDecoder().decode(type, from: operation.payload) else { return false }
-        do {
-            try await supabase.from(table).upsert(row, onConflict: "id").execute()
-            return true
-        } catch {
-            print("⚠️ Queue flush \(table) upsert failed: \(error.localizedDescription)")
-            return false
-        }
+        await SyncStalenessGuard.flushUpsert(
+            operation,
+            as: type,
+            table: table,
+            supabase: supabase,
+            label: table
+        )
     }
 
     private func flushDelete(_ operation: SyncOperation, table: String) async -> Bool {
-        guard let payload = try? JSONDecoder().decode(PDFWorkspaceDeletePayload.self,
-                                                       from: operation.payload) else { return false }
-        do {
-            try await supabase.from(table)
-                .update(PDFWorkspaceDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                .eq("id", value: payload.id).eq("user_id", value: payload.user_id).execute()
-            return true
-        } catch {
-            print("⚠️ Queue flush \(table) delete failed: \(error.localizedDescription)")
-            return false
-        }
+        await SyncStalenessGuard.flushSoftDelete(
+            operation,
+            table: table,
+            supabase: supabase,
+            label: table
+        )
     }
 
     private func pageRow(_ item: PDFPageElementModel, userID: String) -> PDFPageElementRow {
@@ -339,19 +361,8 @@ final class PDFWorkspaceSyncService {
             item.createdAt = iso.date(from: row.created_at) ?? Date()
             item.updatedAt = iso.date(from: row.updated_at) ?? Date()
             if !row.pdf_file_name.isEmpty {
-                let destination = PDFStorageService.pdfsDirectory
-                    .appendingPathComponent(row.pdf_file_name)
                 Task {
-                    let downloaded = await media.downloadFile(
-                        storagePath: media.pdfPath(for: row.pdf_file_name),
-                        destinationURL: destination
-                    )
-                    if downloaded {
-                        NotificationCenter.default.post(
-                            name: .pdfFileDidBecomeAvailable,
-                            object: row.pdf_file_name
-                        )
-                    }
+                    await media.downloadBundleIfNeeded(.pdfFile(fileName: row.pdf_file_name))
                 }
             }
         }

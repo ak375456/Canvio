@@ -380,62 +380,38 @@ final class TableSyncService {
 
             switch operation.type {
             case .upsertTable:
-                if let row = try? JSONDecoder().decode(DBTableRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("table_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush table upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: DBTableRow.self,
+                    table: "table_elements",
+                    supabase: supabase,
+                    label: "table"
+                )
 
             case .deleteTable:
-                if let payload = try? JSONDecoder().decode(TableDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("table_elements")
-                            .update(TableDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush table delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "table_elements",
+                    supabase: supabase,
+                    label: "table"
+                )
 
             case .upsertTableCell:
-                if let row = try? JSONDecoder().decode(DBTableCellRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("table_cells")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush table cell upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: DBTableCellRow.self,
+                    table: "table_cells",
+                    supabase: supabase,
+                    label: "table cell"
+                )
 
             case .deleteTableCell:
-                if let payload = try? JSONDecoder().decode(CellDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("table_cells")
-                            .update(CellDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush table cell delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "table_cells",
+                    supabase: supabase,
+                    label: "table cell"
+                )
 
             default:
                 break
@@ -448,7 +424,6 @@ final class TableSyncService {
     // MARK: - Helpers
 
     private func makeTableRow(table: TableElementModel, userID: String) -> DBTableRow {
-        let now = iso.string(from: Date())
         return DBTableRow(
             id:                    table.id.uuidString,
             canvas_id:             table.canvasID.uuidString,
@@ -467,13 +442,12 @@ final class TableSyncService {
             show_row_headers:      table.showRowHeaders,
             group_id:              table.groupID?.uuidString,
             created_at:            iso.string(from: table.createdAt),
-            updated_at:            now,
+            updated_at:            iso.string(from: table.updatedAt),
             is_deleted:            false
         )
     }
 
     private func makeCellRow(cell: TableCellModel, userID: String) -> DBTableCellRow {
-        let now = iso.string(from: Date())
         return DBTableCellRow(
             id:                    cell.id.uuidString,
             table_id:              cell.tableID.uuidString,
@@ -491,7 +465,7 @@ final class TableSyncService {
             col_span:              cell.colSpan,
             row_span:              cell.rowSpan,
             created_at:            iso.string(from: cell.createdAt),
-            updated_at:            now,
+            updated_at:            iso.string(from: cell.updatedAt),
             is_deleted:            false
         )
     }

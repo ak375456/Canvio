@@ -185,36 +185,21 @@ final class SymbolSyncService {
 
             switch operation.type {
             case .upsertSymbol:
-                if let row = try? JSONDecoder().decode(SymbolRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("symbol_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush symbol upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: SymbolRow.self,
+                    table: "symbol_elements",
+                    supabase: supabase,
+                    label: "symbol"
+                )
 
             case .deleteSymbol:
-                if let payload = try? JSONDecoder().decode(SymbolDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("symbol_elements")
-                            .update(SymbolDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush symbol delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "symbol_elements",
+                    supabase: supabase,
+                    label: "symbol"
+                )
 
             default:
                 break
@@ -227,7 +212,6 @@ final class SymbolSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: SymbolElementModel, userID: String) -> SymbolRow {
-        let now = iso.string(from: Date())
         return SymbolRow(
             id:          element.id.uuidString,
             canvas_id:   element.canvasID.uuidString,
@@ -240,7 +224,7 @@ final class SymbolSyncService {
             z_index:     element.zIndex,
             group_id:    element.groupID?.uuidString,
             created_at:  iso.string(from: element.createdAt),
-            updated_at:  now,
+            updated_at:  iso.string(from: element.updatedAt),
             is_deleted:  false
         )
     }

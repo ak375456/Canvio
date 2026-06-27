@@ -203,36 +203,21 @@ final class StickyNoteSyncService {
 
             switch operation.type {
             case .upsertSticky:
-                if let row = try? JSONDecoder().decode(StickyNoteRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("sticky_notes")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush sticky upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: StickyNoteRow.self,
+                    table: "sticky_notes",
+                    supabase: supabase,
+                    label: "sticky"
+                )
 
             case .deleteSticky:
-                if let payload = try? JSONDecoder().decode(StickyDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("sticky_notes")
-                            .update(StickyDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush sticky delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "sticky_notes",
+                    supabase: supabase,
+                    label: "sticky"
+                )
 
             default:
                 break
@@ -245,7 +230,6 @@ final class StickyNoteSyncService {
     // MARK: - Helpers
 
     private func makeRow(note: StickyNoteModel, userID: String) -> StickyNoteRow {
-        let now = iso.string(from: Date())
         return StickyNoteRow(
             id:             note.id.uuidString,
             canvas_id:      note.canvasID.uuidString,
@@ -265,7 +249,7 @@ final class StickyNoteSyncService {
             z_index:        note.zIndex,
             group_id:       note.groupID?.uuidString,
             created_at:     iso.string(from: note.updatedAt),
-            updated_at:     now,
+            updated_at:     iso.string(from: note.updatedAt),
             is_deleted:     false
         )
     }

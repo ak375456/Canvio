@@ -65,7 +65,7 @@ final class AudioSyncService {
         guard let userID = AuthService.shared.syncUserID else { return }
         let row = makeRow(element: element, userID: userID)
 
-        Task { await media.uploadAudio(fileName: element.audioFileName) }
+        Task { await media.uploadBundle(.audio(fileName: element.audioFileName)) }
 
         guard network.isConnected else {
             if let data = try? JSONEncoder().encode(row) {
@@ -110,7 +110,7 @@ final class AudioSyncService {
                 .eq("id",      value: elementID)
                 .eq("user_id", value: userID)
                 .execute()
-            Task { await media.deleteAudio(fileName: element.audioFileName) }
+            Task { await media.deleteBundle(.audio(fileName: element.audioFileName)) }
         } catch {
             let payload = AudioDeletePayload(id: elementID, user_id: userID,
                                              updated_at: now, audio_file_name: element.audioFileName)
@@ -162,7 +162,7 @@ final class AudioSyncService {
                         local.groupID   = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.updatedAt = remoteUpdated
                     }
-                    Task { await media.downloadAudioIfNeeded(fileName: row.audio_file_name) }
+                    Task { await media.downloadBundleIfNeeded(.audio(fileName: row.audio_file_name)) }
                 } else {
                     let element = AudioElementModel(
                         canvasID: canvasID,
@@ -180,7 +180,7 @@ final class AudioSyncService {
                     element.createdAt = iso.date(from: row.created_at) ?? Date()
                     element.updatedAt = iso.date(from: row.updated_at) ?? Date()
                     context.insert(element)
-                    Task { await media.downloadAudioIfNeeded(fileName: row.audio_file_name) }
+                    Task { await media.downloadBundleIfNeeded(.audio(fileName: row.audio_file_name)) }
                 }
             }
 
@@ -202,31 +202,45 @@ final class AudioSyncService {
             switch operation.type {
             case .upsertAudio:
                 if let row = try? JSONDecoder().decode(AudioRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("audio_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        Task { await media.uploadAudio(fileName: row.audio_file_name) }
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "audio_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase
+                                .from("audio_elements")
+                                .upsert(row, onConflict: "id")
+                                .execute()
+                            Task { await media.uploadBundle(.audio(fileName: row.audio_file_name)) }
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush audio upsert failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush audio upsert failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
             case .deleteAudio:
                 if let payload = try? JSONDecoder().decode(AudioDeletePayload.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("audio_elements")
-                            .update(AudioDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        Task { await media.deleteAudio(fileName: payload.audio_file_name) }
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "audio_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase
+                                .from("audio_elements")
+                                .update(AudioDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
+                                .eq("id",      value: payload.id)
+                                .eq("user_id", value: payload.user_id)
+                                .execute()
+                            Task { await media.deleteBundle(.audio(fileName: payload.audio_file_name)) }
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush audio delete failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush audio delete failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
@@ -241,7 +255,6 @@ final class AudioSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: AudioElementModel, userID: String) -> AudioRow {
-        let now = iso.string(from: Date())
         return AudioRow(
             id:              element.id.uuidString,
             canvas_id:       element.canvasID.uuidString,
@@ -257,7 +270,7 @@ final class AudioSyncService {
             z_index:         element.zIndex,
             group_id:        element.groupID?.uuidString,
             created_at:      iso.string(from: element.createdAt),
-            updated_at:      now,
+            updated_at:      iso.string(from: element.updatedAt),
             is_deleted:      false
         )
     }

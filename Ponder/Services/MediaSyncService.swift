@@ -10,6 +10,22 @@
 import Foundation
 import Supabase
 
+enum MediaAssetBundle {
+    case image(fileName: String)
+    case pdfFile(fileName: String)
+    case pdf(pdfFileName: String, thumbnailFileName: String)
+    case audio(fileName: String)
+}
+
+private struct MediaAssetDescriptor {
+    let localURL: URL
+    let storagePath: String
+    let contentType: String
+    let availableNotification: Notification.Name?
+    let notificationObject: String?
+    let invalidateCache: (() -> Void)?
+}
+
 @MainActor
 final class MediaSyncService {
 
@@ -47,7 +63,142 @@ final class MediaSyncService {
         return "\(uid)/audio/\(fileName)"
     }
 
+    private func assets(for bundle: MediaAssetBundle) -> [MediaAssetDescriptor] {
+        switch bundle {
+        case .image(let fileName):
+            return [
+                MediaAssetDescriptor(
+                    localURL: ImageStorageService.url(for: fileName),
+                    storagePath: imagePath(for: fileName),
+                    contentType: ImageStorageService.contentType(for: fileName),
+                    availableNotification: .imageFileDidBecomeAvailable,
+                    notificationObject: fileName,
+                    invalidateCache: {
+                        ImageStorageService.invalidateCache(fileName: fileName)
+                    }
+                )
+            ]
+
+        case .pdfFile(let fileName):
+            return [
+                MediaAssetDescriptor(
+                    localURL: PDFStorageService.pdfsDirectory.appendingPathComponent(fileName),
+                    storagePath: pdfPath(for: fileName),
+                    contentType: "application/pdf",
+                    availableNotification: .pdfFileDidBecomeAvailable,
+                    notificationObject: fileName,
+                    invalidateCache: nil
+                )
+            ]
+
+        case .pdf(let pdfFileName, let thumbnailFileName):
+            return [
+                MediaAssetDescriptor(
+                    localURL: PDFStorageService.pdfsDirectory.appendingPathComponent(pdfFileName),
+                    storagePath: pdfPath(for: pdfFileName),
+                    contentType: "application/pdf",
+                    availableNotification: .pdfFileDidBecomeAvailable,
+                    notificationObject: pdfFileName,
+                    invalidateCache: nil
+                ),
+                MediaAssetDescriptor(
+                    localURL: PDFStorageService.thumbnailsDirectory.appendingPathComponent(thumbnailFileName),
+                    storagePath: pdfThumbPath(for: thumbnailFileName),
+                    contentType: "image/jpeg",
+                    availableNotification: nil,
+                    notificationObject: nil,
+                    invalidateCache: nil
+                )
+            ]
+
+        case .audio(let fileName):
+            let ext = (fileName as NSString).pathExtension.lowercased()
+            return [
+                MediaAssetDescriptor(
+                    localURL: AudioStorageService.url(for: fileName),
+                    storagePath: audioPath(for: fileName),
+                    contentType: ext == "mp3" ? "audio/mpeg" : "audio/mp4",
+                    availableNotification: nil,
+                    notificationObject: nil,
+                    invalidateCache: nil
+                )
+            ]
+        }
+    }
+
+    private func performWithRetry(
+        _ label: String,
+        maxAttempts: Int = 3,
+        operation: () async throws -> Void
+    ) async -> Bool {
+        var lastError: Error?
+        for attempt in 1...maxAttempts {
+            do {
+                try await operation()
+                return true
+            } catch {
+                lastError = error
+                if attempt < maxAttempts {
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 300_000_000)
+                }
+            }
+        }
+
+        if let lastError {
+            print("MediaSync failed [\(label)]: \(lastError.localizedDescription)")
+        }
+        return false
+    }
+
+    private func publishAvailability(for asset: MediaAssetDescriptor) {
+        asset.invalidateCache?()
+        if let notification = asset.availableNotification {
+            NotificationCenter.default.post(name: notification, object: asset.notificationObject)
+        }
+    }
+
+    // MARK: - Asset bundles
+
+    @discardableResult
+    func uploadBundle(_ bundle: MediaAssetBundle) async -> Bool {
+        var succeeded = true
+        for asset in assets(for: bundle) {
+            let uploaded = await uploadAsset(asset)
+            succeeded = succeeded && uploaded
+        }
+        return succeeded
+    }
+
+    @discardableResult
+    func downloadBundleIfNeeded(_ bundle: MediaAssetBundle) async -> Bool {
+        var succeeded = true
+        for asset in assets(for: bundle) {
+            let available = await downloadAssetIfNeeded(asset)
+            succeeded = succeeded && available
+        }
+        return succeeded
+    }
+
+    @discardableResult
+    func deleteBundle(_ bundle: MediaAssetBundle) async -> Bool {
+        var succeeded = true
+        for asset in assets(for: bundle) {
+            let deleted = await deleteAsset(asset)
+            succeeded = succeeded && deleted
+        }
+        return succeeded
+    }
+
     // MARK: - Upload helpers
+
+    @discardableResult
+    private func uploadAsset(_ asset: MediaAssetDescriptor) async -> Bool {
+        await uploadFile(
+            localURL: asset.localURL,
+            storagePath: asset.storagePath,
+            contentType: asset.contentType
+        )
+    }
 
     /// Upload a local file to Supabase Storage. Skips if not connected.
     @discardableResult
@@ -64,14 +215,10 @@ final class MediaSyncService {
             return false
         }
 
-        do {
+        return await performWithRetry("upload \(storagePath)") {
             try await supabase.storage
                 .from(bucket)
                 .upload(storagePath, data: data, options: FileOptions(contentType: contentType, upsert: true))
-            return true
-        } catch {
-            print("⚠️ MediaSync upload failed [\(storagePath)]: \(error.localizedDescription)")
-            return false
         }
     }
 
@@ -79,113 +226,57 @@ final class MediaSyncService {
     @discardableResult
     func uploadData(_ data: Data, storagePath: String, contentType: String) async -> Bool {
         guard network.isConnected else { return false }
-        do {
+        return await performWithRetry("upload \(storagePath)") {
             try await supabase.storage
                 .from(bucket)
                 .upload(storagePath, data: data, options: FileOptions(contentType: contentType, upsert: true))
-            return true
-        } catch {
-            print("⚠️ MediaSync upload failed [\(storagePath)]: \(error.localizedDescription)")
-            return false
         }
     }
 
     // MARK: - Download helpers
 
+    @discardableResult
+    private func downloadAssetIfNeeded(_ asset: MediaAssetDescriptor) async -> Bool {
+        let available = await downloadFile(
+            storagePath: asset.storagePath,
+            destinationURL: asset.localURL
+        )
+        if available {
+            publishAvailability(for: asset)
+        }
+        return available
+    }
+
     /// Download a file from Storage and save to a local URL.
     /// Returns true if successful, false if skipped or failed.
     @discardableResult
     func downloadFile(storagePath: String, destinationURL: URL) async -> Bool {
-        guard network.isConnected else { return false }
         // Skip if already exists locally — no redundant downloads
         if FileManager.default.fileExists(atPath: destinationURL.path) { return true }
-        do {
+        guard network.isConnected else { return false }
+        return await performWithRetry("download \(storagePath)") {
             let data = try await supabase.storage
                 .from(bucket)
                 .download(path: storagePath)
             try data.write(to: destinationURL)
-            return true
-        } catch {
-            print("⚠️ MediaSync download failed [\(storagePath)]: \(error.localizedDescription)")
-            return false
         }
     }
 
     // MARK: - Delete from storage
 
-    func deleteFile(storagePath: String) async {
-        guard network.isConnected else { return }
-        do {
+    @discardableResult
+    private func deleteAsset(_ asset: MediaAssetDescriptor) async -> Bool {
+        await deleteFile(storagePath: asset.storagePath)
+    }
+
+    @discardableResult
+    func deleteFile(storagePath: String) async -> Bool {
+        guard network.isConnected else { return false }
+        return await performWithRetry("delete \(storagePath)") {
             try await supabase.storage
                 .from(bucket)
                 .remove(paths: [storagePath])
-        } catch {
-            print("⚠️ MediaSync delete failed [\(storagePath)]: \(error.localizedDescription)")
         }
     }
 
-    // MARK: - Image convenience
-
-    @discardableResult
-    func uploadImage(fileName: String) async -> Bool {
-        let localURL = ImageStorageService.url(for: fileName)
-        return await uploadFile(localURL: localURL,
-                                storagePath: imagePath(for: fileName),
-                                contentType: ImageStorageService.contentType(for: fileName))
-    }
-
-    @discardableResult
-    func downloadImageIfNeeded(fileName: String) async -> Bool {
-        let destURL = ImageStorageService.url(for: fileName)
-        let didDownload = await downloadFile(storagePath: imagePath(for: fileName), destinationURL: destURL)
-        if didDownload {
-            ImageStorageService.invalidateCache(fileName: fileName)
-            NotificationCenter.default.post(name: .imageFileDidBecomeAvailable, object: fileName)
-        }
-        return didDownload
-    }
-
-    func deleteImage(fileName: String) async {
-        await deleteFile(storagePath: imagePath(for: fileName))
-    }
-
-    // MARK: - PDF convenience
-
-    func uploadPDF(pdfFileName: String, thumbnailFileName: String) async {
-        let pdfURL   = PDFStorageService.pdfsDirectory.appendingPathComponent(pdfFileName)
-        let thumbURL = PDFStorageService.thumbnailsDirectory.appendingPathComponent(thumbnailFileName)
-        await uploadFile(localURL: pdfURL,   storagePath: pdfPath(for: pdfFileName),       contentType: "application/pdf")
-        await uploadFile(localURL: thumbURL, storagePath: pdfThumbPath(for: thumbnailFileName), contentType: "image/jpeg")
-    }
-
-    func downloadPDFIfNeeded(pdfFileName: String, thumbnailFileName: String) async {
-        let pdfDest   = PDFStorageService.pdfsDirectory.appendingPathComponent(pdfFileName)
-        let thumbDest = PDFStorageService.thumbnailsDirectory.appendingPathComponent(thumbnailFileName)
-        await downloadFile(storagePath: pdfPath(for: pdfFileName),           destinationURL: pdfDest)
-        await downloadFile(storagePath: pdfThumbPath(for: thumbnailFileName), destinationURL: thumbDest)
-        NotificationCenter.default.post(name: .pdfFileDidBecomeAvailable, object: pdfFileName)
-    }
-
-    func deletePDF(pdfFileName: String, thumbnailFileName: String) async {
-        await deleteFile(storagePath: pdfPath(for: pdfFileName))
-        await deleteFile(storagePath: pdfThumbPath(for: thumbnailFileName))
-    }
-
-    // MARK: - Audio convenience
-
-    func uploadAudio(fileName: String) async {
-        let localURL = AudioStorageService.url(for: fileName)
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let contentType = ext == "mp3" ? "audio/mpeg" : "audio/mp4"
-        await uploadFile(localURL: localURL, storagePath: audioPath(for: fileName), contentType: contentType)
-    }
-
-    func downloadAudioIfNeeded(fileName: String) async {
-        let destURL = AudioStorageService.url(for: fileName)
-        await downloadFile(storagePath: audioPath(for: fileName), destinationURL: destURL)
-    }
-
-    func deleteAudio(fileName: String) async {
-        await deleteFile(storagePath: audioPath(for: fileName))
-    }
 }

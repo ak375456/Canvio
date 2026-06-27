@@ -213,35 +213,21 @@ final class TextSyncService {
 
             switch operation.type {
             case .upsertText:
-                if let row = try? JSONDecoder().decode(TextElementRow.self,
-                                                       from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("text_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush text upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: TextElementRow.self,
+                    table: "text_elements",
+                    supabase: supabase,
+                    label: "text"
+                )
 
             case .deleteText:
-                if let payload = try? JSONDecoder().decode(TextDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("text_elements")
-                            .update(TextDeleteUpdate(is_deleted: true,
-                                                     updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush text delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "text_elements",
+                    supabase: supabase,
+                    label: "text"
+                )
 
             default:
                 break
@@ -254,7 +240,6 @@ final class TextSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: TextElementModel, userID: String) -> TextElementRow {
-        let now = iso.string(from: Date())
         return TextElementRow(
             id:                element.id.uuidString,
             canvas_id:         element.canvasID.uuidString,
@@ -272,7 +257,7 @@ final class TextSyncService {
             z_index:           element.zIndex,
             group_id:          element.groupID?.uuidString,
             created_at:        iso.string(from: element.updatedAt),
-            updated_at:        now,
+            updated_at:        iso.string(from: element.updatedAt),
             is_deleted:        false,
             bg_color_name:     element.bgColorName,
             stroke_color_name: element.strokeColorName,

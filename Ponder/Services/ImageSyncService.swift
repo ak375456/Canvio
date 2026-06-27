@@ -71,7 +71,7 @@ final class ImageSyncService {
                 print("⚠️ Image upsert skipped missing local file: \(fileName)")
                 return
             }
-            await media.uploadImage(fileName: fileName)
+            await media.uploadBundle(.image(fileName: fileName))
         }
 
         guard network.isConnected else {
@@ -118,7 +118,7 @@ final class ImageSyncService {
                 .eq("user_id", value: userID)
                 .execute()
             // Delete file from Storage too
-            Task { await media.deleteImage(fileName: element.imageFileName) }
+            Task { await media.deleteBundle(.image(fileName: element.imageFileName)) }
         } catch {
             let payload = ImageDeletePayload(id: elementID, user_id: userID,
                                              updated_at: now, image_file_name: element.imageFileName)
@@ -174,7 +174,7 @@ final class ImageSyncService {
                         local.updatedAt    = remoteUpdated
                     }
                     // Always ensure file exists locally (lazy download)
-                    Task { await media.downloadImageIfNeeded(fileName: row.image_file_name) }
+                    Task { await media.downloadBundleIfNeeded(.image(fileName: row.image_file_name)) }
                 } else {
                     // New element from another device
                     let element = ImageElementModel(
@@ -193,7 +193,7 @@ final class ImageSyncService {
                     element.updatedAt    = iso.date(from: row.updated_at) ?? Date()
                     context.insert(element)
                     // Download file lazily
-                    Task { await media.downloadImageIfNeeded(fileName: row.image_file_name) }
+                    Task { await media.downloadBundleIfNeeded(.image(fileName: row.image_file_name)) }
                 }
             }
 
@@ -215,32 +215,46 @@ final class ImageSyncService {
             switch operation.type {
             case .upsertImage:
                 if let row = try? JSONDecoder().decode(ImageRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("image_elements")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        // Also retry file upload
-                        await media.uploadImage(fileName: row.image_file_name)
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "image_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase
+                                .from("image_elements")
+                                .upsert(row, onConflict: "id")
+                                .execute()
+                            // Also retry file upload
+                            await media.uploadBundle(.image(fileName: row.image_file_name))
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush image upsert failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush image upsert failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
             case .deleteImage:
                 if let payload = try? JSONDecoder().decode(ImageDeletePayload.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("image_elements")
-                            .update(ImageDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        Task { await media.deleteImage(fileName: payload.image_file_name) }
+                    switch await SyncStalenessGuard.writeDecision(supabase: supabase, table: "image_elements", payload: operation.payload) {
+                    case .write:
+                        do {
+                            try await supabase
+                                .from("image_elements")
+                                .update(ImageDeleteUpdate(is_deleted: true, updated_at: payload.updated_at))
+                                .eq("id",      value: payload.id)
+                                .eq("user_id", value: payload.user_id)
+                                .execute()
+                            Task { await media.deleteBundle(.image(fileName: payload.image_file_name)) }
+                            succeeded = true
+                        } catch {
+                            print("⚠️ Queue flush image delete failed: \(error.localizedDescription)")
+                        }
+                    case .stale:
                         succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush image delete failed: \(error.localizedDescription)")
+                    case .retry:
+                        break
                     }
                 }
 
@@ -255,7 +269,6 @@ final class ImageSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: ImageElementModel, userID: String) -> ImageRow {
-        let now = iso.string(from: Date())
         return ImageRow(
             id:               element.id.uuidString,
             canvas_id:        element.canvasID.uuidString,
@@ -271,7 +284,7 @@ final class ImageSyncService {
             z_index:          element.zIndex,
             group_id:         element.groupID?.uuidString,
             created_at:       iso.string(from: element.createdAt),
-            updated_at:       now,
+            updated_at:       iso.string(from: element.updatedAt),
             is_deleted:       false
         )
     }

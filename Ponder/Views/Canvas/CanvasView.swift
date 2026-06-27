@@ -93,6 +93,248 @@ private enum CanvasDrawingCaptureMode {
     case handwritingText
 }
 
+private enum CanvasDrawingToolMode: String, CaseIterable, Identifiable {
+    case sketchCard
+    case canvasInk
+    case handwritingText
+
+    var id: String { rawValue }
+
+    static func availableModes(handwritingToTextEnabled: Bool) -> [CanvasDrawingToolMode] {
+        #if os(iOS)
+        var modes: [CanvasDrawingToolMode] = [.sketchCard, .canvasInk]
+        if handwritingToTextEnabled {
+            modes.append(.handwritingText)
+        }
+        return modes
+        #else
+        return [.sketchCard]
+        #endif
+    }
+
+    var title: String {
+        switch self {
+        case .sketchCard: return "Drawing"
+        case .canvasInk: return "Draw"
+        case .handwritingText: return "Write"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .sketchCard: return "Place a movable sketch on the canvas"
+        case .canvasInk: return "Ink directly across the canvas"
+        case .handwritingText: return "Convert handwriting into editable text"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .sketchCard: return "pencil.and.scribble"
+        case .canvasInk: return "scribble.variable"
+        case .handwritingText: return "textformat.abc.dottedunderline"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .sketchCard: return .orange
+        case .canvasInk: return Color(red: 0.9, green: 0.5, blue: 0.1)
+        case .handwritingText: return .blue
+        }
+    }
+}
+
+private enum CanvasScannerOutputMode: String, CaseIterable, Identifiable {
+    case text
+    case pdf
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .text: return "Editable Text"
+        case .pdf: return "Scanned PDF"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .text: return "Extract readable text onto the canvas"
+        case .pdf: return "Place scanned pages as a PDF"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .text: return "doc.text.viewfinder"
+        case .pdf: return "doc.viewfinder"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .text: return .teal
+        case .pdf: return .red
+        }
+    }
+}
+
+private struct CanvasDrawingModePickerSheet: View {
+    let modes: [CanvasDrawingToolMode]
+    let onSelect: (CanvasDrawingToolMode) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            Text("Drawing")
+                .font(.headline.weight(.bold))
+                .padding(.bottom, 18)
+
+            VStack(spacing: 10) {
+                ForEach(modes) { mode in
+                    modeButton(
+                        icon: mode.icon,
+                        color: mode.tint,
+                        title: mode.title,
+                        subtitle: mode.subtitle
+                    ) {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            onSelect(mode)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private func modeButton(
+        icon: String,
+        color: Color,
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(color.opacity(0.12))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: icon)
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct CanvasScannerOutputPickerSheet: View {
+    let onSelect: (CanvasScannerOutputMode) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 36, height: 4)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            Text("Scanner")
+                .font(.headline.weight(.bold))
+                .padding(.bottom, 18)
+
+            VStack(spacing: 10) {
+                ForEach(CanvasScannerOutputMode.allCases) { mode in
+                    modeButton(
+                        icon: mode.icon,
+                        color: mode.tint,
+                        title: mode.title,
+                        subtitle: mode.subtitle
+                    ) {
+                        dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            onSelect(mode)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
+        }
+    }
+
+    private func modeButton(
+        icon: String,
+        color: Color,
+        title: String,
+        subtitle: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(color.opacity(0.12))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: icon)
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(color)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct CanvasExportSheet<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     private let content: Content
@@ -146,6 +388,60 @@ struct CanvasView: View {
     var onDelete: () -> Void
     var onRename: (String) -> Void
 
+    @Query private var allCanvasPages: [CanvasPageModel]
+    @State private var selectedPageID: UUID?
+
+    init(canvas: CanvasModel, onDelete: @escaping () -> Void, onRename: @escaping (String) -> Void) {
+        self.canvas = canvas
+        self.onDelete = onDelete
+        self.onRename = onRename
+
+        let canvasID = canvas.id
+        self._allCanvasPages = Query(
+            filter: #Predicate<CanvasPageModel> { $0.canvasID == canvasID }
+        )
+    }
+
+    var body: some View {
+        CanvasPageContentView(
+            canvas: canvas,
+            contentCanvasID: activeContentCanvasID,
+            canvasPages: canvasPages,
+            selectedPageID: $selectedPageID,
+            onDelete: onDelete,
+            onRename: onRename
+        )
+        .id(activeContentCanvasID)
+    }
+
+    private var canvasPages: [CanvasPageModel] {
+        allCanvasPages.sorted {
+            if $0.orderIndex == $1.orderIndex { return $0.createdAt < $1.createdAt }
+            return $0.orderIndex < $1.orderIndex
+        }
+    }
+
+    private var activePage: CanvasPageModel? {
+        if let selectedPageID,
+           let page = canvasPages.first(where: { $0.id == selectedPageID }) {
+            return page
+        }
+        return canvasPages.first
+    }
+
+    private var activeContentCanvasID: UUID {
+        activePage?.resolvedContentCanvasID ?? canvas.id
+    }
+}
+
+private struct CanvasPageContentView: View {
+    let canvas: CanvasModel
+    let contentCanvasID: UUID
+    let canvasPages: [CanvasPageModel]
+    @Binding var selectedPageID: UUID?
+    var onDelete: () -> Void
+    var onRename: (String) -> Void
+
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var vm = CanvasViewModel()
     @ObservedObject private var pro = ProManager.shared
@@ -170,7 +466,6 @@ struct CanvasView: View {
     @Query private var allConnectors: [ConnectorModel]
     @Query private var allSymbols: [SymbolElementModel]
     @Query private var allElementGroups: [CanvasElementGroupModel]
-    @Query private var allCanvasPages: [CanvasPageModel]
 
     @State private var showDeleteAlert = false
     @State private var showRenameAlert = false
@@ -186,7 +481,6 @@ struct CanvasView: View {
     @State private var csvExportFilename = "table"
     @State private var stackPicker: CanvasStackPickerState?
     @State private var newName: String = ""
-    @State private var selectedPageID: UUID?
     @State private var pendingProPageAction: PendingProPageAction?
     @State private var pageForRename: CanvasPageModel?
     @State private var pageRenameText = ""
@@ -213,20 +507,31 @@ struct CanvasView: View {
     @State private var isLassoModeActive = false
     @State private var lassoPoints: [CGPoint] = []
     @State private var lassoFeedbackText: String?
-    @State private var isProcessingOCRScan = false
-    @State private var isProcessingDocumentScan = false
-    @State private var ocrScanAlertMessage: String?
+    @State private var showDrawingModePicker = false
+    @State private var pendingDrawingToolLocation: CGPoint?
+    @State private var pendingScannerLocation: CGPoint?
+    @State private var pendingScannerOutputMode: CanvasScannerOutputMode?
+    @State private var isProcessingScan = false
+    @State private var scannerAlertMessage: String?
     #if os(iOS)
-    @State private var showOCRSourcePicker = false
-    @State private var showOCRImagePicker = false
-    @State private var selectedOCRPhotoItem: PhotosPickerItem?
+    @State private var showScannerOutputPicker = false
+    @State private var showScannerSourcePicker = false
+    @State private var showScannerImagePicker = false
+    @State private var selectedScannerPhotoItem: PhotosPickerItem?
     @State private var keyboardAvoidanceOffset: CGFloat = 0
     #endif
 
     @Environment(\.dismiss) private var dismiss
 
     private var activeContentCanvasID: UUID {
-        activePage?.resolvedContentCanvasID ?? canvas.id
+        contentCanvasID
+    }
+
+    private var drawingModePickerHeight: CGFloat {
+        let modes = CanvasDrawingToolMode.availableModes(
+            handwritingToTextEnabled: settings.handwritingToTextEnabled
+        )
+        return CGFloat(118 + modes.count * 68)
     }
 
     private var textElements: [TextElementModel]   { allTextElements.filter { $0.canvasID == activeContentCanvasID } }
@@ -255,15 +560,6 @@ struct CanvasView: View {
     private var elementGroups: [CanvasElementGroupModel] {
         allElementGroups.filter { $0.canvasID == activeContentCanvasID }
     }
-    private var canvasPages: [CanvasPageModel] {
-        allCanvasPages
-            .filter { $0.canvasID == canvas.id }
-            .sorted {
-                if $0.orderIndex == $1.orderIndex { return $0.createdAt < $1.createdAt }
-                return $0.orderIndex < $1.orderIndex
-            }
-    }
-
     private var activePage: CanvasPageModel? {
         if let selectedPageID,
            let page = canvasPages.first(where: { $0.id == selectedPageID }) {
@@ -288,21 +584,25 @@ struct CanvasView: View {
         canvas.isInfinite ? .zero : canvasNavigationBoundary
     }
 
+    private var elementCollection: CanvasElementCollection {
+        CanvasElementCollection(
+            textElements: textElements,
+            stickyNotes: stickyNotes,
+            todoLists: todoLists,
+            shapes: shapes,
+            images: images,
+            pdfs: pdfs,
+            pdfPages: pdfPages,
+            tables: tables,
+            audioElements: audioElements,
+            youtubeElements: youtubeElements,
+            drawings: drawings,
+            symbols: symbols
+        )
+    }
+
     private var allLayerableElements: [any LayerableElement] {
-        var arr: [any LayerableElement] = []
-        arr += textElements    as [any LayerableElement]
-        arr += stickyNotes     as [any LayerableElement]
-        arr += todoLists       as [any LayerableElement]
-        arr += shapes          as [any LayerableElement]
-        arr += images          as [any LayerableElement]
-        arr += pdfs            as [any LayerableElement]
-        arr += pdfPages        as [any LayerableElement]
-        arr += tables          as [any LayerableElement]
-        arr += audioElements   as [any LayerableElement]
-        arr += youtubeElements as [any LayerableElement]
-        arr += drawings        as [any LayerableElement]
-        arr += symbols         as [any LayerableElement]
-        return arr
+        elementCollection.layerableElements
     }
 
     private var lockedCanvasTools: Set<CanvasTool> {
@@ -400,41 +700,7 @@ struct CanvasView: View {
     }
 
     private func elementBounds(for element: any LayerableElement) -> ElementBounds {
-        if let text = element as? TextElementModel {
-            let lines = text.text.split(separator: "\n", omittingEmptySubsequences: false)
-            let longestLine = lines.map(\.count).max() ?? 4
-            let width = max(
-                160,
-                min(20_000, Double(longestLine) * Double(text.fontSize) * 0.62 + 32)
-            )
-            let height = max(40, Double(max(lines.count, 1)) * Double(text.fontSize) * 1.35 + 24)
-            return ElementBounds(id: text.id, cx: text.x, cy: text.y, width: width, height: height)
-        } else if let sticky = element as? StickyNoteModel {
-            return ElementBounds(id: sticky.id, cx: sticky.x, cy: sticky.y, width: sticky.width, height: sticky.height)
-        } else if let todo = element as? TodoListModel {
-            return ElementBounds(id: todo.id, cx: todo.x, cy: todo.y, width: todo.width, height: todo.height)
-        } else if let shape = element as? ShapeElementModel {
-            return ElementBounds(id: shape.id, cx: shape.x, cy: shape.y, width: shape.width, height: shape.height)
-        } else if let image = element as? ImageElementModel {
-            return ElementBounds(id: image.id, cx: image.x, cy: image.y, width: image.width, height: image.height)
-        } else if let pdf = element as? PDFElementModel {
-            return ElementBounds(id: pdf.id, cx: pdf.x, cy: pdf.y, width: pdf.width, height: pdf.height)
-        } else if let page = element as? PDFPageElementModel {
-            return ElementBounds(id: page.id, cx: page.x, cy: page.y, width: page.width, height: page.height)
-        } else if let table = element as? TableElementModel {
-            return ElementBounds(id: table.id, cx: table.x, cy: table.y, width: table.totalWidth, height: table.totalHeight)
-        } else if let audio = element as? AudioElementModel {
-            return ElementBounds(id: audio.id, cx: audio.x, cy: audio.y, width: audio.width, height: audio.height)
-        } else if let youtube = element as? YouTubeElementModel {
-            return ElementBounds(id: youtube.id, cx: youtube.x, cy: youtube.y, width: youtube.width, height: youtube.height)
-        } else if let drawing = element as? DrawingElementModel {
-            return ElementBounds(id: drawing.id, cx: drawing.x, cy: drawing.y, width: drawing.width, height: drawing.height)
-        } else if let symbol = element as? SymbolElementModel {
-            let size = symbol.fontSize + 24
-            return ElementBounds(id: symbol.id, cx: symbol.x, cy: symbol.y, width: size, height: size)
-        }
-
-        return ElementBounds(id: element.id, cx: 0, cy: 0, width: 80, height: 80)
+        elementCollection.bounds(for: element)
     }
 
     private var activeSelectedElementID: UUID? {
@@ -495,11 +761,73 @@ struct CanvasView: View {
         selectedGroupForUngroup == nil ? "square.stack.3d.up.fill" : "square.stack.3d.down.right"
     }
 
-    init(canvas: CanvasModel, onDelete: @escaping () -> Void, onRename: @escaping (String) -> Void) {
-        self.canvas   = canvas
+    init(
+        canvas: CanvasModel,
+        contentCanvasID: UUID,
+        canvasPages: [CanvasPageModel],
+        selectedPageID: Binding<UUID?>,
+        onDelete: @escaping () -> Void,
+        onRename: @escaping (String) -> Void
+    ) {
+        self.canvas = canvas
+        self.contentCanvasID = contentCanvasID
+        self.canvasPages = canvasPages
+        self._selectedPageID = selectedPageID
         self.onDelete = onDelete
         self.onRename = onRename
         self._selection = ObservedObject(wrappedValue: SelectionViewModel())
+
+        let activeCanvasID = contentCanvasID
+        self._allTextElements = Query(
+            filter: #Predicate<TextElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allStickyNotes = Query(
+            filter: #Predicate<StickyNoteModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allTodoLists = Query(
+            filter: #Predicate<TodoListModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allTodoTasks = Query()
+        self._allShapes = Query(
+            filter: #Predicate<ShapeElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allImages = Query(
+            filter: #Predicate<ImageElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allPDFs = Query(
+            filter: #Predicate<PDFElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allPDFPages = Query(
+            filter: #Predicate<PDFPageElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allPDFHighlights = Query(
+            filter: #Predicate<PDFHighlightModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allPDFInkLayers = Query(
+            filter: #Predicate<PDFInkLayerModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allTables = Query(
+            filter: #Predicate<TableElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allTableCells = Query()
+        self._allAudio = Query(
+            filter: #Predicate<AudioElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allYouTube = Query(
+            filter: #Predicate<YouTubeElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allDrawings = Query(
+            filter: #Predicate<DrawingElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allConnectors = Query(
+            filter: #Predicate<ConnectorModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allSymbols = Query(
+            filter: #Predicate<SymbolElementModel> { $0.canvasID == activeCanvasID }
+        )
+        self._allElementGroups = Query(
+            filter: #Predicate<CanvasElementGroupModel> { $0.canvasID == activeCanvasID }
+        )
     }
 
     var body: some View {
@@ -631,7 +959,7 @@ struct CanvasView: View {
                     stackPickerOverlay(picker)
                 }
 
-                if isProcessingOCRScan || isProcessingDocumentScan {
+                if isProcessingScan {
                     processingOverlay
                 }
 
@@ -887,11 +1215,31 @@ struct CanvasView: View {
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(24)
             }
+            .sheet(isPresented: $showDrawingModePicker) {
+                CanvasDrawingModePickerSheet(
+                    modes: CanvasDrawingToolMode.availableModes(
+                        handwritingToTextEnabled: settings.handwritingToTextEnabled
+                    )
+                ) { mode in
+                    handleDrawingToolMode(mode, viewportSize: geo.size)
+                }
+                .presentationDetents([.height(drawingModePickerHeight)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
             #if os(iOS)
-            .sheet(isPresented: $showOCRSourcePicker) {
-                OCRSourcePickerSheet(
-                    onPhotos: { showOCRImagePicker = true },
-                    onCamera: { beginOCRCameraScan() }
+            .sheet(isPresented: $showScannerOutputPicker) {
+                CanvasScannerOutputPickerSheet { mode in
+                    beginScannerOutput(mode)
+                }
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+            }
+            .sheet(isPresented: $showScannerSourcePicker) {
+                ScanSourcePickerSheet(
+                    onPhotos: { showScannerImagePicker = true },
+                    onCamera: { beginScannerCameraScan() }
                 )
                 .presentationDetents([.height(300)])
                 .presentationDragIndicator(.visible)
@@ -917,38 +1265,20 @@ struct CanvasView: View {
                 }
                 .ignoresSafeArea()
             }
-            .fullScreenCover(isPresented: $vm.showOCRScanner) {
+            .fullScreenCover(isPresented: $vm.showScanner) {
                 OCRDocumentScannerView(
                     onComplete: { images in
-                        vm.showOCRScanner = false
-                        createOCRTextFromScan(images: images, geo: geo)
+                        vm.showScanner = false
+                        createSelectedScannerOutput(from: images, viewportSize: geo.size)
                     },
                     onCancel: {
-                        vm.showOCRScanner = false
-                        vm.pendingOCRLocation = nil
+                        vm.showScanner = false
+                        clearScannerFlow()
                     },
                     onError: { _ in
-                        vm.showOCRScanner = false
-                        vm.pendingOCRLocation = nil
-                        ocrScanAlertMessage = "Could not scan this document."
-                    }
-                )
-                .ignoresSafeArea()
-            }
-            .fullScreenCover(isPresented: $vm.showDocumentScanner) {
-                OCRDocumentScannerView(
-                    onComplete: { images in
-                        vm.showDocumentScanner = false
-                        createDocumentFromScan(images: images, geo: geo)
-                    },
-                    onCancel: {
-                        vm.showDocumentScanner = false
-                        vm.pendingDocumentScanLocation = nil
-                    },
-                    onError: { _ in
-                        vm.showDocumentScanner = false
-                        vm.pendingDocumentScanLocation = nil
-                        ocrScanAlertMessage = "Could not scan this document."
+                        vm.showScanner = false
+                        clearScannerFlow()
+                        scannerAlertMessage = "Could not scan this document."
                     }
                 )
                 .ignoresSafeArea()
@@ -957,21 +1287,21 @@ struct CanvasView: View {
             .photosPicker(isPresented: $vm.showImagePicker, selection: $vm.selectedPhotoItem, matching: .images)
             #if os(iOS)
             .photosPicker(
-                isPresented: $showOCRImagePicker,
-                selection: $selectedOCRPhotoItem,
+                isPresented: $showScannerImagePicker,
+                selection: $selectedScannerPhotoItem,
                 matching: .images
             )
-            .onChange(of: selectedOCRPhotoItem) { _, newItem in
+            .onChange(of: selectedScannerPhotoItem) { _, newItem in
                 guard let item = newItem else { return }
                 Task {
-                    defer { selectedOCRPhotoItem = nil }
+                    defer { selectedScannerPhotoItem = nil }
                     guard let data = try? await item.loadTransferable(type: Data.self),
                           let image = UIImage(data: data) else {
-                        vm.pendingOCRLocation = nil
-                        ocrScanAlertMessage = "Could not open this image."
+                        clearScannerFlow()
+                        scannerAlertMessage = "Could not open this image."
                         return
                     }
-                    createOCRText(from: [image], viewportSize: geo.size)
+                    createSelectedScannerOutput(from: [image], viewportSize: geo.size)
                 }
             }
             #endif
@@ -1272,10 +1602,10 @@ struct CanvasView: View {
             } message: {
                 Text("This page and its content will be deleted.")
             }
-            .alert("OCR Scan", isPresented: ocrScanAlertBinding) {
-                Button("OK", role: .cancel) { ocrScanAlertMessage = nil }
+            .alert("Scanner", isPresented: scannerAlertBinding) {
+                Button("OK", role: .cancel) { scannerAlertMessage = nil }
             } message: {
-                Text(ocrScanAlertMessage ?? "")
+                Text(scannerAlertMessage ?? "")
             }
     }
 
@@ -1297,11 +1627,11 @@ struct CanvasView: View {
         )
     }
 
-    private var ocrScanAlertBinding: Binding<Bool> {
+    private var scannerAlertBinding: Binding<Bool> {
         Binding(
-            get: { ocrScanAlertMessage != nil },
+            get: { scannerAlertMessage != nil },
             set: { isPresented in
-                if !isPresented { ocrScanAlertMessage = nil }
+                if !isPresented { scannerAlertMessage = nil }
             }
         )
     }
@@ -1533,26 +1863,26 @@ struct CanvasView: View {
     }
 
     private func deletePageContent(for contentCanvasID: UUID) {
-        let groups = allElementGroups.filter { $0.canvasID == contentCanvasID }
-        let texts = allTextElements.filter { $0.canvasID == contentCanvasID }
-        let stickies = allStickyNotes.filter { $0.canvasID == contentCanvasID }
-        let todos = allTodoLists.filter { $0.canvasID == contentCanvasID }
-        let todoIDs = Set(todos.map(\.id))
-        let tasks = allTodoTasks.filter { todoIDs.contains($0.listID) }
-        let shapes = allShapes.filter { $0.canvasID == contentCanvasID }
-        let images = allImages.filter { $0.canvasID == contentCanvasID }
-        let pdfs = allPDFs.filter { $0.canvasID == contentCanvasID }
-        let pdfPages = allPDFPages.filter { $0.canvasID == contentCanvasID }
-        let pdfHighlights = allPDFHighlights.filter { $0.canvasID == contentCanvasID }
-        let pdfInkLayers = allPDFInkLayers.filter { $0.canvasID == contentCanvasID }
-        let tables = allTables.filter { $0.canvasID == contentCanvasID }
-        let tableIDs = Set(tables.map(\.id))
-        let cells = allTableCells.filter { tableIDs.contains($0.tableID) }
-        let audio = allAudio.filter { $0.canvasID == contentCanvasID }
-        let youtube = allYouTube.filter { $0.canvasID == contentCanvasID }
-        let drawings = allDrawings.filter { $0.canvasID == contentCanvasID }
-        let connectors = allConnectors.filter { $0.canvasID == contentCanvasID }
-        let symbols = allSymbols.filter { $0.canvasID == contentCanvasID }
+        let groups = fetchElementGroups(canvasID: contentCanvasID)
+        let texts = fetchTextElements(canvasID: contentCanvasID)
+        let stickies = fetchStickyNotes(canvasID: contentCanvasID)
+        let todos = fetchTodoLists(canvasID: contentCanvasID)
+        let todoIDs = todos.map(\.id)
+        let tasks = fetchTodoTasks(listIDs: todoIDs)
+        let shapes = fetchShapes(canvasID: contentCanvasID)
+        let images = fetchImages(canvasID: contentCanvasID)
+        let pdfs = fetchPDFs(canvasID: contentCanvasID)
+        let pdfPages = fetchPDFPages(canvasID: contentCanvasID)
+        let pdfHighlights = fetchPDFHighlights(canvasID: contentCanvasID)
+        let pdfInkLayers = fetchPDFInkLayers(canvasID: contentCanvasID)
+        let tables = fetchTables(canvasID: contentCanvasID)
+        let tableIDs = tables.map(\.id)
+        let cells = fetchTableCells(tableIDs: tableIDs)
+        let audio = fetchAudio(canvasID: contentCanvasID)
+        let youtube = fetchYouTube(canvasID: contentCanvasID)
+        let drawings = fetchDrawings(canvasID: contentCanvasID)
+        let connectors = fetchConnectors(canvasID: contentCanvasID)
+        let symbols = fetchSymbols(canvasID: contentCanvasID)
 
         Task {
             for connector in connectors { await ConnectorSyncService.shared.delete(connector) }
@@ -1815,6 +2145,116 @@ struct CanvasView: View {
                 style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round, dash: [8, 5])
             )
         }
+    }
+
+    private func fetchElementGroups(canvasID: UUID) -> [CanvasElementGroupModel] {
+        (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchTextElements(canvasID: UUID) -> [TextElementModel] {
+        (try? context.fetch(FetchDescriptor<TextElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchStickyNotes(canvasID: UUID) -> [StickyNoteModel] {
+        (try? context.fetch(FetchDescriptor<StickyNoteModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchTodoLists(canvasID: UUID) -> [TodoListModel] {
+        (try? context.fetch(FetchDescriptor<TodoListModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchTodoTasks(listIDs: [UUID]) -> [TodoTaskModel] {
+        guard !listIDs.isEmpty else { return [] }
+        return (try? context.fetch(FetchDescriptor<TodoTaskModel>(
+            predicate: #Predicate { listIDs.contains($0.listID) }
+        ))) ?? []
+    }
+
+    private func fetchShapes(canvasID: UUID) -> [ShapeElementModel] {
+        (try? context.fetch(FetchDescriptor<ShapeElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchImages(canvasID: UUID) -> [ImageElementModel] {
+        (try? context.fetch(FetchDescriptor<ImageElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchPDFs(canvasID: UUID) -> [PDFElementModel] {
+        (try? context.fetch(FetchDescriptor<PDFElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchPDFPages(canvasID: UUID) -> [PDFPageElementModel] {
+        (try? context.fetch(FetchDescriptor<PDFPageElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchPDFHighlights(canvasID: UUID) -> [PDFHighlightModel] {
+        (try? context.fetch(FetchDescriptor<PDFHighlightModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchPDFInkLayers(canvasID: UUID) -> [PDFInkLayerModel] {
+        (try? context.fetch(FetchDescriptor<PDFInkLayerModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchTables(canvasID: UUID) -> [TableElementModel] {
+        (try? context.fetch(FetchDescriptor<TableElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchTableCells(tableIDs: [UUID]) -> [TableCellModel] {
+        guard !tableIDs.isEmpty else { return [] }
+        return (try? context.fetch(FetchDescriptor<TableCellModel>(
+            predicate: #Predicate { tableIDs.contains($0.tableID) }
+        ))) ?? []
+    }
+
+    private func fetchAudio(canvasID: UUID) -> [AudioElementModel] {
+        (try? context.fetch(FetchDescriptor<AudioElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchYouTube(canvasID: UUID) -> [YouTubeElementModel] {
+        (try? context.fetch(FetchDescriptor<YouTubeElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchDrawings(canvasID: UUID) -> [DrawingElementModel] {
+        (try? context.fetch(FetchDescriptor<DrawingElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchConnectors(canvasID: UUID) -> [ConnectorModel] {
+        (try? context.fetch(FetchDescriptor<ConnectorModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
+    }
+
+    private func fetchSymbols(canvasID: UUID) -> [SymbolElementModel] {
+        (try? context.fetch(FetchDescriptor<SymbolElementModel>(
+            predicate: #Predicate { $0.canvasID == canvasID }
+        ))) ?? []
     }
 
     private func startLassoSelection() {
@@ -2243,7 +2683,7 @@ struct CanvasView: View {
     }
 
     private var processingStatusText: String {
-        isProcessingOCRScan ? "Extracting text..." : "Preparing scan..."
+        pendingScannerOutputMode == .pdf ? "Preparing scan..." : "Extracting text..."
     }
 
     @ViewBuilder
@@ -2436,79 +2876,24 @@ struct CanvasView: View {
             y: (screenPoint.y - vm.offset.height) / vm.scale
         )
         let hitSlop = max(2, 8 / max(vm.scale, 0.01))
-        var items: [CanvasStackPickerItem] = []
+        let collection = elementCollection
 
-        appendStackItems((try? context.fetch(FetchDescriptor<TextElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: 160, height: 40)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<StickyNoteModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<TodoListModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<ShapeElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<ImageElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<TableElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.totalWidth, height: $0.totalHeight)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<AudioElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<YouTubeElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<DrawingElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.width, height: $0.height)
-        }
-        appendStackItems((try? context.fetch(FetchDescriptor<SymbolElementModel>())) ?? [],
-                         canvasPoint: canvasPoint, hitSlop: hitSlop, into: &items) {
-            ElementBounds(id: $0.id, cx: $0.x, cy: $0.y, width: $0.fontSize, height: $0.fontSize)
-        }
+        return collection.layerableElements.compactMap { element in
+            guard collection.bounds(for: element).contains(canvasPoint: canvasPoint, hitSlop: hitSlop) else {
+                return nil
+            }
 
-        return items.sorted {
-            if $0.zIndex == $1.zIndex { return $0.title < $1.title }
-            return $0.zIndex > $1.zIndex
-        }
-    }
-
-    private func appendStackItems<Element: LayerableElement>(
-        _ elements: [Element],
-        canvasPoint: CGPoint,
-        hitSlop: CGFloat,
-        into items: inout [CanvasStackPickerItem],
-        bounds: (Element) -> ElementBounds
-    ) {
-        for element in elements where element.canvasID == activeContentCanvasID {
-            guard bounds(element).contains(canvasPoint: canvasPoint, hitSlop: hitSlop) else { continue }
-            items.append(CanvasStackPickerItem(
+            return CanvasStackPickerItem(
                 id: element.id,
                 title: element.layerTitle,
                 icon: element.layerIcon,
                 tint: element.layerTint,
                 zIndex: element.zIndex
-            ))
+            )
+        }
+        .sorted {
+            if $0.zIndex == $1.zIndex { return $0.title < $1.title }
+            return $0.zIndex > $1.zIndex
         }
     }
 
@@ -2906,31 +3291,7 @@ struct CanvasView: View {
     }
 
     private func syncElement(_ element: any LayerableElement) async {
-        if let element = element as? TextElementModel {
-            await TextSyncService.shared.upsert(element)
-        } else if let element = element as? StickyNoteModel {
-            await StickyNoteSyncService.shared.upsert(element)
-        } else if let element = element as? TodoListModel {
-            await TodoSyncService.shared.upsertList(element)
-        } else if let element = element as? ShapeElementModel {
-            await ShapeSyncService.shared.upsert(element)
-        } else if let element = element as? ImageElementModel {
-            await ImageSyncService.shared.upsert(element)
-        } else if let element = element as? PDFElementModel {
-            await PDFSyncService.shared.upsert(element)
-        } else if let element = element as? PDFPageElementModel {
-            await PDFWorkspaceSyncService.shared.upsert(element)
-        } else if let element = element as? TableElementModel {
-            await TableSyncService.shared.upsertTable(element)
-        } else if let element = element as? AudioElementModel {
-            await AudioSyncService.shared.upsert(element)
-        } else if let element = element as? YouTubeElementModel {
-            await YouTubeSyncService.shared.upsert(element)
-        } else if let element = element as? DrawingElementModel {
-            await DrawingSyncService.shared.upsert(element)
-        } else if let element = element as? SymbolElementModel {
-            await SymbolSyncService.shared.upsert(element)
-        }
+        await CanvasElementSyncRouter.upsert(element)
     }
 
     // MARK: - Gestures
@@ -3228,8 +3589,8 @@ struct CanvasView: View {
 
         let padding: CGFloat = 24
         let recognitionBounds = strokeBounds.insetBy(dx: -padding, dy: -padding)
-        isProcessingOCRScan = true
-        defer { isProcessingOCRScan = false }
+        isProcessingScan = true
+        defer { isProcessingScan = false }
 
         guard let result = recognizeHandwritingText(
             in: pkDrawing,
@@ -3821,20 +4182,16 @@ struct CanvasView: View {
                 onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onScan:         { openScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onLasso:        { startLassoSelection() },
-                onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
-                onDrawOnCanvas: { startCanvasDrawing() },
-                onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
+                onDrawingTool:  { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onConnect:      { toggleConnectMode() },
                 isConnectModeActive: connectActive,
-                showsWriteTextTool: settings.handwritingToTextEnabled,
                 lockedTools: lockedCanvasTools
             )
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -3848,20 +4205,16 @@ struct CanvasView: View {
                     onAddTemplate:  { openTemplatePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddShape:     { openShapePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddImage:     { openImagePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanOCR:      { openOCRScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
-                    onScanDocument: { openDocumentScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onScan:         { openScanner(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddPDF:       { openPDFPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddTable:     { openTableSizePicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onLasso:        { startLassoSelection() },
-                    onAddDrawing:   { addDrawingAtCenter(viewportSize: geo.size) },
-                    onDrawOnCanvas: { startCanvasDrawing() },
-                    onWriteTextOnCanvas: { startCanvasDrawing(mode: .handwritingText) },
+                    onDrawingTool:  { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
-                    showsWriteTextTool: settings.handwritingToTextEnabled,
                     lockedTools: lockedCanvasTools
                 )
                 .padding(.horizontal, 16)
@@ -3972,20 +4325,34 @@ struct CanvasView: View {
         }
 
         dismissEverything()
-        if      textElements.contains(where:   { $0.id == id }) { vm.textVM.editingID = id }
-        else if stickyNotes.contains(where:    { $0.id == id }) { vm.stickyVM.editingID = id }
-        else if todoLists.contains(where:      { $0.id == id }) { vm.todoVM.editingID = id }
-        else if shapes.contains(where:         { $0.id == id }) { vm.shapeVM.editingID = id }
-        else if images.contains(where:         { $0.id == id }) { vm.imageVM.editingID = id }
-        else if pdfs.contains(where:           { $0.id == id }) { vm.pdfVM.editingID = id }
-        else if pdfPages.contains(where:        { $0.id == id }) { vm.pdfPageVM.editingID = id }
-        else if tables.contains(where:         { $0.id == id }) { vm.tableVM.selectTable(id: id) }
-        else if audioElements.contains(where:  { $0.id == id }) { vm.audioVM.editingID = id }
-        else if youtubeElements.contains(where:{ $0.id == id }) { vm.youtubeVM.editingID = id }
-        else if drawings.contains(where:       { $0.id == id }) {
+        switch elementCollection.kind(forID: id) {
+        case .text:
+            vm.textVM.editingID = id
+        case .stickyNote:
+            vm.stickyVM.editingID = id
+        case .todoList:
+            vm.todoVM.editingID = id
+        case .shape:
+            vm.shapeVM.editingID = id
+        case .image:
+            vm.imageVM.editingID = id
+        case .pdf:
+            vm.pdfVM.editingID = id
+        case .pdfPage:
+            vm.pdfPageVM.editingID = id
+        case .table:
+            vm.tableVM.selectTable(id: id)
+        case .audio:
+            vm.audioVM.editingID = id
+        case .youtube:
+            vm.youtubeVM.editingID = id
+        case .drawing:
             vm.drawingVM.editingID = id; vm.drawingVM.isDrawingModeActive = false
+        case .symbol:
+            vm.symbolVM.editingID = id
+        case nil:
+            break
         }
-        else if symbols.contains(where:        { $0.id == id }) { vm.symbolVM.editingID = id }  // ← NEW
     }
 
     private func addStickyAtCenter(viewportSize: CGSize) {
@@ -4004,13 +4371,37 @@ struct CanvasView: View {
                           zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                           context: context, undoManager: vm.undoManager)
     }
-    private func addDrawingAtCenter(viewportSize: CGSize) {
+    private func addDrawing(at screenPoint: CGPoint) {
         dismissEverything()
         vm.drawingVM.addDrawing(canvasID: activeContentCanvasID,
-                                center: CGPoint(x: viewportSize.width/2, y: viewportSize.height/2),
+                                center: screenPoint,
                                 offset: vm.offset, scale: vm.scale,
                                 zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                 context: context, undoManager: vm.undoManager)
+    }
+
+    private func openDrawingTool(at point: CGPoint) {
+        dismissEverything()
+        pendingDrawingToolLocation = point
+        showDrawingModePicker = true
+    }
+
+    private func handleDrawingToolMode(_ mode: CanvasDrawingToolMode, viewportSize: CGSize) {
+        let point = pendingDrawingToolLocation ?? CGPoint(
+            x: viewportSize.width / 2,
+            y: viewportSize.height / 2
+        )
+        pendingDrawingToolLocation = nil
+        showDrawingModePicker = false
+
+        switch mode {
+        case .sketchCard:
+            addDrawing(at: point)
+        case .canvasInk:
+            startCanvasDrawing()
+        case .handwritingText:
+            startCanvasDrawing(mode: .handwritingText)
+        }
     }
     private func openTemplatePicker(at point: CGPoint) {
         dismissEverything()
@@ -4069,38 +4460,43 @@ struct CanvasView: View {
         vm.showImagePicker = true
         #endif
     }
-    private func openOCRScanner(at point: CGPoint) {
+    private func openScanner(at point: CGPoint) {
         dismissEverything()
         #if os(iOS)
-        vm.pendingOCRLocation = point
-        showOCRSourcePicker = true
+        pendingScannerLocation = point
+        pendingScannerOutputMode = nil
+        showScannerOutputPicker = true
         #else
-        ocrScanAlertMessage = "Text extraction is available on iPhone and iPad."
+        scannerAlertMessage = "Scanning is available on iPhone and iPad."
         #endif
     }
+
+    private func clearScannerFlow() {
+        pendingScannerLocation = nil
+        pendingScannerOutputMode = nil
+        #if os(iOS)
+        showScannerOutputPicker = false
+        showScannerSourcePicker = false
+        showScannerImagePicker = false
+        selectedScannerPhotoItem = nil
+        #endif
+    }
+
     #if os(iOS)
-    private func beginOCRCameraScan() {
+    private func beginScannerOutput(_ mode: CanvasScannerOutputMode) {
+        pendingScannerOutputMode = mode
+        showScannerSourcePicker = true
+    }
+
+    private func beginScannerCameraScan() {
         guard VNDocumentCameraViewController.isSupported else {
-            ocrScanAlertMessage = "Document scanning is not available on this device."
-            vm.pendingOCRLocation = nil
+            scannerAlertMessage = "Document scanning is not available on this device."
+            clearScannerFlow()
             return
         }
-        vm.showOCRScanner = true
+        vm.showScanner = true
     }
     #endif
-    private func openDocumentScanner(at point: CGPoint) {
-        dismissEverything()
-        #if os(iOS)
-        guard VNDocumentCameraViewController.isSupported else {
-            ocrScanAlertMessage = "Document scanning is not available on this device."
-            return
-        }
-        vm.pendingDocumentScanLocation = point
-        vm.showDocumentScanner = true
-        #else
-        ocrScanAlertMessage = "Document scanning is available on iPhone and iPad."
-        #endif
-    }
     private func openPDFPicker(at point: CGPoint) {
         vm.pendingPDFLocation = point
         #if canImport(AppKit)
@@ -4146,46 +4542,46 @@ struct CanvasView: View {
         case .templates: openTemplatePicker(at: screenPoint)
         case .shape: openShapePicker(at: screenPoint)
         case .image: openImagePicker(at: screenPoint)
-        case .ocrScan: openOCRScanner(at: screenPoint)
-        case .documentScan: openDocumentScanner(at: screenPoint)
+        case .scanner: openScanner(at: screenPoint)
         case .pdf:   openPDFPicker(at: screenPoint)
         case .table: openTableSizePicker(at: screenPoint)
         case .audio: openAudioPicker(at: screenPoint)
         case .youtube: openYouTubeLinkSheet(at: screenPoint)
         case .lasso: startLassoSelection()
-        case .drawing:
-            dismissEverything()
-            vm.drawingVM.addDrawing(canvasID: activeContentCanvasID, center: screenPoint,
-                                   offset: vm.offset, scale: vm.scale, zIndex: nextZ,
-                                   context: context, undoManager: vm.undoManager)
+        case .drawing: openDrawingTool(at: screenPoint)
         }
     }
 
     #if os(iOS)
-    private func createOCRTextFromScan(images: [UIImage], geo: GeometryProxy) {
-        createOCRText(from: images, viewportSize: geo.size)
+    private func createSelectedScannerOutput(from images: [UIImage], viewportSize: CGSize) {
+        switch pendingScannerOutputMode ?? .text {
+        case .text:
+            createOCRText(from: images, viewportSize: viewportSize)
+        case .pdf:
+            createDocumentFromScan(images: images, viewportSize: viewportSize)
+        }
     }
 
     private func createOCRText(from images: [UIImage], viewportSize: CGSize) {
         guard !images.isEmpty else {
-            vm.pendingOCRLocation = nil
-            ocrScanAlertMessage = "No scanned pages were found."
+            clearScannerFlow()
+            scannerAlertMessage = "No scanned pages were found."
             return
         }
 
-        isProcessingOCRScan = true
+        isProcessingScan = true
         Task {
             do {
                 let text = try await ImageOCRService.recognizeText(images: images)
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else {
-                    isProcessingOCRScan = false
-                    vm.pendingOCRLocation = nil
-                    ocrScanAlertMessage = "No readable text was found in this scan."
+                    isProcessingScan = false
+                    clearScannerFlow()
+                    scannerAlertMessage = "No readable text was found in this scan."
                     return
                 }
 
-                let screenPoint = vm.pendingOCRLocation ?? CGPoint(
+                let screenPoint = pendingScannerLocation ?? CGPoint(
                     x: viewportSize.width / 2,
                     y: viewportSize.height / 2
                 )
@@ -4202,29 +4598,32 @@ struct CanvasView: View {
                     context: context,
                     undoManager: vm.undoManager
                 )
-                vm.pendingOCRLocation = nil
-                isProcessingOCRScan = false
+                clearScannerFlow()
+                isProcessingScan = false
                 if let textID {
                     vm.textVM.editingID = textID
                 }
             } catch {
-                isProcessingOCRScan = false
-                vm.pendingOCRLocation = nil
-                ocrScanAlertMessage = "Could not extract text from this scan."
+                isProcessingScan = false
+                clearScannerFlow()
+                scannerAlertMessage = "Could not extract text from this scan."
             }
         }
     }
 
-    private func createDocumentFromScan(images: [UIImage], geo: GeometryProxy) {
+    private func createDocumentFromScan(images: [UIImage], viewportSize: CGSize) {
         guard !images.isEmpty else {
-            vm.pendingDocumentScanLocation = nil
-            ocrScanAlertMessage = "No scanned pages were found."
+            clearScannerFlow()
+            scannerAlertMessage = "No scanned pages were found."
             return
         }
 
-        isProcessingDocumentScan = true
+        isProcessingScan = true
         Task {
-            let screenPoint = vm.pendingDocumentScanLocation ?? CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let screenPoint = pendingScannerLocation ?? CGPoint(
+                x: viewportSize.width / 2,
+                y: viewportSize.height / 2
+            )
             dismissEverything()
             let documentID = vm.pdfVM.addScannedDocument(
                 canvasID: activeContentCanvasID,
@@ -4236,12 +4635,12 @@ struct CanvasView: View {
                 context: context,
                 undoManager: vm.undoManager
             )
-            vm.pendingDocumentScanLocation = nil
-            isProcessingDocumentScan = false
+            clearScannerFlow()
+            isProcessingScan = false
             if let documentID {
                 vm.pdfVM.editingID = documentID
             } else {
-                ocrScanAlertMessage = "Could not place this scan on the canvas."
+                scannerAlertMessage = "Could not place this scan on the canvas."
             }
         }
     }
@@ -4334,23 +4733,19 @@ struct CanvasView: View {
     }
 
     private func layerableElement(withID id: UUID) -> (any LayerableElement)? {
-        allLayerableElements.first { $0.id == id }
+        elementCollection.element(withID: id)
     }
 
     private func deleteSelected() {
         for id in selection.selectedIDs {
-            if let el = textElements.first(where:       { $0.id == id }) { vm.textVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = stickyNotes.first(where:   { $0.id == id }) { vm.stickyVM.delete(note: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = todoLists.first(where:     { $0.id == id }) { vm.todoVM.delete(list: el, tasks: todoTasks.filter { $0.listID == el.id }, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = shapes.first(where:        { $0.id == id }) { vm.shapeVM.delete(shape: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = images.first(where:        { $0.id == id }) { vm.imageVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = pdfs.first(where:          { $0.id == id }) { vm.pdfVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = pdfPages.first(where:      { $0.id == id }) { vm.pdfPageVM.delete(element: el, context: context); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = tables.first(where:        { $0.id == id }) { vm.tableVM.delete(table: el, cells: tableCells.filter { $0.tableID == el.id }, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = audioElements.first(where: { $0.id == id }) { vm.audioVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = youtubeElements.first(where: { $0.id == id }) { vm.youtubeVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = drawings.first(where:      { $0.id == id }) { vm.drawingVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }
-            else if let el = symbols.first(where:       { $0.id == id }) { vm.symbolVM.delete(element: el, context: context, undoManager: vm.undoManager); vm.connectorVM.deleteOrphanedConnectors(for: id, allConnectors: connectors, context: context) }  // ← NEW
+            guard let element = layerableElement(withID: id) else { continue }
+            vm.deleteLayerableElement(
+                element,
+                todoTasks: todoTasks,
+                tableCells: tableCells,
+                connectors: connectors,
+                context: context
+            )
         }
         cleanupEmptyGroups()
         withAnimation(.spring(duration: 0.3)) { selection.exit() }

@@ -154,36 +154,21 @@ final class ElementGroupSyncService {
 
             switch operation.type {
             case .upsertElementGroup:
-                if let row = try? JSONDecoder().decode(ElementGroupRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("element_groups")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush element group upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: ElementGroupRow.self,
+                    table: "element_groups",
+                    supabase: supabase,
+                    label: "element group"
+                )
 
             case .deleteElementGroup:
-                if let payload = try? JSONDecoder().decode(ElementGroupDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("element_groups")
-                            .update(ElementGroupDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id", value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush element group delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "element_groups",
+                    supabase: supabase,
+                    label: "element group"
+                )
 
             default:
                 break
@@ -194,14 +179,13 @@ final class ElementGroupSyncService {
     }
 
     private func makeRow(group: CanvasElementGroupModel, userID: String) -> ElementGroupRow {
-        let now = iso.string(from: Date())
         return ElementGroupRow(
             id: group.id.uuidString,
             canvas_id: group.canvasID.uuidString,
             user_id: userID,
             name: group.name,
             created_at: iso.string(from: group.createdAt),
-            updated_at: now,
+            updated_at: iso.string(from: group.updatedAt),
             is_deleted: false
         )
     }

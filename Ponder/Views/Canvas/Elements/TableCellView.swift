@@ -17,6 +17,7 @@ struct TableCellView: View {
     let colorScheme: ColorScheme
     @Environment(\.modelContext) private var context
     @FocusState private var focused: Bool
+    @State private var remoteSyncTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -33,9 +34,12 @@ struct TableCellView: View {
                     .onChange(of: cell.value) { _, _ in
                         cell.updatedAt = Date()
                         try? context.save()
-                        Task { await TableSyncService.shared.upsertCell(cell) }
+                        scheduleRemoteSync()
                     }
                     .onAppear { focused = true }
+                    .onChange(of: focused) { _, isFocused in
+                        if !isFocused { flushRemoteSync() }
+                    }
             } else {
                 Text(cell.value)
                     .font(.system(size: fontSize, weight: cell.isBold ? .semibold : .regular))
@@ -68,9 +72,29 @@ struct TableCellView: View {
                 focused = false
                 cell.updatedAt = Date()
                 try? context.save()
-                Task { await TableSyncService.shared.upsertCell(cell) }
+                flushRemoteSync()
             }
         }
+        .onDisappear {
+            flushRemoteSync()
+        }
+    }
+
+    private func scheduleRemoteSync() {
+        remoteSyncTask?.cancel()
+        remoteSyncTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await TableSyncService.shared.upsertCell(cell)
+            remoteSyncTask = nil
+        }
+    }
+
+    private func flushRemoteSync() {
+        guard remoteSyncTask != nil else { return }
+        remoteSyncTask?.cancel()
+        remoteSyncTask = nil
+        Task { await TableSyncService.shared.upsertCell(cell) }
     }
 
     private var cellBackground: some View {

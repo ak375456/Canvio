@@ -208,36 +208,21 @@ final class ShapeSyncService {
 
             switch operation.type {
             case .upsertShape:
-                if let row = try? JSONDecoder().decode(ShapeRow.self, from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("shapes")
-                            .upsert(row, onConflict: "id")
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush shape upsert failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushUpsert(
+                    operation,
+                    as: ShapeRow.self,
+                    table: "shapes",
+                    supabase: supabase,
+                    label: "shape"
+                )
 
             case .deleteShape:
-                if let payload = try? JSONDecoder().decode(ShapeDeletePayload.self,
-                                                           from: operation.payload) {
-                    do {
-                        try await supabase
-                            .from("shapes")
-                            .update(ShapeDeleteUpdate(
-                                is_deleted: true,
-                                updated_at: payload.updated_at
-                            ))
-                            .eq("id",      value: payload.id)
-                            .eq("user_id", value: payload.user_id)
-                            .execute()
-                        succeeded = true
-                    } catch {
-                        print("⚠️ Queue flush shape delete failed: \(error.localizedDescription)")
-                    }
-                }
+                succeeded = await SyncStalenessGuard.flushSoftDelete(
+                    operation,
+                    table: "shapes",
+                    supabase: supabase,
+                    label: "shape"
+                )
 
             default:
                 break
@@ -250,7 +235,6 @@ final class ShapeSyncService {
     // MARK: - Helpers
 
     private func makeRow(shape: ShapeElementModel, userID: String) -> ShapeRow {
-        let now = iso.string(from: Date())
         return ShapeRow(
             id:                   shape.id.uuidString,
             canvas_id:            shape.canvasID.uuidString,
@@ -271,7 +255,7 @@ final class ShapeSyncService {
             z_index:              shape.zIndex,
             group_id:             shape.groupID?.uuidString,
             created_at:           iso.string(from: shape.createdAt),
-            updated_at:           now,
+            updated_at:           iso.string(from: shape.updatedAt),
             is_deleted:           false
         )
     }

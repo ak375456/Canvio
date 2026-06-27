@@ -12,20 +12,16 @@ struct CanvasToolbar: View {
     let onAddTemplate:  () -> Void
     let onAddShape:     () -> Void
     let onAddImage:     () -> Void
-    let onScanOCR:      () -> Void
-    let onScanDocument: () -> Void
+    let onScan:         () -> Void
     let onAddPDF:       () -> Void
     let onAddTable:     () -> Void
     let onAddAudio:     () -> Void
     let onAddYouTube:   () -> Void
     let onLasso:        () -> Void
-    let onAddDrawing:   () -> Void
-    let onDrawOnCanvas: () -> Void
-    let onWriteTextOnCanvas: () -> Void
+    let onDrawingTool:  () -> Void
     let onAddSymbol:    () -> Void          // ← NEW
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
-    var showsWriteTextTool = false
     var lockedTools: Set<CanvasTool> = []
 
     @State private var isCollapsed = false
@@ -84,8 +80,7 @@ struct CanvasToolbar: View {
         toolButton(icon: "square.on.circle",     label: "Shape",   tint: .purple) { onAddShape() }
         toolButton(icon: "photo",                label: "Image",   tint: .cyan, isLocked: lockedTools.contains(.image))   { onAddImage() }
         #if os(iOS)
-        toolButton(icon: "doc.text.viewfinder",  label: "OCR",     tint: .teal)   { onScanOCR() }
-        toolButton(icon: "doc.viewfinder",       label: "Scan",    tint: .red)    { onScanDocument() }
+        toolButton(icon: "doc.viewfinder",       label: "Scanner", tint: .teal)   { onScan() }
         #endif
         toolButton(icon: "doc.richtext",         label: "PDF",     tint: .red)    { onAddPDF() }
         toolButton(icon: "tablecells",           label: "Table",   tint: .indigo, isLocked: lockedTools.contains(.table)) { onAddTable() }
@@ -93,17 +88,7 @@ struct CanvasToolbar: View {
         toolButton(icon: "play.rectangle.fill",  label: "YouTube", tint: .red)    { onAddYouTube() }
         toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }
         toolButton(icon: "lasso",                label: "Lasso",   tint: .blue)   { onLasso() }
-        toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onAddDrawing() }
-        toolButton(icon: "scribble.variable",    label: "Draw",    tint: Color(red: 0.9, green: 0.5, blue: 0.1)) {
-            onDrawOnCanvas()
-        }
-        #if os(iOS)
-        if showsWriteTextTool {
-            toolButton(icon: "textformat.abc.dottedunderline", label: "Write", tint: .blue) {
-                onWriteTextOnCanvas()
-            }
-        }
-        #endif
+        toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onDrawingTool() }
         connectButton
     }
 
@@ -213,20 +198,16 @@ struct CompactCanvasToolbar: View {
     let onAddTemplate:  () -> Void
     let onAddShape:     () -> Void
     let onAddImage:     () -> Void
-    let onScanOCR:      () -> Void
-    let onScanDocument: () -> Void
+    let onScan:         () -> Void
     let onAddPDF:       () -> Void
     let onAddTable:     () -> Void
     let onAddAudio:     () -> Void
     let onAddYouTube:   () -> Void
     let onLasso:        () -> Void
-    let onAddDrawing:   () -> Void
-    let onDrawOnCanvas: () -> Void
-    let onWriteTextOnCanvas: () -> Void
+    let onDrawingTool:  () -> Void
     let onAddSymbol:    () -> Void
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
-    var showsWriteTextTool = false
     var lockedTools: Set<CanvasTool> = []
 
     @State private var isCollapsed = false
@@ -302,23 +283,7 @@ struct CompactCanvasToolbar: View {
                 compactButton(icon: "square.on.circle", label: "Shape", tint: .purple, action: onAddShape)
                 compactButton(icon: "photo", label: "Image", tint: .cyan, isLocked: lockedTools.contains(.image), action: onAddImage)
                 compactButton(icon: "lasso", label: "Lasso", tint: .blue, action: onLasso)
-                compactButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange, action: onAddDrawing)
-                compactButton(
-                    icon: "scribble.variable",
-                    label: "Draw on Canvas",
-                    tint: Color(red: 0.9, green: 0.5, blue: 0.1),
-                    action: onDrawOnCanvas
-                )
-                #if os(iOS)
-                if showsWriteTextTool {
-                    compactButton(
-                        icon: "textformat.abc.dottedunderline",
-                        label: "Write Text",
-                        tint: .blue,
-                        action: onWriteTextOnCanvas
-                    )
-                }
-                #endif
+                compactButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange, action: onDrawingTool)
             }
             .padding(.horizontal, 16)
             .frame(height: buttonSize + 8, alignment: .center)
@@ -336,8 +301,7 @@ struct CompactCanvasToolbar: View {
         return ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 9) {
                 #if os(iOS)
-                compactButton(icon: "doc.text.viewfinder", label: "OCR Scan", tint: .teal, action: onScanOCR)
-                compactButton(icon: "doc.viewfinder", label: "Scan Document", tint: .red, action: onScanDocument)
+                compactButton(icon: "doc.viewfinder", label: "Scanner", tint: .teal, action: onScan)
                 #endif
                 compactButton(icon: "doc.richtext", label: "PDF", tint: .red, action: onAddPDF)
                 compactButton(icon: "tablecells", label: "Table", tint: .indigo, isLocked: lockedTools.contains(.table), action: onAddTable)
