@@ -17,28 +17,34 @@ struct TableCellView: View {
     let colorScheme: ColorScheme
     @Environment(\.modelContext) private var context
     @FocusState private var focused: Bool
-    @State private var remoteSyncTask: Task<Void, Never>?
+    @StateObject private var textEditing = EditableTextBehavior()
 
     var body: some View {
         ZStack {
             cellBackground
 
             if isEditing {
-                TextField("", text: $cell.value, axis: .vertical)
+                TextField("", text: $textEditing.draft, axis: .vertical)
                     .font(.system(size: fontSize, weight: cell.isBold ? .semibold : .regular))
                     .foregroundStyle(adaptiveTextColor)
                     .multilineTextAlignment(textAlign)
                     .focused($focused)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
-                    .onChange(of: cell.value) { _, _ in
-                        cell.updatedAt = Date()
-                        try? context.save()
-                        scheduleRemoteSync()
+                    .onChange(of: textEditing.draft) { _, _ in
+                        textEditing.handleDraftChange(
+                            localSave: saveCellValue,
+                            remoteSync: syncCell
+                        )
                     }
-                    .onAppear { focused = true }
+                    .onAppear {
+                        textEditing.load(cell.value)
+                        focused = true
+                    }
                     .onChange(of: focused) { _, isFocused in
-                        if !isFocused { flushRemoteSync() }
+                        if !isFocused {
+                            textEditing.flushRemoteSync(syncCell)
+                        }
                     }
             } else {
                 Text(cell.value)
@@ -68,33 +74,37 @@ struct TableCellView: View {
                 )
         )
         .onChange(of: isEditing) { _, editing in
-            if !editing {
+            if editing {
+                textEditing.load(cell.value, force: true)
+                focused = true
+            } else {
                 focused = false
-                cell.updatedAt = Date()
-                try? context.save()
-                flushRemoteSync()
+                textEditing.commitDraft(
+                    localSave: saveCellValue,
+                    remoteSync: syncCell
+                )
+            }
+        }
+        .onChange(of: cell.value) { _, newValue in
+            if !isEditing {
+                textEditing.load(newValue)
             }
         }
         .onDisappear {
-            flushRemoteSync()
+            textEditing.flushRemoteSync(syncCell)
         }
     }
 
-    private func scheduleRemoteSync() {
-        remoteSyncTask?.cancel()
-        remoteSyncTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard !Task.isCancelled else { return }
-            await TableSyncService.shared.upsertCell(cell)
-            remoteSyncTask = nil
-        }
+    private func saveCellValue(_ value: String) -> Bool {
+        guard cell.value != value else { return false }
+        cell.value = value
+        cell.updatedAt = Date()
+        try? context.save()
+        return true
     }
 
-    private func flushRemoteSync() {
-        guard remoteSyncTask != nil else { return }
-        remoteSyncTask?.cancel()
-        remoteSyncTask = nil
-        Task { await TableSyncService.shared.upsertCell(cell) }
+    private func syncCell() async {
+        await TableSyncService.shared.upsertCell(cell)
     }
 
     private var cellBackground: some View {

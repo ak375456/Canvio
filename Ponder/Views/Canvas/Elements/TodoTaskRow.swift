@@ -17,7 +17,7 @@ struct TodoTaskRow: View {
     let onDelete: () -> Void
 
     @FocusState private var isFocused: Bool
-    @State private var remoteSyncTask: Task<Void, Never>?
+    @StateObject private var titleEditing = EditableTextBehavior()
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -46,18 +46,21 @@ struct TodoTaskRow: View {
 
             // Title + meta
             VStack(alignment: .leading, spacing: 4) {
-                TextField("New task", text: $task.title, axis: .vertical)
+                TextField("New task", text: $titleEditing.draft, axis: .vertical)
                     .font(.system(size: 14))
                     .foregroundStyle(task.isCompleted ? Color.secondary : Color.primary)
                     .strikethrough(task.isCompleted, color: .secondary)
                     .focused($isFocused)
-                    .onChange(of: task.title) { _, _ in
-                        task.updatedAt = Date()
-                        try? context.save()
-                        scheduleRemoteSync()
+                    .onChange(of: titleEditing.draft) { _, _ in
+                        titleEditing.handleDraftChange(
+                            localSave: saveTaskTitle,
+                            remoteSync: syncTask
+                        )
                     }
                     .onChange(of: isFocused) { _, focused in
-                        if !focused { flushRemoteSync() }
+                        if !focused {
+                            titleEditing.flushRemoteSync(syncTask)
+                        }
                     }
 
                 if hasMeta {
@@ -131,25 +134,28 @@ struct TodoTaskRow: View {
             }
         }
         .onDisappear {
-            flushRemoteSync()
+            titleEditing.flushRemoteSync(syncTask)
+        }
+        .onAppear {
+            titleEditing.load(task.title)
+        }
+        .onChange(of: task.title) { _, newTitle in
+            if !isFocused {
+                titleEditing.load(newTitle)
+            }
         }
     }
 
-    private func scheduleRemoteSync() {
-        remoteSyncTask?.cancel()
-        remoteSyncTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            guard !Task.isCancelled else { return }
-            await TodoSyncService.shared.upsertTask(task)
-            remoteSyncTask = nil
-        }
+    private func saveTaskTitle(_ title: String) -> Bool {
+        guard task.title != title else { return false }
+        task.title = title
+        task.updatedAt = Date()
+        try? context.save()
+        return true
     }
 
-    private func flushRemoteSync() {
-        guard remoteSyncTask != nil else { return }
-        remoteSyncTask?.cancel()
-        remoteSyncTask = nil
-        Task { await TodoSyncService.shared.upsertTask(task) }
+    private func syncTask() async {
+        await TodoSyncService.shared.upsertTask(task)
     }
 
     private var hasMeta: Bool {

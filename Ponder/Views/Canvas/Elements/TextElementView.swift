@@ -23,9 +23,9 @@ struct TextElementView: View {
     @State private var rotationAngle: Double = 0
     @State private var resizeDelta: CGFloat  = 0
     @State private var showEditSheet: Bool   = false
-    @State private var inlineText: String    = ""
     @State private var hasCommittedInline: Bool = false
     @State private var showCardPicker: Bool  = false
+    @StateObject private var inlineEditing = EditableTextBehavior()
     @FocusState private var inlineFocused: Bool
 
     private var isSelected: Bool      { vm.editingID == element.id }
@@ -83,7 +83,7 @@ struct TextElementView: View {
         }
         .onChange(of: isInlineEditing) { _, editing in
             if editing {
-                inlineText         = element.text
+                inlineEditing.load(element.text, force: true)
                 inlineFocused      = true
                 hasCommittedInline = false
             }
@@ -119,7 +119,7 @@ struct TextElementView: View {
                 onExternalTap?()
                 vm.editingID       = element.id
                 vm.inlineEditingID = element.id
-                inlineText         = element.text
+                inlineEditing.load(element.text, force: true)
                 inlineFocused      = true
             }
     }
@@ -160,10 +160,10 @@ struct TextElementView: View {
 
     private var inlineEditor: some View {
         ZStack(alignment: .center) {
-            styledText(inlineText.isEmpty ? "Tap to type..." : inlineText)
+            styledText(inlineEditing.draft.isEmpty ? "Tap to type..." : inlineEditing.draft)
                 .padding(12).fixedSize().opacity(0).background(sizeReader)
 
-            TextEditor(text: $inlineText)
+            TextEditor(text: $inlineEditing.draft)
                 .font(elementFont)
                 .foregroundStyle(vm.colorFromName(element.colorName))
                 .multilineTextAlignment(element.textAlignment)
@@ -202,7 +202,7 @@ struct TextElementView: View {
             .offset(x: 0, y: -36 / canvasScale)
         }
         .overlay(alignment: .bottomLeading) {
-            Text(inlineText.isEmpty ? "Start typing..." : "")
+            Text(inlineEditing.draft.isEmpty ? "Start typing..." : "")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.accentColor.opacity(0.6))
                 .padding(.horizontal, 8).padding(.bottom, -18)
@@ -217,7 +217,7 @@ struct TextElementView: View {
     private func commitInlineEdit() {
         guard !hasCommittedInline else { return }
         hasCommittedInline = true
-        vm.commitInlineText(element: element, text: inlineText, context: context)
+        vm.commitInlineText(element: element, text: inlineEditing.draft, context: context)
     }
 
     // MARK: - Formatting toolbar

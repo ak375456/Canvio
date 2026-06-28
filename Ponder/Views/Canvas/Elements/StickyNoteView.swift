@@ -15,9 +15,9 @@ struct StickyNoteView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool = false
     @State private var resizeDelta: CGSize = .zero
-    @State private var localText: String = ""
     @State private var tapTimer: Timer? = nil
     @State private var tapCount = 0
+    @StateObject private var textEditing = EditableTextBehavior()
     @FocusState private var textFocused: Bool
 
     private var isSelected: Bool { vm.editingID == note.id }
@@ -45,7 +45,7 @@ struct StickyNoteView: View {
         .rotationEffect(.degrees(note.rotation))
         .position(x: note.x + dragOffset.width, y: note.y + dragOffset.height)
         .gesture(canMove ? moveDragGesture : nil)
-        .onAppear { localText = note.text }
+        .onAppear { textEditing.load(note.text) }
         .onChange(of: vm.editingID) { _, newID in
             if newID != note.id {
                 commitLocalTextIfNeeded()
@@ -54,7 +54,7 @@ struct StickyNoteView: View {
         }
         .onChange(of: vm.writingID) { _, newID in
             if newID == note.id {
-                localText = note.text
+                textEditing.load(note.text, force: true)
                 textFocused = true
             } else {
                 commitLocalTextIfNeeded()
@@ -63,8 +63,11 @@ struct StickyNoteView: View {
         }
         .onChange(of: note.text) { _, newText in
             if !isWriting {
-                localText = newText
+                textEditing.load(newText)
             }
+        }
+        .onDisappear {
+            commitLocalTextIfNeeded()
         }
     }
 
@@ -116,17 +119,29 @@ struct StickyNoteView: View {
     private var stickyTextEditor: some View {
         Group {
             if isWriting {
-                TextEditor(text: $localText)
+                TextEditor(text: $textEditing.draft)
                     .focused($textFocused)
                     .font(stickyFont)
                     .scrollContentBackground(.hidden)
                     .background(Color.clear)
                     .foregroundStyle(Color.black.opacity(0.85))
-                    .onChange(of: localText) { old, new in handleTextChange(old: old, new: new) }
+                    .onChange(of: textEditing.draft) { old, new in
+                        if applyListContinuation(old: old, new: new) {
+                            textEditing.handleDraftChange(
+                                localSave: saveStickyText,
+                                remoteSync: syncStickyNote
+                            )
+                            return
+                        }
+                        textEditing.handleDraftChange(
+                            localSave: saveStickyText,
+                            remoteSync: syncStickyNote
+                        )
+                    }
             } else {
                 Text(previewText)
                     .font(stickyFont)
-                    .foregroundStyle(localText.isEmpty
+                    .foregroundStyle(textEditing.draft.isEmpty
                                      ? Color.black.opacity(0.35)
                                      : Color.black.opacity(0.85))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -137,17 +152,18 @@ struct StickyNoteView: View {
     }
 
     private var previewText: String {
-        if localText.isEmpty { return note.isCollapsed ? "Sticky Note" : "Write something..." }
+        let draft = textEditing.draft
+        if draft.isEmpty { return note.isCollapsed ? "Sticky Note" : "Write something..." }
         if note.isCollapsed {
-            return localText.components(separatedBy: .newlines)
+            return draft.components(separatedBy: .newlines)
                 .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "Sticky Note"
         }
-        return localText
+        return draft
     }
 
-    private func handleTextChange(old: String, new: String) {
-        guard note.listStyle != .none else { return }
-        guard new.count > old.count, let lastChar = new.last, lastChar == "\n" else { return }
+    private func applyListContinuation(old: String, new: String) -> Bool {
+        guard note.listStyle != .none else { return false }
+        guard new.count > old.count, let lastChar = new.last, lastChar == "\n" else { return false }
         let lines = new.components(separatedBy: "\n")
         if lines.count >= 2 {
             let prev = lines[lines.count - 2]
@@ -155,13 +171,19 @@ struct StickyNoteView: View {
             if trimmed == "•" || trimmed.range(of: #"^\d+\.$"#, options: .regularExpression) != nil {
                 var rebuilt = lines.dropLast(2).joined(separator: "\n")
                 if !rebuilt.isEmpty { rebuilt += "\n" }
-                localText = rebuilt; return
+                textEditing.draft = rebuilt
+                return true
             }
         }
         switch note.listStyle {
-        case .bullets: localText = new + "• "
-        case .numbers: localText = new + "\(numberedLineCount(in: new) + 1). "
-        case .none: break
+        case .bullets:
+            textEditing.draft = new + "• "
+            return true
+        case .numbers:
+            textEditing.draft = new + "\(numberedLineCount(in: new) + 1). "
+            return true
+        case .none:
+            return false
         }
     }
 
@@ -171,8 +193,9 @@ struct StickyNoteView: View {
     }
 
     private func applyListStyle(_ style: StickyListStyle) {
+        let styleChanged = note.listStyle != style
         note.listStyle = style
-        var lines = localText.components(separatedBy: "\n").map { stripPrefix($0) }
+        var lines = textEditing.draft.components(separatedBy: "\n").map { stripPrefix($0) }
         switch style {
         case .none: break
         case .bullets: lines = lines.map { $0.isEmpty ? "" : "• \($0)" }
@@ -180,7 +203,15 @@ struct StickyNoteView: View {
             var idx = 0
             lines = lines.map { l in if l.isEmpty { return "" }; idx += 1; return "\(idx). \(l)" }
         }
-        localText = lines.joined(separator: "\n"); note.text = localText; try? context.save()
+        textEditing.draft = lines.joined(separator: "\n")
+        let textChanged = saveStickyText(textEditing.draft)
+
+        guard styleChanged || textChanged else { return }
+        if !textChanged {
+            note.updatedAt = Date()
+            try? context.save()
+        }
+        textEditing.scheduleRemoteSync(syncStickyNote)
     }
 
     private func stripPrefix(_ line: String) -> String {
@@ -234,10 +265,12 @@ struct StickyNoteView: View {
             listButton(.numbers, icon: "list.number")
             Divider().frame(height: 18)
             formatButton(icon: "bold", active: note.isBold) {
-                note.isBold.toggle(); try? context.save()
+                note.isBold.toggle()
+                markStickyChanged()
             }
             formatButton(icon: "italic", active: note.isItalic) {
-                note.isItalic.toggle(); try? context.save()
+                note.isItalic.toggle()
+                markStickyChanged()
             }
             Divider().frame(height: 18)
             colorMenu
@@ -268,7 +301,8 @@ struct StickyNoteView: View {
         Menu {
             ForEach(StickyNoteColor.allColors) { c in
                 Button {
-                    note.colorName = c.name; try? context.save()
+                    note.colorName = c.name
+                    markStickyChanged()
                 } label: {
                     HStack {
                         Circle().fill(c.background).frame(width: 14, height: 14)
@@ -354,9 +388,28 @@ struct StickyNoteView: View {
     }
 
     private func commitLocalTextIfNeeded() {
-        if localText != note.text {
-            vm.updateText(note: note, text: localText, context: context)
-        }
+        textEditing.commitDraft(
+            localSave: saveStickyText,
+            remoteSync: syncStickyNote
+        )
+    }
+
+    private func saveStickyText(_ text: String) -> Bool {
+        guard note.text != text else { return false }
+        note.text = text
+        note.updatedAt = Date()
+        try? context.save()
+        return true
+    }
+
+    private func markStickyChanged() {
+        note.updatedAt = Date()
+        try? context.save()
+        textEditing.scheduleRemoteSync(syncStickyNote)
+    }
+
+    private func syncStickyNote() async {
+        await StickyNoteSyncService.shared.upsert(note)
     }
 
     // MARK: - Move drag gesture

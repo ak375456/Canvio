@@ -12,7 +12,6 @@ struct EditTextSheet: View {
     let element: TextElementModel
     let context: ModelContext
 
-    @State private var text: String             = ""
     @State private var selectedColor: String    = "primary"
     @State private var selectedFont: String     = "system"
     @State private var fontSize: Double         = 16
@@ -26,6 +25,7 @@ struct EditTextSheet: View {
     @State private var isImportingFont: Bool    = false
     @State private var fontImportError: String?
     @State private var showPaywall: Bool        = false
+    @StateObject private var textEditing        = EditableTextBehavior()
     @ObservedObject private var pro             = ProManager.shared
     @ObservedObject private var customFontStore = CustomFontStore.shared
     @FocusState private var focused: Bool
@@ -51,7 +51,7 @@ struct EditTextSheet: View {
             saveButton
         }
         .onAppear {
-            text           = element.text
+            textEditing.load(element.text)
             selectedColor  = element.colorName
             selectedFont   = element.fontName
             fontSize       = element.fontSize
@@ -112,7 +112,7 @@ struct EditTextSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             label("TEXT")
             PastePreservingTextEditor(
-                text: $text,
+                text: $textEditing.draft,
                 fontName: selectedFont,
                 fontSize: fontSize,
                 isBold: isBold,
@@ -394,7 +394,7 @@ struct EditTextSheet: View {
             if bgColorName != "none" || strokeColorName != "none" {
                 HStack {
                     Spacer()
-                    Text(text.isEmpty ? "Preview" : String(text.prefix(20)))
+                    Text(textEditing.draft.isEmpty ? "Preview" : String(textEditing.draft.prefix(20)))
                         .font(previewFont)
                         .foregroundStyle(colorFromName(selectedColor))
                         .padding(12)
@@ -421,7 +421,7 @@ struct EditTextSheet: View {
     // MARK: - Save
     private var saveButton: some View {
         Button {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             element.text            = trimmed
             element.fontSize        = TextStyle.clampedFontSize(fontSize)
@@ -453,14 +453,14 @@ struct EditTextSheet: View {
             Task { await TextSyncService.shared.upsert(element) }
             dismiss()
         } label: {
-            let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let empty = textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             Text("Save Changes")
                 .font(.body.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 14)
                 .background(empty ? Color.secondary.opacity(0.2) : Color.accentColor)
                 .foregroundStyle(empty ? Color.secondary : Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .padding(.horizontal, 24).padding(.vertical, 16)
     }
 
