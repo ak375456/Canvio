@@ -27,6 +27,7 @@ enum CanvasThumbnailRenderer {
         gridStyle:     GridStyle = .dotted,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
+        customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
         context:       ModelContext
     ) {
         guard let jpeg = renderThumbnailData(
@@ -39,7 +40,8 @@ enum CanvasThumbnailRenderer {
             drawings: drawings,
             gridStyle: gridStyle,
             backgroundMode: backgroundMode,
-            backgroundPalette: backgroundPalette
+            backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors
         ) else { return }
 
         canvas.thumbnailData = jpeg
@@ -58,6 +60,7 @@ enum CanvasThumbnailRenderer {
         gridStyle: GridStyle = .dotted,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
+        customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
         context: ModelContext
     ) {
         guard let jpeg = renderThumbnailData(
@@ -70,7 +73,8 @@ enum CanvasThumbnailRenderer {
             drawings: drawings,
             gridStyle: gridStyle,
             backgroundMode: backgroundMode,
-            backgroundPalette: backgroundPalette
+            backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors
         ) else { return }
 
         page.thumbnailData = jpeg
@@ -88,7 +92,8 @@ enum CanvasThumbnailRenderer {
         drawings: [DrawingElementModel],
         gridStyle: GridStyle,
         backgroundMode: CanvasBackgroundMode,
-        backgroundPalette: CanvasBackgroundPalette
+        backgroundPalette: CanvasBackgroundPalette,
+        customBackgroundColors: CanvasCustomBackgroundColors
     ) -> Data? {
         let snapshot = CanvasThumbnailSnapshot(
             canvas:       canvas,
@@ -101,6 +106,7 @@ enum CanvasThumbnailRenderer {
             gridStyle:    gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors,
             width:        kThumbWidth,
             height:       kThumbHeight
         )
@@ -178,6 +184,7 @@ private struct CanvasThumbnailSnapshot: View {
     let gridStyle:     GridStyle
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
+    let customBackgroundColors: CanvasCustomBackgroundColors
     let width:        CGFloat
     let height:       CGFloat
 
@@ -216,7 +223,8 @@ private struct CanvasThumbnailSnapshot: View {
                 scale: t.scale,
                 style: gridStyle,
                 backgroundMode: backgroundMode,
-                backgroundPalette: backgroundPalette
+                backgroundPalette: backgroundPalette,
+                customBackgroundColors: customBackgroundColors
             )
 
             ZStack(alignment: .topLeading) {
@@ -365,7 +373,7 @@ private struct ThumbnailTextView: View {
     let element: TextElementModel
     let scale: CGFloat
     private var color: Color {
-        TextStyle.colorOptions.first { $0.name == element.colorName }?.color ?? .primary
+        TextStyle.color(named: element.colorName)
     }
     private var font: Font {
         let size = max(8, element.fontSize * Double(scale))

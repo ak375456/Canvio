@@ -47,6 +47,7 @@ struct TextStyle {
     static let colorOptions: [(name: String, color: Color)] = [
         ("primary", .primary),
         ("black", .black),
+        ("white",   .white),
         ("gray",    .gray),
         ("blue",    .blue),
         ("indigo",  .indigo),
@@ -61,4 +62,15 @@ struct TextStyle {
         ("purple",  .purple),
         ("brown",   .brown),
     ]
+
+    static func color(named name: String, fallback: Color = .primary) -> Color {
+        if let option = colorOptions.first(where: { $0.name == name }) {
+            return option.color
+        }
+        return ShapeColorPalette.color(named: name, fallback: fallback)
+    }
+
+    static func storageName(for color: Color, fallback: String = "primary") -> String {
+        ShapeColorPalette.storageName(for: color, fallback: fallback)
+    }
 }

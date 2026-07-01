@@ -20,7 +20,11 @@ final class PencilShapeSnapController {
     private let snapDelay: TimeInterval = 0.55
 
     func scheduleSnap(on canvas: PKCanvasView, commit: @escaping (PKDrawing) -> Void) {
-        guard isEnabled, !isApplyingSnap, !canvas.drawing.strokes.isEmpty else {
+        guard isEnabled,
+              !isApplyingSnap,
+              canvas.tool is PKInkingTool,
+              !canvas.drawing.strokes.isEmpty
+        else {
             cancelPendingSnap()
             return
         }
@@ -42,9 +46,13 @@ final class PencilShapeSnapController {
     func snapNow(on canvas: PKCanvasView, commit: @escaping (PKDrawing) -> Void) {
         guard isEnabled,
               !isApplyingSnap,
+              canvas.tool is PKInkingTool,
               let snapped = PencilShapeSnapper.snappedDrawing(from: canvas.drawing),
               snapped.dataRepresentation() != canvas.drawing.dataRepresentation()
-        else { return }
+        else {
+            pendingSnap = nil
+            return
+        }
 
         isApplyingSnap = true
         pendingSnap?.cancel()
@@ -70,6 +78,8 @@ private struct PencilShapeSnapper {
 
         var strokes = drawing.strokes
         let originalStroke = strokes[lastIndex]
+        guard originalStroke.mask == nil else { return nil }
+
         let rawPoints = renderedPoints(from: originalStroke)
         guard let cleanPoints = cleanShapePoints(from: rawPoints),
               let snappedStroke = stroke(from: cleanPoints, matching: originalStroke)
@@ -864,7 +874,11 @@ private struct LivePKCanvas: UIViewRepresentable {
 
         private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
             let didSwitchTool = updatePickerSelectionState(toolPicker)
-            let didSwitchToInkingTool = didSwitchTool && pickerInkingTool(from: toolPicker) != nil
+            let selectedInkingTool = pickerInkingTool(from: toolPicker)
+            let didSwitchToInkingTool = didSwitchTool && selectedInkingTool != nil
+            if selectedInkingTool == nil {
+                shapeSnapController.cancelPendingSnap()
+            }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let canvas = self.canvas else { return }

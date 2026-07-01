@@ -582,7 +582,7 @@ class TextElementViewModel: ObservableObject {
     }
 
     func colorFromName(_ name: String) -> Color {
-        TextStyle.colorOptions.first { $0.name == name }?.color ?? .primary
+        TextStyle.color(named: name)
     }
 
     // Returns Color? — nil means transparent/none

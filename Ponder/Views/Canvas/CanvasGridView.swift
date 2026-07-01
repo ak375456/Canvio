@@ -11,6 +11,7 @@ struct CanvasGridView: View {
     let style: GridStyle
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
+    let customBackgroundColors: CanvasCustomBackgroundColors
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -19,13 +20,15 @@ struct CanvasGridView: View {
         scale: CGFloat,
         style: GridStyle,
         backgroundMode: CanvasBackgroundMode = .adaptive,
-        backgroundPalette: CanvasBackgroundPalette = .neutral
+        backgroundPalette: CanvasBackgroundPalette = .neutral,
+        customBackgroundColors: CanvasCustomBackgroundColors = .defaults
     ) {
         self.offset = offset
         self.scale = scale
         self.style = style
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
+        self.customBackgroundColors = customBackgroundColors
     }
 
     var body: some View {
@@ -38,7 +41,10 @@ struct CanvasGridView: View {
 
     private var appearance: CanvasBackgroundAppearance {
         let resolvedScheme = backgroundMode.resolvedColorScheme(system: colorScheme)
-        return backgroundPalette.appearance(for: resolvedScheme)
+        return backgroundPalette.appearance(
+            for: resolvedScheme,
+            customColors: customBackgroundColors
+        )
     }
 
     private func drawBackground(in context: GraphicsContext, size: CGSize) {

@@ -107,6 +107,7 @@ struct PaywallSheet: View {
             featureRow(icon: "checkmark.circle.fill", title: "Use templates without image, audio and table limits")
             featureRow(icon: "checkmark.circle.fill", title: "All grid styles — grid, lines, columns, blank")
             featureRow(icon: "checkmark.circle.fill", title: "Premium canvas background palettes")
+            featureRow(icon: "checkmark.circle.fill", title: "Custom light and dark canvas background colors")
             featureRow(icon: "checkmark.circle.fill", title: "Watermark-free PNG and PDF exports")
             featureRow(icon: "checkmark.circle.fill", title: "Import custom .ttf fonts for text")
             syncFeatureRow

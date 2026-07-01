@@ -63,7 +63,7 @@ class CanvasViewModel: ObservableObject {
     @Published var pendingYouTubeLocation: CGPoint? = nil
     @Published var pendingTemplateLocation: CGPoint? = nil
     @Published var addMenuPosition: CGPoint? = nil
-    @Published var isMinimapExpanded: Bool = true
+    @Published var isMinimapExpanded: Bool = false
     @Published var selectedPhotoItem: PhotosPickerItem? = nil
     @Published var showTableSizePicker: Bool = false
     @Published var pendingTableLocation: CGPoint? = nil

@@ -25,6 +25,8 @@ struct TextElementView: View {
     @State private var showEditSheet: Bool   = false
     @State private var hasCommittedInline: Bool = false
     @State private var showCardPicker: Bool  = false
+    @State private var showTextColorPicker: Bool = false
+    @State private var customTextColorDraft: Color = .primary
     @StateObject private var inlineEditing = EditableTextBehavior()
     @FocusState private var inlineFocused: Bool
 
@@ -81,6 +83,9 @@ struct TextElementView: View {
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(24)
         }
+        .popover(isPresented: $showTextColorPicker) {
+            customTextColorPanel
+        }
         .onChange(of: isInlineEditing) { _, editing in
             if editing {
                 inlineEditing.load(element.text, force: true)
@@ -89,7 +94,10 @@ struct TextElementView: View {
             }
         }
         .onChange(of: isSelected) { _, selected in
-            if !selected { showCardPicker = false }
+            if !selected {
+                showCardPicker = false
+                showTextColorPicker = false
+            }
         }
     }
 
@@ -268,15 +276,39 @@ struct TextElementView: View {
                         Circle()
                             .fill(option.color)
                             .frame(width: active ? 20 : 16, height: active ? 20 : 16)
-                            .overlay(Circle().strokeBorder(Color.primary.opacity(active ? 0.5 : 0), lineWidth: 1.5))
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(
+                                        Color.primary.opacity(active ? 0.5 : (option.name == "white" ? 0.18 : 0)),
+                                        lineWidth: 1.5
+                                    )
+                            )
                             .animation(.easeInOut(duration: 0.15), value: element.colorName)
                     }
                     .buttonStyle(.plain)
                 }
 
+                Button {
+                    customTextColorDraft = vm.colorFromName(element.colorName)
+                    showCardPicker = false
+                    showTextColorPicker = true
+                } label: {
+                    Image(systemName: "paintpalette")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isCustomTextColor ? Color.accentColor : Color.primary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            isCustomTextColor ? Color.accentColor.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 7)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
                 toolbarDivider
 
                 Button {
+                    showTextColorPicker = false
                     withAnimation(.spring(duration: 0.22)) { showCardPicker.toggle() }
                 } label: {
                     Image(systemName: element.hasCard ? "rectangle.fill" : "rectangle")
@@ -301,6 +333,37 @@ struct TextElementView: View {
                 .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
         )
         .fixedSize(horizontal: true, vertical: true)
+    }
+
+    private var customTextColorPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Text Color")
+                .font(.headline)
+
+            ColorPicker("Color", selection: $customTextColorDraft, supportsOpacity: false)
+
+            HStack {
+                Button("Cancel") {
+                    showTextColorPicker = false
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button("Apply") {
+                    let colorName = TextStyle.storageName(for: customTextColorDraft, fallback: element.colorName)
+                    vm.setColor(colorName, element: element, context: context)
+                    showTextColorPicker = false
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(width: 260)
+    }
+
+    private var isCustomTextColor: Bool {
+        !TextStyle.colorOptions.contains { $0.name == element.colorName }
     }
 
     // MARK: - Card picker panel

@@ -286,15 +286,32 @@ struct EditTextSheet: View {
                         Button { selectedColor = option.name } label: {
                             ZStack {
                                 Circle().fill(option.color).frame(width: 32, height: 32)
+                                    .overlay(Circle().strokeBorder(Color.primary.opacity(option.name == "white" ? 0.28 : 0.08), lineWidth: 1))
                                 if selectedColor == option.name {
                                     Circle().strokeBorder(Color.primary.opacity(0.4), lineWidth: 2)
                                         .frame(width: 36, height: 36)
                                     Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(swatchCheckmarkColor(for: option.name))
                                 }
                             }
                         }.buttonStyle(.plain)
                     }
+                    ColorPicker(
+                        "Custom text color",
+                        selection: customTextColorBinding,
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                    .frame(width: 36, height: 36)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                isCustomTextColorSelected ? Color.primary.opacity(0.45) : Color.primary.opacity(0.12),
+                                lineWidth: isCustomTextColorSelected ? 2 : 1
+                            )
+                    )
+                    .accessibilityLabel("Custom text color")
                 }.padding(.vertical, 2)
             }
         }
@@ -490,8 +507,23 @@ struct EditTextSheet: View {
         .buttonStyle(.plain)
     }
 
+    private var customTextColorBinding: Binding<Color> {
+        Binding(
+            get: { colorFromName(selectedColor) },
+            set: { selectedColor = TextStyle.storageName(for: $0, fallback: selectedColor) }
+        )
+    }
+
+    private var isCustomTextColorSelected: Bool {
+        !TextStyle.colorOptions.contains { $0.name == selectedColor }
+    }
+
+    private func swatchCheckmarkColor(for name: String) -> Color {
+        ["white", "yellow", "mint"].contains(name) ? .black : .white
+    }
+
     private func colorFromName(_ name: String) -> Color {
-        TextStyle.colorOptions.first { $0.name == name }?.color ?? .primary
+        TextStyle.color(named: name)
     }
 
     private func cardColorFromName(_ name: String) -> Color? {

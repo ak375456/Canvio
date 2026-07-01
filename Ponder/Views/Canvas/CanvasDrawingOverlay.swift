@@ -541,6 +541,9 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
             _ = updatePickerSelectionState(toolPicker)
             let selectedInkingTool = pickerInkingTool(from: toolPicker)
+            if selectedInkingTool == nil {
+                shapeSnapController.cancelPendingSnap()
+            }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let canvas = self.canvasView else { return }

@@ -39,6 +39,7 @@ final class CanvasExporter {
         gridStyle:     GridStyle = .dotted,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
+        customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
         exportScope:   CanvasExportScope = .allContent,
         showsWatermark: Bool = false,
         scale:         CGFloat = 2.0
@@ -83,6 +84,7 @@ final class CanvasExporter {
             gridStyle:     gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors,
             showsWatermark: showsWatermark,
             scale:         scale
         ) else { return nil }
@@ -117,6 +119,7 @@ final class CanvasExporter {
         gridStyle:     GridStyle = .dotted,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
+        customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
         exportScope:   CanvasExportScope = .allContent,
         showsWatermark: Bool = false,
         scale:         CGFloat = 2.0
@@ -161,6 +164,7 @@ final class CanvasExporter {
             gridStyle:     gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors,
             showsWatermark: showsWatermark,
             scale:         scale
         ) else { return nil }
@@ -189,6 +193,7 @@ final class CanvasExporter {
         gridStyle:     GridStyle,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
+        customBackgroundColors: CanvasCustomBackgroundColors,
         showsWatermark: Bool,
         scale:         CGFloat
     ) -> PlatformImage? {
@@ -207,6 +212,7 @@ final class CanvasExporter {
             gridStyle:     gridStyle,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
+            customBackgroundColors: customBackgroundColors,
             textElements:  textElements,
             stickyNotes:   stickyNotes,
             todoLists:     todoLists,
@@ -518,6 +524,7 @@ struct CanvasExportView: View {
     let gridStyle:     GridStyle
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
+    let customBackgroundColors: CanvasCustomBackgroundColors
     let textElements:  [TextElementModel]
     let stickyNotes:   [StickyNoteModel]
     let todoLists:     [TodoListModel]
@@ -543,6 +550,7 @@ struct CanvasExportView: View {
         gridStyle:     GridStyle,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
+        customBackgroundColors: CanvasCustomBackgroundColors,
         textElements:  [TextElementModel],
         stickyNotes:   [StickyNoteModel],
         todoLists:     [TodoListModel],
@@ -567,6 +575,7 @@ struct CanvasExportView: View {
         self.gridStyle     = gridStyle
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
+        self.customBackgroundColors = customBackgroundColors
         self.textElements  = textElements
         self.stickyNotes   = stickyNotes
         self.todoLists     = todoLists
@@ -656,7 +665,8 @@ struct CanvasExportView: View {
                 scale: 1,
                 style: gridStyle,
                 backgroundMode: backgroundMode,
-                backgroundPalette: backgroundPalette
+                backgroundPalette: backgroundPalette,
+                customBackgroundColors: customBackgroundColors
             )
 
             // Connectors — SwiftUI Shape views, not Canvas{},
@@ -743,27 +753,13 @@ struct CanvasExportView: View {
     // MARK: - Color helpers
 
     private func textColor(_ name: String) -> Color {
-        switch name {
-        case "primary": return colorScheme == .dark ? .white : .black
-        case "black":  return .black
-        case "gray":   return .gray
-        case "blue":   return .blue
-        case "indigo": return .indigo
-        case "cyan":   return .cyan
-        case "teal":   return .teal
-        case "mint":   return .mint
-        case "red":    return .red
-        case "green":  return .green
-        case "orange": return .orange
-        case "purple": return .purple
-        case "pink":   return .pink
-        case "brown":  return .brown
-        case "yellow": return colorScheme == .dark
-            ? Color(red: 1.0, green: 0.9, blue: 0.3)
-            : Color(red: 0.6, green: 0.5, blue: 0)
-        case "white":  return colorScheme == .dark ? .white : Color(white: 0.1)
-        default:       return colorScheme == .dark ? .white : .black
+        if name == "primary" {
+            return colorScheme == .dark ? .white : .black
         }
+        return TextStyle.color(
+            named: name,
+            fallback: colorScheme == .dark ? .white : .black
+        )
     }
 
     private func textCardColor(_ name: String) -> Color? {

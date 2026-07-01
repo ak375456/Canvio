@@ -183,6 +183,7 @@ struct CanvasExportButton: View {
                 gridStyle:     settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
+                customBackgroundColors: settings.customCanvasBackgroundColors,
                 showsWatermark: !pro.isPro
             ) else { return }
             result = ExportResult(
@@ -214,6 +215,7 @@ struct CanvasExportButton: View {
                 gridStyle:     settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
+                customBackgroundColors: settings.customCanvasBackgroundColors,
                 exportScope:   scope,
                 showsWatermark: !pro.isPro
             ) else { return }

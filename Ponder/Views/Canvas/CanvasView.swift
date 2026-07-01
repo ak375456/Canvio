@@ -448,6 +448,7 @@ private struct CanvasPageContentView: View {
     @ObservedObject private var selection: SelectionViewModel = SelectionViewModel()
     @StateObject private var layersVM = LayersViewModel()
     @Environment(\.modelContext) private var context
+    @Environment(\.colorScheme) private var colorScheme
     @Query private var allTextElements: [TextElementModel]
     @Query private var allStickyNotes: [StickyNoteModel]
     @Query private var allTodoLists: [TodoListModel]
@@ -473,7 +474,7 @@ private struct CanvasPageContentView: View {
     @State private var showSettings = false
     @State private var showExportSheet = false
     @State private var showLayers = false
-    @State private var showPagesPanel = true
+    @State private var showPagesPanel = false
     @State private var showPDFReader = false
     @State private var showTableSizePicker = false
     @State private var showCSVExporter = false
@@ -848,7 +849,8 @@ private struct CanvasPageContentView: View {
                         scale: scale,
                         style: settings.effectiveGridStyle,
                         backgroundMode: settings.canvasBackgroundMode,
-                        backgroundPalette: settings.canvasBackgroundPalette
+                        backgroundPalette: settings.canvasBackgroundPalette,
+                        customBackgroundColors: settings.customCanvasBackgroundColors
                     )
                 }
                     .contentShape(Rectangle())
@@ -939,7 +941,7 @@ private struct CanvasPageContentView: View {
                     toolbarLayer(geo: geo)
                 }
 
-                if !vm.showCanvasDrawingOverlay && !isLassoModeActive {
+                if !vm.showCanvasDrawingOverlay && !isLassoModeActive && settings.canvasPagesPanelVisible {
                     pagesPanelLayer(geo: geo)
                 }
 
@@ -1060,7 +1062,8 @@ private struct CanvasPageContentView: View {
             }
             #endif
             .overlay(alignment: .topTrailing) {
-                if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive
+                if settings.canvasMinimapVisible
+                    && !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive
                     && !vm.connectorVM.isConnectModeActive {
                     CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
                         Minimap(
@@ -1080,6 +1083,12 @@ private struct CanvasPageContentView: View {
                         )
                     }
                     .padding(.trailing, 12).padding(.top, 12)
+                }
+            }
+            .overlay(alignment: .top) {
+                if !settings.canvasTopBarVisible && !vm.showCanvasDrawingOverlay {
+                    canvasTopBarRevealButton
+                        .padding(.top, 12)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -1433,9 +1442,54 @@ private struct CanvasPageContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)
             .background(InteractivePopGestureDisabler(isDisabled: true))
+            .toolbar(settings.canvasTopBarVisible ? .visible : .hidden, for: .navigationBar)
+            .toolbarBackground(canvasTopBarBackgroundColor, for: .navigationBar)
+            .toolbarBackground(settings.canvasTopBarVisible ? .visible : .hidden, for: .navigationBar)
+            .toolbarColorScheme(canvasTopBarColorScheme, for: .navigationBar)
             #endif
             .toolbar { canvasToolbar }
             .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var resolvedCanvasColorScheme: ColorScheme {
+        settings.canvasBackgroundMode.resolvedColorScheme(system: colorScheme)
+    }
+
+    private var canvasBackgroundAppearance: CanvasBackgroundAppearance {
+        settings.canvasBackgroundPalette.appearance(
+            for: resolvedCanvasColorScheme,
+            customColors: settings.customCanvasBackgroundColors
+        )
+    }
+
+    private var canvasTopBarBackgroundColor: Color {
+        canvasBackgroundAppearance.base.opacity(resolvedCanvasColorScheme == .dark ? 0.96 : 0.94)
+    }
+
+    private var canvasTopBarColorScheme: ColorScheme {
+        resolvedCanvasColorScheme
+    }
+
+    private var canvasTopBarRevealButton: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                settings.canvasTopBarVisible = true
+            }
+        } label: {
+            Image(systemName: "eye")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(resolvedCanvasColorScheme == .dark ? Color.white.opacity(0.9) : Color.black.opacity(0.75))
+                .frame(width: 42, height: 34)
+                .background(canvasTopBarBackgroundColor, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(canvasBackgroundAppearance.line.opacity(0.8), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(resolvedCanvasColorScheme == .dark ? 0.26 : 0.12), radius: 8, x: 0, y: 3)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show top bar")
     }
 
     @ToolbarContentBuilder
@@ -1476,6 +1530,14 @@ private struct CanvasPageContentView: View {
                 Button { showExportSheet = true } label: { Image(systemName: "square.and.arrow.up") }
                     .accessibilityLabel("Export canvas")
                 Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        settings.canvasTopBarVisible = false
+                    }
+                } label: {
+                    Image(systemName: "eye.slash")
+                }
+                .accessibilityLabel("Hide top bar")
                 Menu {
                     Button { newName = canvas.name; showRenameAlert = true } label: {
                         Label("Rename", systemImage: "pencil")
@@ -3616,15 +3678,7 @@ private struct CanvasPageContentView: View {
                 x: (block.bounds.midX - effectiveOffset.width) / effectiveScale,
                 y: (block.bounds.midY - effectiveOffset.height) / effectiveScale
             )
-            let estimatedFontSize = estimatedHandwritingFontSize(
-                recognitionText: block.text,
-                bounds: block.bounds,
-                scale: effectiveScale
-            )
-            let style = settings.lastTextStyle(
-                text: block.text,
-                estimatedFontSize: estimatedFontSize
-            )
+            let style = settings.handwritingTextStyle(text: block.text)
 
             return RecognizedHandwritingTextPlacement(
                 style: style,
@@ -3832,19 +3886,6 @@ private struct CanvasPageContentView: View {
         }
         return image.cgImage
     }
-
-    private func estimatedHandwritingFontSize(recognitionText: String,
-                                              bounds: CGRect,
-                                              scale: CGFloat) -> Double {
-        let lineCount = max(
-            1,
-            recognitionText
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .count
-        )
-        let canvasLineHeight = (bounds.height / max(scale, 0.0001)) / CGFloat(lineCount)
-        return TextStyle.clampedFontSize(Double(canvasLineHeight * 0.82))
-    }
     #endif
 
     // MARK: - Sync
@@ -3894,6 +3935,7 @@ private struct CanvasPageContentView: View {
                 gridStyle: settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
+                customBackgroundColors: settings.customCanvasBackgroundColors,
                 context: context
             )
         } else {
@@ -3908,6 +3950,7 @@ private struct CanvasPageContentView: View {
                 gridStyle: settings.effectiveGridStyle,
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
+                customBackgroundColors: settings.customCanvasBackgroundColors,
                 context: context
             )
         }
