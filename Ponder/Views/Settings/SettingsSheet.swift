@@ -25,6 +25,9 @@ struct SettingsSheet: View {
     @State private var isImportingFont = false
     @State private var fontImportError: String?
     @State private var resumeFontImportAfterPaywall = false
+    #if os(macOS)
+    @State private var showMacShortcuts = true
+    #endif
     @ObservedObject private var customFontStore = CustomFontStore.shared
     private let communityURL = URL(string: "https://www.reddit.com/r/Canvio/")!
 
@@ -37,7 +40,13 @@ struct SettingsSheet: View {
                     themeSection
                     toolbarSection
                     canvasChromeSection
+                    #if os(macOS)
+                    macShortcutsSection
+                    #endif
+                    #if os(iOS)
                     drawingSection
+                    #endif
+                    mediaSection
                     canvasActionsSection
                     communitySection
                     selectionSection
@@ -142,53 +151,25 @@ struct SettingsSheet: View {
     private var toolbarSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             label("TOOLBAR")
-            Toggle(isOn: Binding(
-                get: { settings.toolbarPosition != .hidden },
-                set: { settings.toolbarPosition = $0 ? .bottom : .hidden }
-            )) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "dock.rectangle")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 18, height: 18)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Show toolbar")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Text("Display the canvas toolbar at the bottom of the screen.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .toggleStyle(.switch)
-            .padding(12)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            settingsToggleCard(
+                icon: "dock.rectangle",
+                title: "Show toolbar",
+                subtitle: "Display the canvas toolbar at the bottom of the screen.",
+                isOn: Binding(
+                    get: { settings.toolbarPosition != .hidden },
+                    set: { settings.toolbarPosition = $0 ? .bottom : .hidden }
+                )
+            )
 
-            Toggle(isOn: Binding(
-                get: { settings.toolbarStyle == .compactButtons },
-                set: { settings.toolbarStyle = $0 ? .compactButtons : .floatingBar }
-            )) {
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "square.grid.3x3")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 18, height: 18)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Compact floating buttons")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Text("Use small icon-only buttons around the canvas instead of the wide toolbar.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .toggleStyle(.switch)
-            .padding(12)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            settingsToggleCard(
+                icon: "square.grid.3x3",
+                title: "Compact floating buttons",
+                subtitle: "Use small icon-only buttons around the canvas instead of the wide toolbar.",
+                isOn: Binding(
+                    get: { settings.toolbarStyle == .compactButtons },
+                    set: { settings.toolbarStyle = $0 ? .compactButtons : .floatingBar }
+                )
+            )
         }
     }
 
@@ -197,81 +178,146 @@ struct SettingsSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             label("CANVAS CONTROLS")
             VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: Binding(
-                    get: { settings.canvasTopBarVisible },
-                    set: { settings.canvasTopBarVisible = $0 }
-                )) {
-                    settingsRowLabel(
-                        icon: "rectangle.topthird.inset.filled",
-                        title: "Show top bar",
-                        subtitle: "Keep undo, export, settings, and canvas actions at the top."
+                #if os(iOS)
+                settingsToggleContent(
+                    icon: "rectangle.topthird.inset.filled",
+                    title: "Show top bar",
+                    subtitle: "Keep undo, export, settings, and canvas actions at the top.",
+                    isOn: Binding(
+                        get: { settings.canvasTopBarVisible },
+                        set: { settings.canvasTopBarVisible = $0 }
                     )
-                }
-                .toggleStyle(.switch)
+                )
+
+                Divider()
+                #endif
+
+                settingsToggleContent(
+                    icon: "rectangle.on.rectangle.angled",
+                    title: "Show pages",
+                    subtitle: "Display the page switcher pill on the canvas.",
+                    isOn: Binding(
+                        get: { settings.canvasPagesPanelVisible },
+                        set: { settings.canvasPagesPanelVisible = $0 }
+                    )
+                )
 
                 Divider()
 
-                Toggle(isOn: Binding(
-                    get: { settings.canvasPagesPanelVisible },
-                    set: { settings.canvasPagesPanelVisible = $0 }
-                )) {
-                    settingsRowLabel(
-                        icon: "rectangle.on.rectangle.angled",
-                        title: "Show pages",
-                        subtitle: "Display the page switcher pill on the canvas."
+                settingsToggleContent(
+                    icon: "map",
+                    title: "Show minimap",
+                    subtitle: "Display the map button for quick navigation.",
+                    isOn: Binding(
+                        get: { settings.canvasMinimapVisible },
+                        set: { settings.canvasMinimapVisible = $0 }
                     )
-                }
-                .toggleStyle(.switch)
-
-                Divider()
-
-                Toggle(isOn: Binding(
-                    get: { settings.canvasMinimapVisible },
-                    set: { settings.canvasMinimapVisible = $0 }
-                )) {
-                    settingsRowLabel(
-                        icon: "map",
-                        title: "Show minimap",
-                        subtitle: "Display the map button for quick navigation."
-                    )
-                }
-                .toggleStyle(.switch)
+                )
             }
             .padding(12)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 
+    #if os(macOS)
+    // MARK: - macOS Shortcuts
+    private var macShortcutsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("MACOS SHORTCUTS")
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showMacShortcuts.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        settingsRowLabel(
+                            icon: "keyboard",
+                            title: "Keyboard shortcuts",
+                            subtitle: showMacShortcuts ? "Hide the Mac shortcut list." : "Show the Mac shortcut list."
+                        )
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(showMacShortcuts ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if showMacShortcuts {
+                    VStack(spacing: 8) {
+                        shortcutRow("⌘K", "Command palette")
+                        shortcutRow("T", "Add text")
+                        shortcutRow("N", "Sticky note")
+                        shortcutRow("D", "Drawing mode")
+                        shortcutRow("S", "Shape")
+                        shortcutRow("L", "Lasso")
+                        shortcutRow("M", "Toggle minimap")
+                        shortcutRow("P", "Toggle pages")
+                        shortcutRow("⌘D", "Duplicate selected item")
+                        shortcutRow("⌫", "Delete selected item")
+                        shortcutRow("↑ ↓ ← →", "Nudge selected item")
+                        shortcutRow("⇧ + arrows", "Bigger nudge")
+                        shortcutRow("⌘G", "Group selected items")
+                        shortcutRow("⌘⇧G", "Ungroup")
+                        shortcutRow("[ / ]", "Send backward or forward")
+                        shortcutRow("Esc", "Exit mode or close floating controls")
+                        shortcutRow("Space + drag", "Pan canvas")
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(12)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func shortcutRow(_ shortcut: String, _ title: String) -> some View {
+        HStack(spacing: 12) {
+            Text(shortcut)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.primary)
+                .frame(width: 86, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+    #endif
+
     // MARK: - Drawing
     private var drawingSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             label("DRAWING")
             VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: Binding(
-                    get: { settings.smartShapeSnappingEnabled },
-                    set: { settings.smartShapeSnappingEnabled = $0 }
-                )) {
-                    settingsRowLabel(
-                        icon: "pencil.and.outline",
-                        title: "Smart shapes",
-                        subtitle: "Straighten lines and clean up simple shapes while drawing."
+                settingsToggleContent(
+                    icon: "pencil.and.outline",
+                    title: "Smart shapes",
+                    subtitle: "Straighten lines and clean up simple shapes while drawing.",
+                    isOn: Binding(
+                        get: { settings.smartShapeSnappingEnabled },
+                        set: { settings.smartShapeSnappingEnabled = $0 }
                     )
-                }
-                .toggleStyle(.switch)
+                )
 
                 Divider()
 
-                Toggle(isOn: Binding(
-                    get: { settings.handwritingToTextEnabled },
-                    set: { settings.handwritingToTextEnabled = $0 }
-                )) {
-                    settingsRowLabel(
-                        icon: "textformat.abc.dottedunderline",
-                        title: "Handwriting to text",
-                        subtitle: "Show a separate Write tool that converts handwriting into editable text."
+                settingsToggleContent(
+                    icon: "textformat.abc.dottedunderline",
+                    title: "Handwriting to text",
+                    subtitle: "Show a separate Write tool that converts handwriting into editable text.",
+                    isOn: Binding(
+                        get: { settings.handwritingToTextEnabled },
+                        set: { settings.handwritingToTextEnabled = $0 }
                     )
-                }
-                .toggleStyle(.switch)
+                )
 
                 if settings.handwritingToTextEnabled {
                     VStack(alignment: .leading, spacing: 8) {
@@ -718,6 +764,22 @@ struct SettingsSheet: View {
         }
     }
 
+    // MARK: - Media
+    private var mediaSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("MEDIA")
+            settingsToggleCard(
+                icon: "rectangle.on.rectangle",
+                title: "Floating YouTube player",
+                subtitle: "Keep the playing video pinned to the screen while you pan, zoom, or move around the canvas.",
+                isOn: Binding(
+                    get: { settings.floatingYouTubePlaybackEnabled },
+                    set: { settings.floatingYouTubePlaybackEnabled = $0 }
+                )
+            )
+        }
+    }
+
     // MARK: - Canvas actions
     private var canvasActionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -778,29 +840,15 @@ struct SettingsSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             label("SELECTION")
             VStack(alignment: .leading, spacing: 8) {
-                Toggle(isOn: Binding(
-                    get: { settings.overlapStackPickerEnabled },
-                    set: { settings.overlapStackPickerEnabled = $0 }
-                )) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "square.3.layers.3d")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.accentColor)
-                            .frame(width: 18, height: 18)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Overlapping item picker")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text("When several items overlap, tapping that spot can show a small picker so you can choose the item behind the front one. It only checks the stack while this is enabled.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .toggleStyle(.switch)
-                .padding(12)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                settingsToggleCard(
+                    icon: "square.3.layers.3d",
+                    title: "Overlapping item picker",
+                    subtitle: "When several items overlap, tapping that spot can show a small picker so you can choose the item behind the front one. It only checks the stack while this is enabled.",
+                    isOn: Binding(
+                        get: { settings.overlapStackPickerEnabled },
+                        set: { settings.overlapStackPickerEnabled = $0 }
+                    )
+                )
             }
         }
     }
@@ -1376,6 +1424,27 @@ struct SettingsSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func settingsToggleContent(icon: String, title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            settingsRowLabel(icon: icon, title: title, subtitle: subtitle)
+                .layoutPriority(1)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .fixedSize()
+                .accessibilityLabel(title)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func settingsToggleCard(icon: String, title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        settingsToggleContent(icon: icon, title: title, subtitle: subtitle, isOn: isOn)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func optionCard(title: String, icon: String, isSelected: Bool, isProFeature: Bool = false, action: @escaping () -> Void) -> some View {

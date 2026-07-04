@@ -271,6 +271,7 @@ class ImageElementViewModel: ObservableObject {
         textElement.strokeColorName = "none"
         textElement.zIndex = zIndex
         textElement.updatedAt = Date()
+        textElement.rebuildRichTextFromLegacyStyle()
         context.insert(textElement)
         try? context.save()
         Task { await TextSyncService.shared.upsert(textElement) }
@@ -298,6 +299,7 @@ class ImageElementViewModel: ObservableObject {
                 el.strokeColorName = "none"
                 el.zIndex = zIndex
                 el.updatedAt = Date()
+                el.rebuildRichTextFromLegacyStyle()
                 context.insert(el)
                 try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }

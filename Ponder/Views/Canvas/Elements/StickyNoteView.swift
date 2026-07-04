@@ -96,7 +96,6 @@ struct StickyNoteView: View {
     private var noteBody: some View {
         ZStack(alignment: .topLeading) {
             FoldedRectangle(foldSize: activeFoldSize).fill(palette.background)
-                .shadow(color: .black.opacity(0.18), radius: 6, x: 2, y: 4)
             stickyTextEditor
                 .padding(note.isCollapsed
                          ? EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: activeFoldSize + 10)
@@ -231,7 +230,6 @@ struct StickyNoteView: View {
                 path.closeSubpath()
             }
             .fill(palette.foldShadow)
-            .shadow(color: .black.opacity(0.15), radius: 1, x: -1, y: 1)
         }.allowsHitTesting(false)
     }
 
@@ -249,7 +247,6 @@ struct StickyNoteView: View {
                     .foregroundStyle(Color.primary.opacity(0.72))
                     .frame(width: 24, height: 24)
                     .background(.regularMaterial, in: Circle())
-                    .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
             }
             .buttonStyle(.plain)
             .help(note.isCollapsed ? "Expand" : "Collapse")
@@ -277,7 +274,6 @@ struct StickyNoteView: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2)
         .frame(maxHeight: .infinity, alignment: .top).offset(y: -32)
     }
 
@@ -343,7 +339,6 @@ struct StickyNoteView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
         }
     }

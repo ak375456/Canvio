@@ -25,7 +25,7 @@ struct EditTextSheet: View {
     @State private var isImportingFont: Bool    = false
     @State private var fontImportError: String?
     @State private var showPaywall: Bool        = false
-    @StateObject private var textEditing        = EditableTextBehavior()
+    @StateObject private var richTextState      = RichTextEditingState()
     @ObservedObject private var pro             = ProManager.shared
     @ObservedObject private var customFontStore = CustomFontStore.shared
     @FocusState private var focused: Bool
@@ -51,7 +51,8 @@ struct EditTextSheet: View {
             saveButton
         }
         .onAppear {
-            textEditing.load(element.text)
+            richTextState.load(element.resolvedRichTextDocument)
+            applySelectionSummary(richTextState.selectionSummary)
             selectedColor  = element.colorName
             selectedFont   = element.fontName
             fontSize       = element.fontSize
@@ -63,6 +64,12 @@ struct EditTextSheet: View {
             strokeColorName = element.strokeColorName
             strokeWidth    = element.strokeWidth
             focused        = true
+        }
+        .onChange(of: richTextState.selectionSummary) { _, summary in
+            applySelectionSummary(summary)
+        }
+        .onChange(of: richTextState.document.paragraph.alignmentRaw) { _, _ in
+            alignment = richTextState.document.paragraph.textAlignment
         }
         .fileImporter(
             isPresented: $isImportingFont,
@@ -111,14 +118,7 @@ struct EditTextSheet: View {
     private var textField: some View {
         VStack(alignment: .leading, spacing: 8) {
             label("TEXT")
-            PastePreservingTextEditor(
-                text: $textEditing.draft,
-                fontName: selectedFont,
-                fontSize: fontSize,
-                isBold: isBold,
-                isItalic: isItalic,
-                isFocused: focused
-            )
+            RichTextEditor(state: richTextState, isFocused: focused)
                 .frame(minHeight: 80, maxHeight: 200)
                 .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
             Divider()
@@ -159,7 +159,10 @@ struct EditTextSheet: View {
 
     private func fontChip(font: AppFont) -> some View {
         let isSelected = selectedFont == font.name
-        return Button { selectedFont = font.name } label: {
+        return Button {
+            selectedFont = font.name
+            richTextState.setFontName(font.name)
+        } label: {
             Text(font.displayName)
                 .font(font.name == "system" ? .system(size: 15, weight: .medium) : .custom(font.name, size: 16))
                 .lineLimit(1)
@@ -209,16 +212,16 @@ struct EditTextSheet: View {
                 fontSizePresetMenu
             }
             HStack(spacing: 12) {
-                Button { fontSize = max(10, fontSize - 2) } label: {
+                Button { setSelectionFontSize(max(TextStyle.minimumFontSize, fontSize - 2)) } label: {
                     Image(systemName: "minus.circle").font(.title3).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
                 Slider(
-                    value: $fontSize,
+                    value: fontSizeBinding,
                     in: TextStyle.minimumFontSize...TextStyle.maximumFontSize,
                     step: 1
                 )
                 .tint(.accentColor)
-                Button { fontSize = TextStyle.clampedFontSize(fontSize + fontSizeStep) } label: {
+                Button { setSelectionFontSize(TextStyle.clampedFontSize(fontSize + fontSizeStep)) } label: {
                     Image(systemName: "plus.circle").font(.title3).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
             }
@@ -230,23 +233,34 @@ struct EditTextSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             label("STYLE")
             HStack(spacing: 10) {
-                styleToggle(title: "Bold",      icon: "bold",      isOn: $isBold)
-                styleToggle(title: "Italic",    icon: "italic",    isOn: $isItalic)
-                styleToggle(title: "Underline", icon: "underline", isOn: $isUnderline)
+                styleButton(title: "Bold", icon: "bold", isActive: isBold) {
+                    richTextState.toggleBold()
+                }
+                styleButton(title: "Italic", icon: "italic", isActive: isItalic) {
+                    richTextState.toggleItalic()
+                }
+                styleButton(title: "Underline", icon: "underline", isActive: isUnderline) {
+                    richTextState.toggleUnderline()
+                }
             }
         }
     }
 
-    private func styleToggle(title: String, icon: String, isOn: Binding<Bool>) -> some View {
-        Button { isOn.wrappedValue.toggle() } label: {
+    private func styleButton(
+        title: String,
+        icon: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 14, weight: .semibold))
                 Text(title).font(.subheadline.weight(.medium))
             }
-            .foregroundStyle(isOn.wrappedValue ? .white : Color.primary)
+            .foregroundStyle(isActive ? .white : Color.primary)
             .padding(.horizontal, 16).padding(.vertical, 10)
             .background(RoundedRectangle(cornerRadius: 10)
-                .fill(isOn.wrappedValue ? Color.accentColor : Color.secondary.opacity(0.12)))
+                .fill(isActive ? Color.accentColor : Color.secondary.opacity(0.12)))
         }.buttonStyle(.plain)
     }
 
@@ -264,7 +278,10 @@ struct EditTextSheet: View {
 
     private func alignButton(_ value: TextAlignment, icon: String, title: String) -> some View {
         let active = alignment == value
-        return Button { alignment = value } label: {
+        return Button {
+            alignment = value
+            richTextState.setAlignment(value)
+        } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 14, weight: .semibold))
                 Text(title).font(.subheadline.weight(.medium))
@@ -283,7 +300,10 @@ struct EditTextSheet: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(TextStyle.colorOptions, id: \.name) { option in
-                        Button { selectedColor = option.name } label: {
+                        Button {
+                            selectedColor = option.name
+                            richTextState.setColor(option.name)
+                        } label: {
                             ZStack {
                                 Circle().fill(option.color).frame(width: 32, height: 32)
                                     .overlay(Circle().strokeBorder(Color.primary.opacity(option.name == "white" ? 0.28 : 0.08), lineWidth: 1))
@@ -342,7 +362,6 @@ struct EditTextSheet: View {
                             Button { bgColorName = option.name } label: {
                                 ZStack {
                                     Circle().fill(option.color).frame(width: 32, height: 32)
-                                        .shadow(color: .black.opacity(0.1), radius: 2)
                                     if bgColorName == option.name {
                                         Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
                                         Image(systemName: "checkmark")
@@ -375,7 +394,6 @@ struct EditTextSheet: View {
                             Button { strokeColorName = option.name } label: {
                                 ZStack {
                                     Circle().fill(option.color).frame(width: 32, height: 32)
-                                        .shadow(color: .black.opacity(0.1), radius: 2)
                                     if strokeColorName == option.name {
                                         Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
                                         Image(systemName: "checkmark")
@@ -411,7 +429,7 @@ struct EditTextSheet: View {
             if bgColorName != "none" || strokeColorName != "none" {
                 HStack {
                     Spacer()
-                    Text(textEditing.draft.isEmpty ? "Preview" : String(textEditing.draft.prefix(20)))
+                    Text(richTextPreviewText)
                         .font(previewFont)
                         .foregroundStyle(colorFromName(selectedColor))
                         .padding(12)
@@ -438,29 +456,24 @@ struct EditTextSheet: View {
     // MARK: - Save
     private var saveButton: some View {
         Button {
-            let trimmed = textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            let document = richTextState.document.normalized
+            let trimmed = document.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            element.text            = trimmed
-            element.fontSize        = TextStyle.clampedFontSize(fontSize)
-            element.isBold          = isBold
-            element.isItalic        = isItalic
-            element.isUnderline     = isUnderline
-            element.textAlignment   = alignment
-            element.colorName       = selectedColor
-            element.fontName        = selectedFont
+            element.setRichTextDocument(document)
             element.bgColorName     = bgColorName
             element.strokeColorName = strokeColorName
             element.strokeWidth     = strokeWidth
             element.updatedAt       = Date()
             try? context.save()
+            let rememberedAttrs = richTextState.selectionSummary.attributes
             var style = TextStyle(
                 text: trimmed,
-                fontSize: fontSize,
-                isBold: isBold,
-                isItalic: isItalic,
-                isUnderline: isUnderline,
-                colorName: selectedColor,
-                fontName: selectedFont
+                fontSize: rememberedAttrs.fontSize,
+                isBold: rememberedAttrs.isBold,
+                isItalic: rememberedAttrs.isItalic,
+                isUnderline: rememberedAttrs.isUnderline,
+                colorName: rememberedAttrs.colorName,
+                fontName: rememberedAttrs.fontName
             )
             style.textAlignment = alignment
             style.bgColorName = bgColorName
@@ -470,20 +483,49 @@ struct EditTextSheet: View {
             Task { await TextSyncService.shared.upsert(element) }
             dismiss()
         } label: {
-            let empty = textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let empty = richTextState.document.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             Text("Save Changes")
                 .font(.body.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 14)
                 .background(empty ? Color.secondary.opacity(0.2) : Color.accentColor)
                 .foregroundStyle(empty ? Color.secondary : Color.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .disabled(textEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(richTextState.document.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         .padding(.horizontal, 24).padding(.vertical, 16)
     }
 
     // MARK: - Helpers
     private func label(_ text: String) -> some View {
         Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary).tracking(1)
+    }
+
+    private func applySelectionSummary(_ summary: RichTextSelectionSummary) {
+        let attrs = summary.attributes
+        selectedColor = attrs.colorName
+        selectedFont = attrs.fontName
+        fontSize = TextStyle.clampedFontSize(attrs.fontSize)
+        isBold = attrs.isBold
+        isItalic = attrs.isItalic
+        isUnderline = attrs.isUnderline
+        alignment = richTextState.document.paragraph.textAlignment
+    }
+
+    private var fontSizeBinding: Binding<Double> {
+        Binding(
+            get: { fontSize },
+            set: { setSelectionFontSize($0) }
+        )
+    }
+
+    private func setSelectionFontSize(_ size: Double) {
+        let clamped = TextStyle.clampedFontSize(size)
+        fontSize = clamped
+        richTextState.setFontSize(clamped)
+    }
+
+    private var richTextPreviewText: String {
+        let plain = richTextState.document.plainText
+        return plain.isEmpty ? "Preview" : String(plain.prefix(20))
     }
 
     private var fontSizeStep: Double {
@@ -493,7 +535,7 @@ struct EditTextSheet: View {
     private var fontSizePresetMenu: some View {
         Menu {
             ForEach([10, 12, 14, 16, 18, 24, 32, 48, 72, 96, 144, 192, 240], id: \.self) { size in
-                Button("\(size) pt") { fontSize = Double(size) }
+                Button("\(size) pt") { setSelectionFontSize(Double(size)) }
             }
         } label: {
             HStack(spacing: 4) {
@@ -510,7 +552,11 @@ struct EditTextSheet: View {
     private var customTextColorBinding: Binding<Color> {
         Binding(
             get: { colorFromName(selectedColor) },
-            set: { selectedColor = TextStyle.storageName(for: $0, fallback: selectedColor) }
+            set: {
+                let colorName = TextStyle.storageName(for: $0, fallback: selectedColor)
+                selectedColor = colorName
+                richTextState.setColor(colorName)
+            }
         )
     }
 
@@ -542,6 +588,7 @@ struct EditTextSheet: View {
             do {
                 let importedFont = try customFontStore.importFont(from: url)
                 selectedFont = importedFont.name
+                richTextState.setFontName(importedFont.name)
             } catch {
                 fontImportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }

@@ -90,7 +90,6 @@ struct PDFPageElementView: View {
             isSelected && !isMultiSelectMode ? Color.accentColor : Color.black.opacity(0.14),
             lineWidth: isSelected && !isMultiSelectMode ? 2 : 1
         ))
-        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isMultiSelectMode, !isCanvasGestureActive else { return }
@@ -194,7 +193,6 @@ struct PDFPageElementView: View {
     private func handle(icon: String, color: Color) -> some View {
         Circle().fill(color).frame(width: 28, height: 28)
             .overlay(Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white))
-            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
     }
 
     private func loadPage() {

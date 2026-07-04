@@ -81,7 +81,6 @@ struct AddElementMenu: View {
             RoundedRectangle(cornerRadius: 16)
                 .strokeBorder(.separator.opacity(0.3), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 8)
         .position(adjustedPosition)
         .transition(.scale(scale: 0.85).combined(with: .opacity))
     }

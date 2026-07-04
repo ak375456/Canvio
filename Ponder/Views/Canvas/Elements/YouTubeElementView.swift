@@ -20,6 +20,7 @@ struct YouTubeElementView: View {
     @ObservedObject var vm: YouTubeElementViewModel
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
+    var usesFloatingPlayback: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
 
@@ -62,7 +63,7 @@ struct YouTubeElementView: View {
 
     private var card: some View {
         ZStack {
-            if isPlaying {
+            if isPlaying && !usesFloatingPlayback {
                 YouTubePlayerWebView(
                     videoID: element.videoID,
                     startSeconds: element.playbackSeconds,
@@ -76,6 +77,12 @@ struct YouTubeElementView: View {
             } else {
                 preview
             }
+
+            if isPlaying && usesFloatingPlayback {
+                floatingPlaybackBadge
+                    .padding(10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
         }
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
@@ -84,7 +91,6 @@ struct YouTubeElementView: View {
                 .strokeBorder(isSelected && !isMultiSelectMode ? Color.red.opacity(0.7) : Color.secondary.opacity(0.2),
                               lineWidth: isSelected && !isMultiSelectMode ? 2 : 1)
         )
-        .shadow(color: .black.opacity(0.1), radius: 9, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isMultiSelectMode, !isCanvasGestureActive else { return }
@@ -141,22 +147,38 @@ struct YouTubeElementView: View {
 
                 Spacer()
 
-                Button {
-                    guard !isCanvasGestureActive else { return }
-                    onExternalTap?()
-                    vm.editingID = element.id
-                    stopToken = nil
-                    vm.activePlayingID = element.id
-                } label: {
-                    ZStack {
-                        Circle().fill(Color.red).frame(width: 48, height: 48)
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 19, weight: .bold))
-                            .foregroundStyle(.white)
-                            .offset(x: 2)
+                if isPlaying && usesFloatingPlayback {
+                    Button {
+                        vm.requestStopPlayback(for: element.id)
+                    } label: {
+                        ZStack {
+                            Circle().fill(Color.black.opacity(0.48)).frame(width: 48, height: 48)
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop floating YouTube playback")
+                } else {
+                    Button {
+                        guard !isCanvasGestureActive else { return }
+                        onExternalTap?()
+                        vm.editingID = element.id
+                        stopToken = nil
+                        vm.activePlayingID = element.id
+                    } label: {
+                        ZStack {
+                            Circle().fill(Color.red).frame(width: 48, height: 48)
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 19, weight: .bold))
+                                .foregroundStyle(.white)
+                                .offset(x: 2)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Play YouTube video")
                 }
-                .buttonStyle(.plain)
 
                 Spacer()
 
@@ -169,6 +191,19 @@ struct YouTubeElementView: View {
                     .padding(.bottom, 10)
             }
         }
+    }
+
+    private var floatingPlaybackBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "rectangle.on.rectangle")
+                .font(.system(size: 10, weight: .bold))
+            Text("Floating")
+                .font(.system(size: 10, weight: .bold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.black.opacity(0.46), in: Capsule())
     }
 
     private var fallbackThumbnail: some View {
@@ -229,7 +264,6 @@ struct YouTubeElementView: View {
             Circle()
                 .fill(color)
                 .frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.22), radius: 4, x: 0, y: 2)
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.white)
@@ -257,7 +291,7 @@ struct YouTubeElementView: View {
     }
 
     private var canMove: Bool {
-        isSelected && !isMultiSelectMode && !isCanvasGestureActive && !isPlaying
+        isSelected && !isMultiSelectMode && !isCanvasGestureActive && (!isPlaying || usesFloatingPlayback)
     }
 }
 

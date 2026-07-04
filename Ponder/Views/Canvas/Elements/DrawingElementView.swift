@@ -99,8 +99,6 @@ struct DrawingElementView: View {
         ZStack {
             RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12)
                 .fill(cardBackground)
-                .shadow(color: element.isCanvasDrawing ? .clear : .black.opacity(isSelected ? 0.15 : 0.07),
-                        radius: isSelected ? 10 : 5, x: 0, y: 3)
 
             DrawingCanvasView(
                 drawing: element.pkDrawing,
@@ -203,7 +201,7 @@ struct DrawingElementView: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2).fixedSize()
+        .fixedSize()
     }
 
     private var clearDrawingButton: some View {
@@ -225,7 +223,6 @@ struct DrawingElementView: View {
             }
             .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 7)
             .background(Color.orange, in: Capsule())
-            .shadow(color: .orange.opacity(0.4), radius: 6, x: 0, y: 2)
         }.buttonStyle(.plain).fixedSize()
     }
 
@@ -288,7 +285,6 @@ struct DrawingElementView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleVisualSize, height: handleVisualSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
         }
     }

@@ -229,7 +229,6 @@ struct ShapeElementView: View {
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2)
     }
 
     private var strokeStyleMenu: some View {
@@ -504,7 +503,6 @@ struct ShapeElementView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
         }
     }

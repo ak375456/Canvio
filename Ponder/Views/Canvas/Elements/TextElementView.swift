@@ -108,7 +108,7 @@ struct TextElementView: View {
     // MARK: - Text layer
 
     private var textLayer: some View {
-        styledText(element.text)
+        styledText(element.resolvedRichTextDocument)
             .multilineTextAlignment(element.textAlignment)
             .padding(element.hasCard ? 16 : 10)
             .fixedSize()
@@ -126,9 +126,13 @@ struct TextElementView: View {
                 guard !isMultiSelectMode, !isCanvasGestureActive else { return }
                 onExternalTap?()
                 vm.editingID       = element.id
-                vm.inlineEditingID = element.id
-                inlineEditing.load(element.text, force: true)
-                inlineFocused      = true
+                if element.hasPartialRichTextStyling {
+                    showEditSheet = true
+                } else {
+                    vm.inlineEditingID = element.id
+                    inlineEditing.load(element.text, force: true)
+                    inlineFocused      = true
+                }
             }
     }
 
@@ -153,7 +157,6 @@ struct TextElementView: View {
                         )
                     : nil
                 )
-                .shadow(color: .black.opacity(hasBg ? 0.12 : 0), radius: 6, x: 0, y: 3)
         } else if isSelected && !isMultiSelectMode {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.accentColor.opacity(0.06))
@@ -168,7 +171,7 @@ struct TextElementView: View {
 
     private var inlineEditor: some View {
         ZStack(alignment: .center) {
-            styledText(inlineEditing.draft.isEmpty ? "Tap to type..." : inlineEditing.draft)
+            styledText(inlinePreviewDocument)
                 .padding(12).fixedSize().opacity(0).background(sizeReader)
 
             TextEditor(text: $inlineEditing.draft)
@@ -203,7 +206,6 @@ struct TextElementView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Color.accentColor, in: Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             }
             .buttonStyle(.plain)
             .scaleEffect(1.0 / canvasScale)
@@ -330,7 +332,6 @@ struct TextElementView: View {
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.regularMaterial)
-                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 3)
         )
         .fixedSize(horizontal: true, vertical: true)
     }
@@ -427,7 +428,6 @@ struct TextElementView: View {
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(.regularMaterial)
-                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
         )
         .fixedSize()
     }
@@ -449,7 +449,6 @@ struct TextElementView: View {
                           action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Circle().fill(option.color).frame(width: 22, height: 22)
-                .shadow(color: .black.opacity(0.1), radius: 2)
                 .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: 2).opacity(selected ? 1 : 0))
         }
         .buttonStyle(.plain)
@@ -561,18 +560,14 @@ struct TextElementView: View {
                 }
                 .onEnded { value in
                     let delta = (value.translation.width + value.translation.height) / 2
-                    element.fontSize = TextStyle.clampedFontSize(
-                        element.fontSize + delta * 0.15
-                    )
+                    vm.adjustFontSize(by: delta * 0.15, element: element, context: context)
                     resizeDelta = 0
-                    try? context.save()
                 })
     }
 
     private func handleAppearance(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon)
                 .font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
         }
@@ -617,27 +612,10 @@ struct TextElementView: View {
 
     // MARK: - Text rendering
 
-    @ViewBuilder
-    private func styledText(_ string: String) -> some View {
-        if element.isUnderline {
-            Text(underlinedString(string))
-                .font(elementFont)
-                .foregroundStyle(vm.colorFromName(element.colorName))
-                .multilineTextAlignment(element.textAlignment)
-                .lineLimit(nil)
-        } else {
-            Text(string)
-                .font(elementFont)
-                .foregroundStyle(vm.colorFromName(element.colorName))
-                .multilineTextAlignment(element.textAlignment)
-                .lineLimit(nil)
-        }
-    }
-
-    private func underlinedString(_ string: String) -> AttributedString {
-        var attr = AttributedString(string)
-        attr.underlineStyle = .single
-        return attr
+    private func styledText(_ document: RichTextDocument) -> some View {
+        Text(document.attributedString(fontSizeDelta: Double(resizeDelta) * 0.15))
+            .multilineTextAlignment(document.paragraph.textAlignment)
+            .lineLimit(nil)
     }
 
     private var elementFont: Font {
@@ -654,5 +632,12 @@ struct TextElementView: View {
 
     private var fontSizeStep: Double {
         element.fontSize >= 72 ? 8 : 2
+    }
+
+    private var inlinePreviewDocument: RichTextDocument {
+        element.resolvedRichTextDocument.replacingPlainText(
+            inlineEditing.draft.isEmpty ? "Tap to type..." : inlineEditing.draft,
+            attributes: element.baseRichTextAttributes
+        )
     }
 }

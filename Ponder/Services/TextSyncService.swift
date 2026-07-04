@@ -23,6 +23,7 @@ private struct TextElementRow: Codable {
     let color_name:        String
     let font_name:         String
     let alignment_raw:     String
+    let rich_text:         RichTextDocument?
     let z_index:           Int
     let group_id:          String?
     let created_at:        String
@@ -162,6 +163,7 @@ final class TextSyncService {
                         local.colorName       = row.color_name
                         local.fontName        = row.font_name
                         local.alignmentRaw    = row.alignment_raw
+                        local.setRichTextDocument(richTextDocument(from: row))
                         local.zIndex          = row.z_index
                         local.groupID         = row.group_id.flatMap { UUID(uuidString: $0) }
                         local.bgColorName     = row.bg_color_name
@@ -183,6 +185,7 @@ final class TextSyncService {
                     el.colorName      = row.color_name
                     el.fontName       = row.font_name
                     el.alignmentRaw   = row.alignment_raw
+                    el.setRichTextDocument(richTextDocument(from: row))
                     el.zIndex         = row.z_index
                     el.groupID        = row.group_id.flatMap { UUID(uuidString: $0) }
                     el.bgColorName    = row.bg_color_name
@@ -240,11 +243,12 @@ final class TextSyncService {
     // MARK: - Helpers
 
     private func makeRow(element: TextElementModel, userID: String) -> TextElementRow {
+        let richText = element.resolvedRichTextDocument.normalized
         return TextElementRow(
             id:                element.id.uuidString,
             canvas_id:         element.canvasID.uuidString,
             user_id:           userID,
-            text:              element.text,
+            text:              richText.plainText,
             x:                 element.x,
             y:                 element.y,
             font_size:         element.fontSize,
@@ -254,6 +258,7 @@ final class TextSyncService {
             color_name:        element.colorName,
             font_name:         element.fontName,
             alignment_raw:     element.alignmentRaw,
+            rich_text:         richText,
             z_index:           element.zIndex,
             group_id:          element.groupID?.uuidString,
             created_at:        iso.string(from: element.updatedAt),
@@ -265,6 +270,23 @@ final class TextSyncService {
             source_pdf_document_id: element.sourcePDFDocumentID?.uuidString,
             source_pdf_page_index: element.sourcePDFPageIndex,
             source_pdf_rects: element.sourcePDFDocumentID == nil ? nil : element.sourcePDFRects
+        )
+    }
+
+    private func richTextDocument(from row: TextElementRow) -> RichTextDocument {
+        if let document = row.rich_text?.normalized,
+           !document.runs.isEmpty || row.text.isEmpty {
+            return document
+        }
+        return RichTextDocument.legacy(
+            text: row.text,
+            fontSize: row.font_size,
+            isBold: row.is_bold,
+            isItalic: row.is_italic,
+            isUnderline: row.is_underline,
+            colorName: row.color_name,
+            fontName: row.font_name,
+            alignmentRaw: row.alignment_raw
         )
     }
 }

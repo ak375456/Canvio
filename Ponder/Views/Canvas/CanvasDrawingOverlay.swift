@@ -198,7 +198,6 @@ struct CanvasDrawingOverlay: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, usesCompactToolbar ? 12 : 16).padding(.vertical, 9)
                 .background(Color.orange, in: Capsule())
-                .shadow(color: .orange.opacity(0.35), radius: 6, x: 0, y: 2)
             }
             .buttonStyle(.plain)
 
@@ -714,7 +713,6 @@ struct CanvasDrawingOverlay: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
                 .background(Color.orange, in: Capsule())
-                .shadow(color: .orange.opacity(0.35), radius: 6, x: 0, y: 2)
             }
             .buttonStyle(.plain)
 

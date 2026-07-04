@@ -73,7 +73,6 @@ struct MultiSelectBar: View {
         }
         .frame(height: 44)
         .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
         .fixedSize()
     }
 }

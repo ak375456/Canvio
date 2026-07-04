@@ -345,7 +345,6 @@ struct AddTextSheet: View {
                             Button { bgColorName = option.name } label: {
                                 ZStack {
                                     Circle().fill(option.color).frame(width: 32, height: 32)
-                                        .shadow(color: .black.opacity(0.1), radius: 2)
                                     if bgColorName == option.name {
                                         Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
                                         Image(systemName: "checkmark")
@@ -379,7 +378,6 @@ struct AddTextSheet: View {
                             Button { strokeColorName = option.name } label: {
                                 ZStack {
                                     Circle().fill(option.color).frame(width: 32, height: 32)
-                                        .shadow(color: .black.opacity(0.1), radius: 2)
                                     if strokeColorName == option.name {
                                         Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 36, height: 36)
                                         Image(systemName: "checkmark")

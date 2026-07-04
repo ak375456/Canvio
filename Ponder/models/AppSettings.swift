@@ -419,6 +419,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.canvasTopBarVisible") private var canvasTopBarVisibleRaw: Bool = true
     @AppStorage("ponder.canvasPagesPanelVisible") private var canvasPagesPanelVisibleRaw: Bool = true
     @AppStorage("ponder.canvasMinimapVisible") private var canvasMinimapVisibleRaw: Bool = true
+    @AppStorage("ponder.floatingYouTubePlaybackEnabled") private var floatingYouTubePlaybackEnabledRaw: Bool = true
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
@@ -485,6 +486,11 @@ class AppSettings: ObservableObject {
     var canvasMinimapVisible: Bool {
         get { canvasMinimapVisibleRaw }
         set { canvasMinimapVisibleRaw = newValue; objectWillChange.send() }
+    }
+
+    var floatingYouTubePlaybackEnabled: Bool {
+        get { floatingYouTubePlaybackEnabledRaw }
+        set { floatingYouTubePlaybackEnabledRaw = newValue; objectWillChange.send() }
     }
 
     var gridStyle: GridStyle {

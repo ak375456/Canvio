@@ -122,12 +122,105 @@ struct MacScrollInterceptor: NSViewRepresentable {
     }
 }
 
+/// Hosts a lightweight AppKit key monitor for canvas shortcuts without making
+/// the SwiftUI canvas focusable. This avoids the macOS focus ring around the
+/// whole drawing surface while still letting text fields receive typed input.
+struct MacKeyboardShortcutMonitor: NSViewRepresentable {
+    var isEnabled: Bool
+    var onKeyEvent: (_ event: NSEvent, _ viewportSize: CGSize) -> Bool
+
+    func makeNSView(context: Context) -> KeyMonitorView {
+        let view = KeyMonitorView()
+        view.isEnabled = isEnabled
+        view.onKeyEvent = onKeyEvent
+        return view
+    }
+
+    func updateNSView(_ nsView: KeyMonitorView, context: Context) {
+        nsView.isEnabled = isEnabled
+        nsView.onKeyEvent = onKeyEvent
+        nsView.refreshMonitor()
+    }
+
+    static func dismantleNSView(_ nsView: KeyMonitorView, coordinator: ()) {
+        nsView.removeMonitor()
+    }
+
+    final class KeyMonitorView: NSView {
+        var isEnabled = true
+        var onKeyEvent: ((NSEvent, CGSize) -> Bool)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            refreshMonitor()
+        }
+
+        deinit {
+            removeMonitor()
+        }
+
+        func refreshMonitor() {
+            if window == nil {
+                removeMonitor()
+            } else if monitor == nil {
+                installMonitor()
+            }
+        }
+
+        private func installMonitor() {
+            removeMonitor()
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+                guard let self, self.shouldHandle(event) else { return event }
+                let handled = self.onKeyEvent?(event, self.bounds.size) ?? false
+                return handled ? nil : event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        private func shouldHandle(_ event: NSEvent) -> Bool {
+            guard isEnabled,
+                  let window,
+                  let eventWindow = event.window,
+                  eventWindow === window
+            else { return false }
+
+            guard window.attachedSheet == nil else { return false }
+
+            if let responder = window.firstResponder,
+               responder is NSTextView || responder is NSTextField || responder is NSComboBox {
+                return false
+            }
+
+            if let hitView = window.contentView?.hitTest(event.locationInWindow),
+               hitView.isInsideKeyboardInputView {
+                return false
+            }
+
+            return true
+        }
+    }
+}
+
 private extension NSView {
     var isInsideNativeScrollView: Bool {
         if self is NSScrollView || self is NSTextView {
             return true
         }
         return superview?.isInsideNativeScrollView ?? false
+    }
+
+    var isInsideKeyboardInputView: Bool {
+        if self is NSTextView || self is NSTextField || self is NSComboBox || self is NSSearchField {
+            return true
+        }
+        return superview?.isInsideKeyboardInputView ?? false
     }
 }
 #endif

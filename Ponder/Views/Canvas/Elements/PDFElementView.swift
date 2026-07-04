@@ -114,7 +114,6 @@ struct PDFElementView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(
             isSelected && !isMultiSelectMode ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.2),
             lineWidth: isSelected && !isMultiSelectMode ? 2 : 1))
-        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if !isMultiSelectMode && !isCanvasGestureActive {
@@ -132,7 +131,6 @@ struct PDFElementView: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.12), radius: 6, x: 0, y: 2)
         }.buttonStyle(.plain).fixedSize()
     }
 
@@ -184,7 +182,6 @@ struct PDFElementView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
         }
     }

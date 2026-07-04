@@ -47,6 +47,7 @@ class TextElementViewModel: ObservableObject {
         element.strokeWidth     = style.strokeWidth
         element.zIndex        = zIndex
         element.updatedAt     = Date()
+        element.rebuildRichTextFromLegacyStyle()
         context.insert(element)
         try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
@@ -72,6 +73,7 @@ class TextElementViewModel: ObservableObject {
                 el.strokeWidth = style.strokeWidth
                 el.zIndex = zIndex
                 el.updatedAt = Date()
+                el.rebuildRichTextFromLegacyStyle()
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }
             }
@@ -182,6 +184,7 @@ class TextElementViewModel: ObservableObject {
         element.strokeWidth = style.strokeWidth
         element.zIndex = record.zIndex
         element.updatedAt = Date()
+        element.rebuildRichTextFromLegacyStyle()
         return element
     }
 
@@ -204,6 +207,7 @@ class TextElementViewModel: ObservableObject {
         element.strokeWidth = style.strokeWidth
         element.zIndex = zIndex
         element.updatedAt = Date()
+        element.rebuildRichTextFromLegacyStyle()
         context.insert(element)
         try? context.save()
         inlineEditingID    = element.id
@@ -227,7 +231,12 @@ class TextElementViewModel: ObservableObject {
             return
         }
 
-        element.text      = trimmed
+        element.setRichTextDocument(
+            element.resolvedRichTextDocument.replacingPlainText(
+                trimmed,
+                attributes: element.baseRichTextAttributes
+            )
+        )
         element.updatedAt = Date()
         try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
@@ -271,6 +280,7 @@ class TextElementViewModel: ObservableObject {
                     el.strokeColorName = strokeColorName
                     el.strokeWidth = strokeWidth
                     el.updatedAt = Date()
+                    el.rebuildRichTextFromLegacyStyle()
                     context.insert(el); try? context.save()
                     Task { await TextSyncService.shared.upsert(el) }
                 }
@@ -297,6 +307,7 @@ class TextElementViewModel: ObservableObject {
         element.strokeColorName = "none"
         element.zIndex = zIndex
         element.updatedAt = Date()
+        element.rebuildRichTextFromLegacyStyle()
         context.insert(element)
         try? context.save()
         editingID = element.id
@@ -322,6 +333,7 @@ class TextElementViewModel: ObservableObject {
                 el.strokeColorName = "none"
                 el.zIndex = zIndex
                 el.updatedAt = Date()
+                el.rebuildRichTextFromLegacyStyle()
                 context.insert(el)
                 try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }
@@ -355,6 +367,7 @@ class TextElementViewModel: ObservableObject {
         element.sourcePDFPageIndex = payload.firstPageIndex
         element.sourcePDFRects = payload.firstPageRects
         element.updatedAt = Date()
+        element.rebuildRichTextFromLegacyStyle()
         context.insert(element)
         try? context.save()
         editingID = element.id
@@ -388,6 +401,7 @@ class TextElementViewModel: ObservableObject {
                 restored.sourcePDFPageIndex = payload.firstPageIndex
                 restored.sourcePDFRects = payload.firstPageRects
                 restored.updatedAt = Date()
+                restored.rebuildRichTextFromLegacyStyle()
                 context.insert(restored)
                 try? context.save()
                 Task { await TextSyncService.shared.upsert(restored) }
@@ -437,34 +451,67 @@ class TextElementViewModel: ObservableObject {
     // MARK: - Inline formatting
 
     func toggleBold(element: TextElementModel, context: ModelContext) {
-        element.isBold = !element.isBold; element.updatedAt = Date(); try? context.save()
-        Task { await TextSyncService.shared.upsert(element) }
+        let target = !element.isBold
+        applyRichTextStyle(element: element, context: context) { attrs in
+            attrs.isBold = target
+        }
     }
 
     func toggleItalic(element: TextElementModel, context: ModelContext) {
-        element.isItalic = !element.isItalic; element.updatedAt = Date(); try? context.save()
-        Task { await TextSyncService.shared.upsert(element) }
+        let target = !element.isItalic
+        applyRichTextStyle(element: element, context: context) { attrs in
+            attrs.isItalic = target
+        }
     }
 
     func toggleUnderline(element: TextElementModel, context: ModelContext) {
-        element.isUnderline = !element.isUnderline; element.updatedAt = Date(); try? context.save()
-        Task { await TextSyncService.shared.upsert(element) }
+        let target = !element.isUnderline
+        applyRichTextStyle(element: element, context: context) { attrs in
+            attrs.isUnderline = target
+        }
     }
 
     func setAlignment(_ alignment: TextAlignment, element: TextElementModel,
                       context: ModelContext) {
-        element.textAlignment = alignment; element.updatedAt = Date(); try? context.save()
-        Task { await TextSyncService.shared.upsert(element) }
-    }
-
-    func adjustFontSize(by delta: Double, element: TextElementModel, context: ModelContext) {
-        element.fontSize = TextStyle.clampedFontSize(element.fontSize + delta)
+        var document = element.resolvedRichTextDocument
+        document.paragraph.textAlignment = alignment
+        element.setRichTextDocument(document)
         element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
     }
 
+    func adjustFontSize(by delta: Double, element: TextElementModel, context: ModelContext) {
+        applyRichTextStyle(element: element, context: context) { attrs in
+            attrs.fontSize = TextStyle.clampedFontSize(attrs.fontSize + delta)
+        }
+    }
+
     func setColor(_ colorName: String, element: TextElementModel, context: ModelContext) {
-        element.colorName = colorName; element.updatedAt = Date(); try? context.save()
+        applyRichTextStyle(element: element, context: context) { attrs in
+            attrs.colorName = colorName
+        }
+    }
+
+    private func applyRichTextStyle(
+        element: TextElementModel,
+        context: ModelContext,
+        transform: (inout RichTextAttributes) -> Void
+    ) {
+        var document = element.resolvedRichTextDocument
+        if document.runs.isEmpty, !element.text.isEmpty {
+            document = RichTextDocument.legacy(
+                text: element.text,
+                fontSize: element.fontSize,
+                isBold: element.isBold,
+                isItalic: element.isItalic,
+                isUnderline: element.isUnderline,
+                colorName: element.colorName,
+                fontName: element.fontName,
+                alignmentRaw: element.alignmentRaw
+            )
+        }
+        element.setRichTextDocument(document.applyingToAllRuns(transform))
+        element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
     }
 
@@ -505,6 +552,7 @@ class TextElementViewModel: ObservableObject {
         copy.bgColorName    = element.bgColorName
         copy.strokeColorName = element.strokeColorName
         copy.strokeWidth    = element.strokeWidth
+        copy.richTextDocument = element.resolvedRichTextDocument
         copy.zIndex         = zIndex
         copy.updatedAt      = Date()
         context.insert(copy); try? context.save()
@@ -525,6 +573,17 @@ class TextElementViewModel: ObservableObject {
                                           x: element.x + Double(offset.width),
                                           y: element.y + Double(offset.height))
                 el.id = id; el.zIndex = zIndex; el.updatedAt = Date()
+                el.fontSize = element.fontSize
+                el.isBold = element.isBold
+                el.isItalic = element.isItalic
+                el.isUnderline = element.isUnderline
+                el.colorName = element.colorName
+                el.fontName = element.fontName
+                el.alignmentRaw = element.alignmentRaw
+                el.bgColorName = element.bgColorName
+                el.strokeColorName = element.strokeColorName
+                el.strokeWidth = element.strokeWidth
+                el.richTextDocument = element.resolvedRichTextDocument
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }
             }
@@ -543,7 +602,8 @@ class TextElementViewModel: ObservableObject {
             isUnderline: element.isUnderline, colorName: element.colorName,
             fontName: element.fontName, alignmentRaw: element.alignmentRaw,
             bgColorName: element.bgColorName, strokeColorName: element.strokeColorName,
-            strokeWidth: element.strokeWidth, zIndex: element.zIndex
+            strokeWidth: element.strokeWidth, zIndex: element.zIndex,
+            richText: element.resolvedRichTextDocument
         )
         Task { await TextSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
@@ -561,6 +621,7 @@ class TextElementViewModel: ObservableObject {
                 el.bgColorName = snap.bgColorName
                 el.strokeColorName = snap.strokeColorName
                 el.strokeWidth = snap.strokeWidth
+                el.richTextDocument = snap.richText
                 el.updatedAt = Date()
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }

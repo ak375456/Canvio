@@ -341,6 +341,7 @@ enum CanvasTemplateService {
                 element.strokeColorName = spec.strokeColorName
                 element.strokeWidth = spec.strokeWidth
                 element.zIndex = zIndex
+                element.rebuildRichTextFromLegacyStyle()
                 zIndex += 1
                 context.insert(element)
                 texts.append(element)

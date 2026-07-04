@@ -829,20 +829,12 @@ struct CanvasExportView: View {
     @ViewBuilder
     private func exportText(_ el: TextElementModel) -> some View {
         let p   = pos(el.x, el.y)
-        let fnt = makeFont(el)
-        let col = textColor(el.colorName)
         let hasBg = el.bgColorName != "none"
         let hasStroke = el.strokeColorName != "none"
         let hasCard = hasBg || hasStroke
-        let textView = Group {
-            if el.isUnderline {
-                Text(underlinedString(el.text)).font(fnt).foregroundStyle(col)
-                    .multilineTextAlignment(el.textAlignment)
-            } else {
-                Text(el.text).font(fnt).foregroundStyle(col)
-                    .multilineTextAlignment(el.textAlignment)
-            }
-        }
+        let document = el.resolvedRichTextDocument
+        let textView = Text(document.attributedString())
+            .multilineTextAlignment(document.paragraph.textAlignment)
         textView
         .lineLimit(nil)
         .padding(hasCard ? 16 : 10)

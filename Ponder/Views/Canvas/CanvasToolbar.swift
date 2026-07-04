@@ -63,7 +63,6 @@ struct CanvasToolbar: View {
         .frame(height: 78)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.18), radius: 22, x: 0, y: 12)
     }
 
     private var collapsedLayout: some View {
@@ -104,7 +103,6 @@ struct CanvasToolbar: View {
                 .frame(width: 58, height: 58)
                 .background(.ultraThinMaterial, in: Circle())
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.16), radius: 16, x: 0, y: 8)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Expand toolbar")
@@ -359,7 +357,6 @@ struct CompactCanvasToolbar: View {
                 }
             }
             .frame(width: buttonSize, height: buttonSize, alignment: .center)
-            .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 5)
             .contentShape(RoundedRectangle(cornerRadius: buttonCornerRadius))
         }
         .buttonStyle(.plain)
@@ -391,7 +388,6 @@ struct CompactCanvasToolbar: View {
                     RoundedRectangle(cornerRadius: buttonCornerRadius)
                         .strokeBorder(Color.primary.opacity(0.82), lineWidth: 2.4)
                 )
-                .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 5)
                 .contentShape(RoundedRectangle(cornerRadius: buttonCornerRadius))
         }
         .buttonStyle(.plain)

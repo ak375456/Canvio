@@ -372,22 +372,14 @@ private struct ThumbnailImageView: View {
 private struct ThumbnailTextView: View {
     let element: TextElementModel
     let scale: CGFloat
-    private var color: Color {
-        TextStyle.color(named: element.colorName)
-    }
-    private var font: Font {
-        let size = max(8, element.fontSize * Double(scale))
-        var f: Font = element.fontName == "system"
-            ? .system(size: size)
-            : .custom(element.fontName, size: size)
-        if element.isBold   { f = f.bold() }
-        if element.isItalic { f = f.italic() }
-        return f
+    private var document: RichTextDocument {
+        element.resolvedRichTextDocument.applyingToAllRuns { attrs in
+            attrs.fontSize = max(8, attrs.fontSize * Double(scale))
+        }
     }
     var body: some View {
-        Text(element.text)
-            .font(font)
-            .foregroundStyle(color)
+        Text(document.attributedString())
+            .multilineTextAlignment(document.paragraph.textAlignment)
             .lineLimit(3)
             .fixedSize()
     }

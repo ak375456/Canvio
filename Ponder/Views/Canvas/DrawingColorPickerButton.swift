@@ -37,10 +37,6 @@ struct DrawingColorPickerButton: View {
                     : AnyShapeStyle(.regularMaterial),
                 in: Capsule()
             )
-            .shadow(
-                color: isActive ? Color.accentColor.opacity(0.35) : .clear,
-                radius: 6, x: 0, y: 2
-            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isActive ? "Cancel color picking" : "Pick drawing color from canvas")

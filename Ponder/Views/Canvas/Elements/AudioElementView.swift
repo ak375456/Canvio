@@ -119,7 +119,6 @@ struct AudioElementView: View {
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(
             isSelected && !isMultiSelectMode ? Color.pink.opacity(0.6) : Color.secondary.opacity(0.2),
             lineWidth: isSelected && !isMultiSelectMode ? 2 : 1))
-        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if !isMultiSelectMode && !isSelected && !isCanvasGestureActive {
@@ -132,7 +131,6 @@ struct AudioElementView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
         }
     }

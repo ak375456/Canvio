@@ -56,7 +56,6 @@ struct CanvasPagesPanel: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.14), radius: 14, x: 0, y: 6)
         .transition(.move(edge: .leading).combined(with: .opacity))
     }
 
@@ -116,7 +115,6 @@ struct CanvasPagesPanel: View {
                 .padding(.vertical, 9)
                 .background(.regularMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
         }
         .buttonStyle(.plain)
     }

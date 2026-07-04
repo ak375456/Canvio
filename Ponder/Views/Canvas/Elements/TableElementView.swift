@@ -163,7 +163,6 @@ struct TableElementView: View {
                     )
             )
             .clipShape(RoundedRectangle(cornerRadius: 4))
-            .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
             .contentShape(Rectangle())
             .onTapGesture {
                 guard !isMultiSelectMode, !isCanvasGestureActive else { return }
@@ -284,7 +283,6 @@ struct TableElementView: View {
     private func handleCircle(icon: String, color: Color) -> some View {
         ZStack {
             Circle().fill(color).frame(width: handleSize, height: handleSize)
-                .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
             Image(systemName: icon).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
         }
     }

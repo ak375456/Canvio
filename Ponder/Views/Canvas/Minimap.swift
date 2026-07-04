@@ -45,7 +45,6 @@ struct Minimap: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
                     .overlay(RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
                     .transition(.scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity))
             }
         }
@@ -75,7 +74,6 @@ struct Minimap: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 1)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

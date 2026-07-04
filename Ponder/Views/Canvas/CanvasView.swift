@@ -6,6 +6,8 @@ import PencilKit
 #if os(iOS)
 import Vision
 import VisionKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 private let canvasViewportCoordinateSpace = "CanvasViewport"
@@ -495,12 +497,17 @@ private struct CanvasPageContentView: View {
     @State private var canvasDrawingInitialDrawing = PKDrawing()
     @State private var canvasDrawingCaptureMode: CanvasDrawingCaptureMode = .drawing
     @State private var continuingCanvasDrawingID: UUID?
+    @State private var floatingYouTubeStopToken: UUID?
     @State private var isCanvasHighlighterToolSelected = false
     @State private var isCanvasDrawingInputActive = true
     @State private var isCanvasGestureActive = false
     @State private var isCanvasNavigationGestureInProgress = false
     @State private var viewportContentRevision = 0
     @State private var canvasGestureSuppressionID = UUID()
+    #if os(macOS)
+    @State private var showCommandPalette = false
+    @State private var isSpacePanActive = false
+    #endif
     @State private var selectedGroupID: UUID?
     @State private var draggingGroupID: UUID?
     @State private var groupDragOffset: CGSize = .zero
@@ -972,6 +979,20 @@ private struct CanvasPageContentView: View {
                 if vm.showCanvasDrawingOverlay {
                     canvasDrawingOverlayLayer
                 }
+
+                #if os(macOS)
+                if isSpacePanActive && !showCommandPalette {
+                    spacePanLayer(geo: geo)
+                }
+
+                if showCommandPalette {
+                    CanvasCommandPalette(
+                        actions: canvasCommandPaletteActions(viewportSize: geo.size),
+                        isPresented: $showCommandPalette
+                    )
+                    .zIndex(30000)
+                }
+                #endif
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .coordinateSpace(name: canvasViewportCoordinateSpace)
@@ -1009,6 +1030,13 @@ private struct CanvasPageContentView: View {
                         }
                         scheduleViewportContentRefresh()
                     }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            )
+            .overlay(
+                MacKeyboardShortcutMonitor(isEnabled: true) { event, viewportSize in
+                    handleCanvasKeyEvent(event, viewportSize: viewportSize)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
@@ -1085,16 +1113,36 @@ private struct CanvasPageContentView: View {
                     .padding(.trailing, 12).padding(.top, 12)
                 }
             }
+            #if os(iOS)
             .overlay(alignment: .top) {
-                if !settings.canvasTopBarVisible && !vm.showCanvasDrawingOverlay {
+                if !canvasTopBarIsVisible && !vm.showCanvasDrawingOverlay {
                     canvasTopBarRevealButton
                         .padding(.top, 12)
                 }
             }
+            #endif
             .overlay(alignment: .bottomTrailing) {
-                youtubePlaybackControl
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 24)
+                if settings.floatingYouTubePlaybackEnabled {
+                    floatingYouTubePlayerLayer(geo: geo)
+                        .padding(.trailing, 16)
+                        .padding(.bottom, floatingYouTubeBottomPadding)
+                } else {
+                    youtubePlaybackControl
+                        .padding(.trailing, 16)
+                        .padding(.bottom, 24)
+                }
+            }
+            .onChange(of: vm.youtubeVM.stopPlaybackRequestID) { _, requestID in
+                if settings.floatingYouTubePlaybackEnabled,
+                   requestID == vm.youtubeVM.activePlayingID {
+                    floatingYouTubeStopToken = UUID()
+                }
+            }
+            .onChange(of: vm.youtubeVM.activePlayingID) { _, _ in
+                floatingYouTubeStopToken = nil
+            }
+            .onChange(of: settings.floatingYouTubePlaybackEnabled) { _, _ in
+                floatingYouTubeStopToken = nil
             }
             .sheet(isPresented: $vm.showTextSheet) {
                 AddTextSheet(isPresented: $vm.showTextSheet) { style in
@@ -1442,9 +1490,9 @@ private struct CanvasPageContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarBackButtonHidden(true)
             .background(InteractivePopGestureDisabler(isDisabled: true))
-            .toolbar(settings.canvasTopBarVisible ? .visible : .hidden, for: .navigationBar)
+            .toolbar(canvasTopBarIsVisible ? .visible : .hidden, for: .navigationBar)
             .toolbarBackground(canvasTopBarBackgroundColor, for: .navigationBar)
-            .toolbarBackground(settings.canvasTopBarVisible ? .visible : .hidden, for: .navigationBar)
+            .toolbarBackground(canvasTopBarIsVisible ? .visible : .hidden, for: .navigationBar)
             .toolbarColorScheme(canvasTopBarColorScheme, for: .navigationBar)
             #endif
             .toolbar { canvasToolbar }
@@ -1470,6 +1518,14 @@ private struct CanvasPageContentView: View {
         resolvedCanvasColorScheme
     }
 
+    private var canvasTopBarIsVisible: Bool {
+        #if os(macOS)
+        true
+        #else
+        settings.canvasTopBarVisible
+        #endif
+    }
+
     private var canvasTopBarRevealButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -1485,7 +1541,6 @@ private struct CanvasPageContentView: View {
                     Capsule()
                         .strokeBorder(canvasBackgroundAppearance.line.opacity(0.8), lineWidth: 1)
                 )
-                .shadow(color: .black.opacity(resolvedCanvasColorScheme == .dark ? 0.26 : 0.12), radius: 8, x: 0, y: 3)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -1530,6 +1585,7 @@ private struct CanvasPageContentView: View {
                 Button { showExportSheet = true } label: { Image(systemName: "square.and.arrow.up") }
                     .accessibilityLabel("Export canvas")
                 Button { showSettings = true } label: { Image(systemName: "slider.horizontal.3") }
+                #if os(iOS)
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         settings.canvasTopBarVisible = false
@@ -1538,6 +1594,7 @@ private struct CanvasPageContentView: View {
                     Image(systemName: "eye.slash")
                 }
                 .accessibilityLabel("Hide top bar")
+                #endif
                 Menu {
                     Button { newName = canvas.name; showRenameAlert = true } label: {
                         Label("Rename", systemImage: "pencil")
@@ -2064,7 +2121,6 @@ private struct CanvasPageContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 14))
-            .shadow(color: .accentColor.opacity(0.4), radius: 8, x: 0, y: 3)
             .padding(.horizontal, 16)
             .padding(.top, 16)
             Spacer()
@@ -2087,7 +2143,6 @@ private struct CanvasPageContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.blue, in: Capsule())
-            .shadow(color: .blue.opacity(0.4), radius: 8, x: 0, y: 3)
             .padding(.top, 16)
 
             Spacer()
@@ -2182,7 +2237,6 @@ private struct CanvasPageContentView: View {
         .frame(maxWidth: 260)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.14), radius: 12, x: 0, y: 4)
     }
 
     private var lassoDrawingLayer: some View {
@@ -2572,7 +2626,6 @@ private struct CanvasPageContentView: View {
             .padding(.horizontal, 11)
             .frame(height: 30)
             .background(Color.blue, in: Capsule())
-            .shadow(color: .blue.opacity(0.28), radius: 8, x: 0, y: 3)
             .scaleEffect(1 / safeScale)
             .offset(y: -bounds.height / 2 - 28 / safeScale)
             .allowsHitTesting(false)
@@ -2710,7 +2763,6 @@ private struct CanvasPageContentView: View {
         .frame(height: 38)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
         .fixedSize()
     }
 
@@ -2738,7 +2790,6 @@ private struct CanvasPageContentView: View {
         .padding(.vertical, 10)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 16)
         .zIndex(95)
@@ -2851,7 +2902,6 @@ private struct CanvasPageContentView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 6)
         .position(picker.position)
     }
 
@@ -3355,6 +3405,473 @@ private struct CanvasPageContentView: View {
     private func syncElement(_ element: any LayerableElement) async {
         await CanvasElementSyncRouter.upsert(element)
     }
+
+    #if os(macOS)
+    private var canvasShortcutInputIsBlocked: Bool {
+        showCommandPalette ||
+        vm.showTextSheet ||
+        vm.showShapePicker ||
+        vm.showSymbolPicker ||
+        vm.showImagePicker ||
+        vm.showImageSourcePicker ||
+        vm.showCameraPicker ||
+        vm.showScanner ||
+        vm.showPDFPicker ||
+        vm.showAudioPicker ||
+        vm.showYouTubeLinkSheet ||
+        vm.showTemplatePicker ||
+        vm.showTableSizePicker ||
+        vm.showTableCSVImporter ||
+        vm.showAudioImporter ||
+        showSettings ||
+        showExportSheet ||
+        showLayers ||
+        showPaywall ||
+        showDeleteAlert ||
+        showRenameAlert ||
+        showPDFReader ||
+        showPDFImporter ||
+        showTableSizePicker ||
+        showCSVExporter ||
+        showDrawingModePicker ||
+        openPDFElement != nil ||
+        pageForRename != nil ||
+        pagePendingDeletion != nil ||
+        scannerAlertMessage != nil ||
+        stackPicker != nil ||
+        vm.textVM.inlineEditingID != nil ||
+        vm.stickyVM.writingID != nil ||
+        vm.todoVM.editingID != nil ||
+        vm.tableVM.editingCellID != nil ||
+        macTextInputIsFirstResponder
+    }
+
+    private var macTextInputIsFirstResponder: Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField || responder is NSComboBox
+    }
+
+    private func spacePanLayer(geo: GeometryProxy) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .frame(width: geo.size.width, height: geo.size.height)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !isCanvasNavigationGestureInProgress {
+                            beginCanvasNavigationGesture()
+                        }
+                        updateCanvasNavigationPan(value.translation)
+                    }
+                    .onEnded { _ in
+                        endCanvasNavigationGesture(viewportSize: geo.size)
+                    }
+            )
+            .zIndex(25000)
+    }
+
+    private func handleCanvasKeyEvent(_ event: NSEvent, viewportSize: CGSize) -> Bool {
+        let characters = (event.charactersIgnoringModifiers ?? event.characters ?? "").lowercased()
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasCommand = modifiers.contains(.command)
+        let hasShift = modifiers.contains(.shift)
+        let hasOption = modifiers.contains(.option)
+        let hasControl = modifiers.contains(.control)
+        let plain = !hasCommand && !hasOption && !hasControl
+        let keyCode = Int(event.keyCode)
+
+        if keyCode == 49, event.type == .keyUp, isSpacePanActive {
+            isSpacePanActive = false
+            if isCanvasNavigationGestureInProgress {
+                endCanvasNavigationGesture(viewportSize: viewportSize)
+            }
+            return true
+        }
+
+        if canvasShortcutInputIsBlocked {
+            return false
+        }
+
+        if keyCode == 49 {
+            if event.type == .keyDown, plain {
+                isSpacePanActive = true
+                return true
+            }
+            if event.type == .keyUp {
+                isSpacePanActive = false
+                if isCanvasNavigationGestureInProgress {
+                    endCanvasNavigationGesture(viewportSize: viewportSize)
+                }
+                return true
+            }
+        }
+
+        guard event.type == .keyDown else { return false }
+
+        if hasCommand && !hasOption && !hasControl && characters == "k" {
+            showCommandPalette = true
+            return true
+        }
+
+        if keyCode == 53 {
+            cancelCanvasShortcutMode()
+            return true
+        }
+
+        if hasCommand && !hasOption && !hasControl && characters == "d" {
+            duplicateShortcutSelection()
+            return true
+        }
+
+        if hasCommand && !hasOption && !hasControl && characters == "g" {
+            if hasShift {
+                ungroupShortcutSelection()
+            } else {
+                groupShortcutSelection()
+            }
+            return true
+        }
+
+        if plain {
+            switch keyCode {
+            case 51, 117:
+                deleteShortcutSelection()
+                return true
+            case 126:
+                nudgeShortcutSelection(CGSize(width: 0, height: hasShift ? -10 : -1))
+                return true
+            case 125:
+                nudgeShortcutSelection(CGSize(width: 0, height: hasShift ? 10 : 1))
+                return true
+            case 123:
+                nudgeShortcutSelection(CGSize(width: hasShift ? -10 : -1, height: 0))
+                return true
+            case 124:
+                nudgeShortcutSelection(CGSize(width: hasShift ? 10 : 1, height: 0))
+                return true
+            default:
+                break
+            }
+        }
+
+        if plain && characters == "[" {
+            adjustShortcutSelectionLayer(forward: false)
+            return true
+        }
+
+        if plain && characters == "]" {
+            adjustShortcutSelectionLayer(forward: true)
+            return true
+        }
+
+        guard plain && !hasShift else { return false }
+
+        switch characters {
+        case "t":
+            openTextShortcut(viewportSize: viewportSize)
+        case "n":
+            addStickyAtCenter(viewportSize: viewportSize)
+        case "d":
+            openDrawingTool(at: viewportCenter(viewportSize))
+        case "s":
+            openShapePicker(at: viewportCenter(viewportSize))
+        case "l":
+            startLassoSelection()
+        case "m":
+            settings.canvasMinimapVisible.toggle()
+        case "p":
+            settings.canvasPagesPanelVisible.toggle()
+            if settings.canvasPagesPanelVisible { showPagesPanel = false }
+        default:
+            return false
+        }
+
+        return true
+    }
+
+    private func canvasCommandPaletteActions(viewportSize: CGSize) -> [CanvasCommandPaletteAction] {
+        let hasAnySelection = selection.hasSelection || activeSelectedElementID != nil || selectedGroupID != nil
+        let canGroup = selection.count >= 2
+        let canUngroup = selectedGroupID != nil || selectedGroupForUngroup != nil
+
+        return [
+            CanvasCommandPaletteAction(
+                id: "add-text",
+                title: "Add Text",
+                subtitle: "Create a formatted text object at the canvas center.",
+                shortcut: "T",
+                systemImage: "textformat",
+                tint: .blue,
+                isEnabled: true
+            ) { openTextShortcut(viewportSize: viewportSize) },
+            CanvasCommandPaletteAction(
+                id: "add-sticky",
+                title: "Add Sticky Note",
+                subtitle: "Drop a sticky note at the canvas center.",
+                shortcut: "N",
+                systemImage: "note.text",
+                tint: .orange,
+                isEnabled: true
+            ) { addStickyAtCenter(viewportSize: viewportSize) },
+            CanvasCommandPaletteAction(
+                id: "drawing-mode",
+                title: "Drawing Mode",
+                subtitle: "Open the drawing options for sketching or handwriting.",
+                shortcut: "D",
+                systemImage: "pencil.and.scribble",
+                tint: .orange,
+                isEnabled: true
+            ) { openDrawingTool(at: viewportCenter(viewportSize)) },
+            CanvasCommandPaletteAction(
+                id: "add-shape",
+                title: "Add Shape",
+                subtitle: "Choose a line, rectangle, circle, triangle, or polygon.",
+                shortcut: "S",
+                systemImage: "square.on.circle",
+                tint: .purple,
+                isEnabled: true
+            ) { openShapePicker(at: viewportCenter(viewportSize)) },
+            CanvasCommandPaletteAction(
+                id: "lasso",
+                title: "Lasso Select",
+                subtitle: "Draw around canvas objects to select them together.",
+                shortcut: "L",
+                systemImage: "lasso",
+                tint: .blue,
+                isEnabled: true
+            ) { startLassoSelection() },
+            CanvasCommandPaletteAction(
+                id: "add-pdf",
+                title: "Add PDF",
+                subtitle: "Place a PDF document on this canvas.",
+                shortcut: "",
+                systemImage: "doc.richtext",
+                tint: .red,
+                isEnabled: true
+            ) { openPDFPicker(at: viewportCenter(viewportSize)) },
+            CanvasCommandPaletteAction(
+                id: "scan",
+                title: "Scan Document",
+                subtitle: "Scan to text or PDF when document scanning is available.",
+                shortcut: "",
+                systemImage: "doc.viewfinder",
+                tint: .teal,
+                isEnabled: true
+            ) { openScanner(at: viewportCenter(viewportSize)) },
+            CanvasCommandPaletteAction(
+                id: "export",
+                title: "Export PNG or PDF",
+                subtitle: "Open the export panel for all content or the current view.",
+                shortcut: "",
+                systemImage: "square.and.arrow.up",
+                tint: .green,
+                isEnabled: true
+            ) { showExportSheet = true },
+            CanvasCommandPaletteAction(
+                id: "background",
+                title: "Change Background",
+                subtitle: "Open Canvas Settings for background colors and grid style.",
+                shortcut: "",
+                systemImage: "paintpalette",
+                tint: .mint,
+                isEnabled: true
+            ) { showSettings = true },
+            CanvasCommandPaletteAction(
+                id: "toggle-minimap",
+                title: settings.canvasMinimapVisible ? "Hide Minimap" : "Show Minimap",
+                subtitle: "Hide or show the canvas minimap button.",
+                shortcut: "M",
+                systemImage: "map",
+                tint: .cyan,
+                isEnabled: true
+            ) { settings.canvasMinimapVisible.toggle() },
+            CanvasCommandPaletteAction(
+                id: "toggle-pages",
+                title: settings.canvasPagesPanelVisible ? "Hide Pages" : "Show Pages",
+                subtitle: "Hide or show the pages switcher on the canvas.",
+                shortcut: "P",
+                systemImage: "rectangle.on.rectangle.angled",
+                tint: .indigo,
+                isEnabled: true
+            ) {
+                settings.canvasPagesPanelVisible.toggle()
+                if settings.canvasPagesPanelVisible { showPagesPanel = false }
+            },
+            CanvasCommandPaletteAction(
+                id: "duplicate-selection",
+                title: "Duplicate Selection",
+                subtitle: "Copy the selected item, group, or multi-selection.",
+                shortcut: "⌘D",
+                systemImage: "plus.square.on.square",
+                tint: .blue,
+                isEnabled: hasAnySelection
+            ) { duplicateShortcutSelection() },
+            CanvasCommandPaletteAction(
+                id: "delete-selection",
+                title: "Delete Selection",
+                subtitle: "Remove the selected item, group, or multi-selection.",
+                shortcut: "⌫",
+                systemImage: "trash",
+                tint: .red,
+                isEnabled: hasAnySelection
+            ) { deleteShortcutSelection() },
+            CanvasCommandPaletteAction(
+                id: "group-selection",
+                title: "Group Selection",
+                subtitle: "Group two or more selected canvas objects.",
+                shortcut: "⌘G",
+                systemImage: "square.stack.3d.up.fill",
+                tint: .purple,
+                isEnabled: canGroup
+            ) { groupShortcutSelection() },
+            CanvasCommandPaletteAction(
+                id: "ungroup-selection",
+                title: "Ungroup Selection",
+                subtitle: "Release the selected group back into individual objects.",
+                shortcut: "⌘⇧G",
+                systemImage: "square.stack.3d.down.right",
+                tint: .purple,
+                isEnabled: canUngroup
+            ) { ungroupShortcutSelection() },
+            CanvasCommandPaletteAction(
+                id: "send-backward",
+                title: "Send Backward",
+                subtitle: "Move the selected object one layer back.",
+                shortcut: "[",
+                systemImage: "square.2.layers.3d.bottom.filled",
+                tint: .secondary,
+                isEnabled: hasAnySelection
+            ) { adjustShortcutSelectionLayer(forward: false) },
+            CanvasCommandPaletteAction(
+                id: "bring-forward",
+                title: "Bring Forward",
+                subtitle: "Move the selected object one layer forward.",
+                shortcut: "]",
+                systemImage: "square.2.layers.3d.top.filled",
+                tint: .secondary,
+                isEnabled: hasAnySelection
+            ) { adjustShortcutSelectionLayer(forward: true) },
+            CanvasCommandPaletteAction(
+                id: "open-layers",
+                title: "Open Layers",
+                subtitle: "Select or reorder canvas objects from the layer list.",
+                shortcut: "",
+                systemImage: "square.3.layers.3d",
+                tint: .brown,
+                isEnabled: true
+            ) { showLayers = true }
+        ]
+    }
+
+    private func viewportCenter(_ size: CGSize) -> CGPoint {
+        CGPoint(x: size.width / 2, y: size.height / 2)
+    }
+
+    private func openTextShortcut(viewportSize: CGSize) {
+        dismissEverything()
+        lastMenuLocation = viewportCenter(viewportSize)
+        vm.showTextSheet = true
+    }
+
+    private func cancelCanvasShortcutMode() {
+        isSpacePanActive = false
+        showCommandPalette = false
+        isLassoModeActive = false
+        lassoPoints = []
+        lassoFeedbackText = nil
+        if selection.isMultiSelectActive {
+            withAnimation(.spring(duration: 0.25)) { selection.exit() }
+        }
+        vm.connectorVM.exitConnectMode()
+        dismissEverything()
+    }
+
+    private func duplicateShortcutSelection() {
+        if selection.hasSelection {
+            duplicateSelected()
+        } else if let selectedGroupID {
+            duplicateGroup(selectedGroupID)
+        } else if let id = activeSelectedElementID,
+                  let element = layerableElement(withID: id) {
+            duplicateElement(element)
+        }
+    }
+
+    private func deleteShortcutSelection() {
+        if selection.hasSelection {
+            deleteSelected()
+        } else if let selectedGroupID {
+            deleteGroupContents(selectedGroupID)
+        } else if let id = activeSelectedElementID,
+                  let element = layerableElement(withID: id) {
+            vm.deleteLayerableElement(
+                element,
+                todoTasks: todoTasks,
+                tableCells: tableCells,
+                connectors: connectors,
+                context: context
+            )
+            cleanupEmptyGroups()
+            dismissEverything()
+        }
+    }
+
+    private func groupShortcutSelection() {
+        guard selection.count >= 2 else { return }
+        groupSelected()
+    }
+
+    private func ungroupShortcutSelection() {
+        if let selectedGroupID {
+            ungroup(selectedGroupID)
+        } else if let groupID = selectedGroupForUngroup {
+            ungroup(groupID)
+        }
+    }
+
+    private func nudgeShortcutSelection(_ delta: CGSize) {
+        if selection.hasSelection {
+            moveSelectedElements(by: delta)
+        } else if let selectedGroupID {
+            moveGroup(selectedGroupID, by: delta)
+        } else if let id = activeSelectedElementID,
+                  let element = layerableElement(withID: id) {
+            moveElements([element], by: delta, undoLabel: "Nudge Element")
+        }
+    }
+
+    private func adjustShortcutSelectionLayer(forward: Bool) {
+        let targets: [any LayerableElement]
+        if selection.hasSelection {
+            targets = selection.selectedIDs.compactMap { layerableElement(withID: $0) }
+        } else if let selectedGroupID {
+            targets = groupMembers(for: selectedGroupID)
+        } else if let id = activeSelectedElementID,
+                  let element = layerableElement(withID: id) {
+            targets = [element]
+        } else {
+            targets = []
+        }
+
+        let orderedTargets = targets.sorted {
+            forward ? $0.zIndex > $1.zIndex : $0.zIndex < $1.zIndex
+        }
+
+        for element in orderedTargets {
+            if forward {
+                layersVM.bringForward(element, in: allLayerableElements, context: context)
+            } else {
+                layersVM.sendBackward(element, in: allLayerableElements, context: context)
+            }
+        }
+
+        Task {
+            for element in orderedTargets {
+                await syncElement(element)
+            }
+        }
+    }
+    #endif
 
     // MARK: - Gestures
 
@@ -3989,8 +4506,88 @@ private struct CanvasPageContentView: View {
             .padding(.vertical, 8)
             .background(.regularMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.14), radius: 10, x: 0, y: 4)
             .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.spring(duration: 0.25), value: vm.youtubeVM.activePlayingID)
+        }
+    }
+
+    private var floatingYouTubeBottomPadding: CGFloat {
+        settings.toolbarPosition == .hidden ? 24 : 116
+    }
+
+    @ViewBuilder
+    private func floatingYouTubePlayerLayer(geo: GeometryProxy) -> some View {
+        if let activeID = vm.youtubeVM.activePlayingID,
+           let video = youtubeElements.first(where: { $0.id == activeID }) {
+            let availableWidth = max(240, geo.size.width - 32)
+            let playerWidth = min(availableWidth, max(270, geo.size.width * 0.32))
+            let playerHeight = playerWidth * 9 / 16
+
+            VStack(spacing: 0) {
+                YouTubePlayerWebView(
+                    videoID: video.videoID,
+                    startSeconds: video.playbackSeconds,
+                    stopToken: floatingYouTubeStopToken
+                ) { seconds in
+                    vm.youtubeVM.finishStopPlayback(
+                        for: video.id,
+                        playbackSeconds: seconds,
+                        element: video,
+                        context: context
+                    )
+                    floatingYouTubeStopToken = nil
+                }
+                .frame(width: playerWidth, height: playerHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        floatingYouTubeStopToken = UUID()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 28, height: 28)
+                            .background(.black.opacity(0.58), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(8)
+                    .accessibilityLabel("Stop YouTube playback")
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "play.rectangle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.red)
+
+                    Text(video.title.isEmpty ? "YouTube playing" : video.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Button {
+                        floatingYouTubeStopToken = UUID()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 26, height: 26)
+                            .background(Color.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop YouTube playback")
+                }
+                .padding(.horizontal, 10)
+                .frame(width: playerWidth, height: 40)
+                .background(.regularMaterial)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+            )
+            .transition(.move(edge: .trailing).combined(with: .opacity))
             .animation(.spring(duration: 0.25), value: vm.youtubeVM.activePlayingID)
         }
     }
@@ -4161,6 +4758,7 @@ private struct CanvasPageContentView: View {
                 YouTubeElementView(element: youtube, canvasScale: elementRenderScale, canvasBoundary: boundary,
                                    vm: vm.youtubeVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
+                                   usesFloatingPlayback: settings.floatingYouTubePlaybackEnabled,
                                    onExternalTap: { dismissEverything() },
                                    isCanvasGestureActive: childInteractionLocked)
             } else if let drawing = element as? DrawingElementModel {
