@@ -312,7 +312,7 @@ struct SettingsSheet: View {
                 settingsToggleContent(
                     icon: "textformat.abc.dottedunderline",
                     title: "Handwriting to text",
-                    subtitle: "Show a separate Write tool that converts handwriting into editable text.",
+                    subtitle: "Add a Write option inside the Drawing tool to turn handwriting into editable text.",
                     isOn: Binding(
                         get: { settings.handwritingToTextEnabled },
                         set: { settings.handwritingToTextEnabled = $0 }
@@ -321,6 +321,11 @@ struct SettingsSheet: View {
 
                 if settings.handwritingToTextEnabled {
                     VStack(alignment: .leading, spacing: 8) {
+                        handwritingToolLocationHint
+
+                        Divider()
+                            .padding(.vertical, 2)
+
                         HStack {
                             Text("Recognition strictness")
                                 .font(.caption.weight(.semibold))
@@ -377,6 +382,53 @@ struct SettingsSheet: View {
             .padding(12)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
+    }
+
+    private var handwritingToolLocationHint: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("WHERE IT APPEARS")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                handwritingToolRouteStep(
+                    icon: "pencil.and.scribble",
+                    title: "Drawing",
+                    tint: .orange
+                )
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+
+                handwritingToolRouteStep(
+                    icon: "textformat.abc.dottedunderline",
+                    title: "Write",
+                    tint: .blue
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("Open Drawing from the canvas toolbar, choose Write, then finish the writing session to place the recognized text on the canvas.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func handwritingToolRouteStep(icon: String, title: String, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 7))
     }
 
     private var handwritingTextStyleEditor: some View {
