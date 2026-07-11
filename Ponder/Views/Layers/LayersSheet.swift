@@ -102,14 +102,7 @@ struct LayersSheet: View {
 
     private func row(_ item: LayerRowItem) -> some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(item.tint.opacity(0.15))
-                    .frame(width: 32, height: 32)
-                Image(systemName: item.icon)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(item.tint)
-            }
+            preview(for: item)
             Text(item.title)
                 .font(.subheadline.weight(.medium))
                 .lineLimit(1)
@@ -131,14 +124,7 @@ struct LayersSheet: View {
     #if os(macOS)
     private func macRow(item: LayerRowItem, index: Int) -> some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(item.tint.opacity(0.15))
-                    .frame(width: 32, height: 32)
-                Image(systemName: item.icon)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(item.tint)
-            }
+            preview(for: item)
             Text(item.title)
                 .font(.subheadline.weight(.medium))
                 .lineLimit(1)
@@ -206,6 +192,19 @@ struct LayersSheet: View {
         let sorted = allElements.sorted { $0.zIndex > $1.zIndex }
         orderedItems = sorted.map { el in
             LayerRowItem(id: el.id, title: el.layerTitle, icon: el.layerIcon, tint: el.layerTint)
+        }
+    }
+
+    @ViewBuilder
+    private func preview(for item: LayerRowItem) -> some View {
+        if let element = allElements.first(where: { $0.id == item.id }) {
+            LayerPreviewView(element: element)
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8).fill(item.tint.opacity(0.15))
+                Image(systemName: item.icon).foregroundStyle(item.tint)
+            }
+            .frame(width: 54, height: 46)
         }
     }
 }
