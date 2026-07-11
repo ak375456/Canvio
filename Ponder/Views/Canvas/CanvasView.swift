@@ -10,7 +10,7 @@ import VisionKit
 import AppKit
 #endif
 
-private let canvasViewportCoordinateSpace = "CanvasViewport"
+let canvasViewportCoordinateSpace = "CanvasViewport"
 private let freeMediaElementLimit = 2
 private let freePageLimitPerCanvas = 2
 
@@ -4657,7 +4657,8 @@ private struct CanvasPageContentView: View {
 
         Group {
             if let text = element as? TextElementModel {
-                TextElementView(element: text, canvasScale: elementRenderScale, canvasBoundary: boundary,
+                TextElementView(element: text, canvasScale: elementRenderScale, canvasOffset: vm.offset,
+                                canvasBoundary: boundary,
                                 vm: vm.textVM, isMultiSelectMode: multiSelect,
                                 isSelectedInMultiSelect: isElemSelected,
                                 onExternalTap: { dismissEverything() },
@@ -4676,13 +4677,15 @@ private struct CanvasPageContentView: View {
                              onExternalTap: { dismissEverything() },
                              isCanvasGestureActive: childInteractionLocked)
             } else if let shape = element as? ShapeElementModel {
-                ShapeElementView(shape: shape, canvasScale: elementRenderScale, canvasBoundary: boundary,
+                ShapeElementView(shape: shape, canvasScale: elementRenderScale, canvasOffset: vm.offset,
+                                 canvasBoundary: boundary,
                                  vm: vm.shapeVM, isMultiSelectMode: multiSelect,
                                  isSelectedInMultiSelect: isElemSelected,
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: childInteractionLocked)
             } else if let img = element as? ImageElementModel {
-                ImageElementView(element: img, canvasScale: elementRenderScale, canvasBoundary: boundary,
+                ImageElementView(element: img, canvasScale: elementRenderScale, canvasOffset: vm.offset,
+                                 canvasBoundary: boundary,
                                  vm: vm.imageVM, isMultiSelectMode: multiSelect,
                                  ocrTextZIndex: nextZIndex,
                                  undoManager: vm.undoManager,
@@ -4690,7 +4693,8 @@ private struct CanvasPageContentView: View {
                                  onExternalTap: { dismissEverything() },
                                  isCanvasGestureActive: childInteractionLocked)
             } else if let pdf = element as? PDFElementModel {
-                PDFElementView(element: pdf, canvasScale: elementRenderScale, canvasBoundary: boundary,
+                PDFElementView(element: pdf, canvasScale: elementRenderScale, canvasOffset: vm.offset,
+                               canvasBoundary: boundary,
                                vm: vm.pdfVM, isMultiSelectMode: multiSelect,
                                isSelectedInMultiSelect: isElemSelected,
                                onOpenReader: {
@@ -4712,6 +4716,7 @@ private struct CanvasPageContentView: View {
                         $0.documentID == page.documentID && $0.pageIndex == page.pageIndex
                     },
                     canvasScale: elementRenderScale,
+                    canvasOffset: vm.offset,
                     canvasBoundary: boundary,
                     vm: vm.pdfPageVM,
                     isMultiSelectMode: multiSelect,
@@ -4762,7 +4767,8 @@ private struct CanvasPageContentView: View {
                                    onExternalTap: { dismissEverything() },
                                    isCanvasGestureActive: childInteractionLocked)
             } else if let drawing = element as? DrawingElementModel {
-                DrawingElementView(element: drawing, canvasScale: elementRenderScale, canvasBoundary: boundary,
+                DrawingElementView(element: drawing, canvasScale: elementRenderScale, canvasOffset: vm.offset,
+                                   canvasBoundary: boundary,
                                    vm: vm.drawingVM, isMultiSelectMode: multiSelect,
                                    isSelectedInMultiSelect: isElemSelected,
                                    onExternalTap: { dismissEverything() },

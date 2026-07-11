@@ -10,6 +10,7 @@ struct PDFElementView: View {
     @Environment(\.modelContext) private var context
     @Bindable var element: PDFElementModel
     let canvasScale: CGFloat
+    let canvasOffset: CGSize
     let canvasBoundary: CGSize
     @ObservedObject var vm: PDFElementViewModel
     let isMultiSelectMode: Bool
@@ -21,6 +22,7 @@ struct PDFElementView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
     @State private var rotationAngle: Double = 0
+    @State private var rotationGestureState = CanvasElementRotationState()
     @State private var hasLoadedRotation = false
 
     private var isSelected: Bool { vm.editingID == element.id }
@@ -135,16 +137,23 @@ struct PDFElementView: View {
     }
 
     private var rotateGesture: some Gesture {
-        DragGesture(coordinateSpace: .global)
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace))
             .onChanged { value in
-                let sx = element.x * canvasScale; let sy = element.y * canvasScale
-                rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+                rotationAngle = rotationGestureState.update(
+                    pointer: value.location,
+                    center: rotationCenter,
+                    currentRotation: rotationAngle
+                )
             }
-            .onEnded { value in
-                let sx = element.x * canvasScale; let sy = element.y * canvasScale
-                rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+            .onEnded { _ in
+                rotationGestureState.reset()
                 element.rotation = rotationAngle; element.updatedAt = Date(); try? context.save()
             }
+    }
+
+    private var rotationCenter: CGPoint {
+        CGPoint(x: element.x * canvasScale + canvasOffset.width,
+                y: element.y * canvasScale + canvasOffset.height)
     }
 
     private var resizeGesture: some Gesture {

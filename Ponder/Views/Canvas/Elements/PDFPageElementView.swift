@@ -9,6 +9,7 @@ struct PDFPageElementView: View {
     let highlights: [PDFHighlightModel]
     let inkLayer: PDFInkLayerModel?
     let canvasScale: CGFloat
+    let canvasOffset: CGSize
     let canvasBoundary: CGSize
     @ObservedObject var vm: PDFPageElementViewModel
     let isMultiSelectMode: Bool
@@ -22,6 +23,7 @@ struct PDFPageElementView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
     @State private var rotationAngle = 0.0
+    @State private var rotationGestureState = CanvasElementRotationState()
 
     private var isSelected: Bool { vm.editingID == element.id }
     private var currentWidth: CGFloat { max(120, element.width + resizeDelta.width) }
@@ -182,12 +184,21 @@ struct PDFPageElementView: View {
     }
 
     private var rotateGesture: some Gesture {
-        DragGesture(coordinateSpace: .global).onChanged { value in
-            let center = CGPoint(x: element.x * canvasScale, y: element.y * canvasScale)
-            rotationAngle = atan2(value.location.y - center.y, value.location.x - center.x) * 180 / .pi + 45
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace)).onChanged { value in
+            rotationAngle = rotationGestureState.update(
+                pointer: value.location,
+                center: rotationCenter,
+                currentRotation: rotationAngle
+            )
         }.onEnded { _ in
+            rotationGestureState.reset()
             vm.updateRotation(element: element, rotation: rotationAngle, context: context)
         }
+    }
+
+    private var rotationCenter: CGPoint {
+        CGPoint(x: element.x * canvasScale + canvasOffset.width,
+                y: element.y * canvasScale + canvasOffset.height)
     }
 
     private func handle(icon: String, color: Color) -> some View {

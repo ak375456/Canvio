@@ -24,6 +24,7 @@ struct ShapeElementView: View {
     @Environment(\.modelContext) private var context
     @Bindable var shape: ShapeElementModel
     let canvasScale: CGFloat
+    let canvasOffset: CGSize
     let canvasBoundary: CGSize
     @ObservedObject var vm: ShapeElementViewModel
     let isMultiSelectMode: Bool
@@ -34,6 +35,7 @@ struct ShapeElementView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
     @State private var rotationAngle: Double = 0
+    @State private var rotationGestureState = CanvasElementRotationState()
     @State private var hasLoadedRotation = false
     @State private var customColorTarget: ShapeCustomColorTarget?
     @State private var customColorDraft: Color = .primary
@@ -476,17 +478,24 @@ struct ShapeElementView: View {
     private func rotateHandle(x: CGFloat, y: CGFloat) -> some View {
         handleCircle(icon: "arrow.trianglehead.2.clockwise", color: .orange)
             .offset(x: x, y: y)
-            .gesture(DragGesture(coordinateSpace: .global)
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace))
                 .onChanged { value in
-                    let sx = shape.x * canvasScale; let sy = shape.y * canvasScale
-                    rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+                    rotationAngle = rotationGestureState.update(
+                        pointer: value.location,
+                        center: rotationCenter,
+                        currentRotation: rotationAngle
+                    )
                 }
-                .onEnded { value in
-                    let sx = shape.x * canvasScale; let sy = shape.y * canvasScale
-                    rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+                .onEnded { _ in
+                    rotationGestureState.reset()
                     shape.rotation = rotationAngle; shape.updatedAt = Date(); try? context.save()
                     Task { await ShapeSyncService.shared.upsert(shape) }
                 })
+    }
+
+    private var rotationCenter: CGPoint {
+        CGPoint(x: shape.x * canvasScale + canvasOffset.width,
+                y: shape.y * canvasScale + canvasOffset.height)
     }
 
     private func resizeHandle(x: CGFloat, y: CGFloat) -> some View {

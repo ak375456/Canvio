@@ -216,7 +216,8 @@ class TextElementViewModel: ObservableObject {
         return element
     }
 
-    func commitInlineText(element: TextElementModel, text: String,
+    func commitInlineText(element: TextElementModel, text: String, fontSize: Double? = nil,
+                          fontName: String? = nil,
                           context: ModelContext,
                           undoManager: CanvasUndoManager? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -231,6 +232,12 @@ class TextElementViewModel: ObservableObject {
             return
         }
 
+        if let fontSize {
+            element.fontSize = TextStyle.clampedFontSize(fontSize)
+        }
+        if let fontName {
+            element.fontName = fontName
+        }
         element.setRichTextDocument(
             element.resolvedRichTextDocument.replacingPlainText(
                 trimmed,

@@ -8,8 +8,10 @@ import SwiftData
 
 struct TextElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var settings: AppSettings
     let element: TextElementModel
     let canvasScale: CGFloat
+    let canvasOffset: CGSize
     let canvasBoundary: CGSize
     @ObservedObject var vm: TextElementViewModel
     let isMultiSelectMode: Bool
@@ -21,13 +23,19 @@ struct TextElementView: View {
     @State private var isDragging: Bool      = false
     @State private var textSize: CGSize      = .zero
     @State private var rotationAngle: Double = 0
+    @State private var rotationGestureState = CanvasElementRotationState()
     @State private var resizeDelta: CGFloat  = 0
+    @State private var inlineFontSize: Double = 16
+    @State private var inlineFontName: String = "system"
+    @State private var inlineContentSize: CGSize = .zero
+    @State private var isUsingInlineFontControl = false
     @State private var showEditSheet: Bool   = false
     @State private var hasCommittedInline: Bool = false
     @State private var showCardPicker: Bool  = false
     @State private var showTextColorPicker: Bool = false
     @State private var customTextColorDraft: Color = .primary
     @StateObject private var inlineEditing = EditableTextBehavior()
+    @ObservedObject private var customFontStore = CustomFontStore.shared
     @FocusState private var inlineFocused: Bool
 
     private var isSelected: Bool      { vm.editingID == element.id }
@@ -89,6 +97,8 @@ struct TextElementView: View {
         .onChange(of: isInlineEditing) { _, editing in
             if editing {
                 inlineEditing.load(element.text, force: true)
+                inlineFontSize   = element.fontSize
+                inlineFontName   = element.fontName
                 inlineFocused      = true
                 hasCommittedInline = false
             }
@@ -131,6 +141,8 @@ struct TextElementView: View {
                 } else {
                     vm.inlineEditingID = element.id
                     inlineEditing.load(element.text, force: true)
+                    inlineFontSize     = element.fontSize
+                    inlineFontName     = element.fontName
                     inlineFocused      = true
                 }
             }
@@ -172,18 +184,20 @@ struct TextElementView: View {
     private var inlineEditor: some View {
         ZStack(alignment: .center) {
             styledText(inlinePreviewDocument)
-                .padding(12).fixedSize().opacity(0).background(sizeReader)
+                .padding(12)
+                .fixedSize()
+                .opacity(0)
+                .background(inlineContentSizeReader)
 
             TextEditor(text: $inlineEditing.draft)
-                .font(elementFont)
+                .font(inlineEditorFont)
                 .foregroundStyle(vm.colorFromName(element.colorName))
                 .multilineTextAlignment(element.textAlignment)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
                 .focused($inlineFocused)
-                .frame(minWidth: 160, minHeight: 36)
-                .fixedSize()
-                .padding(8)
+                .scrollDisabled(true)
+                .frame(width: inlineEditorSize.width, height: inlineEditorSize.height)
                 #if os(macOS)
                 .onKeyPress(.escape) { commitInlineEdit(); return .handled }
                 #endif
@@ -219,15 +233,156 @@ struct TextElementView: View {
                 .scaleEffect(1.0 / canvasScale)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .bottom) {
+            inlineFontSizeControl
+                .scaleEffect(1.0 / canvasScale)
+                .offset(y: 50 / canvasScale)
+        }
         .onChange(of: inlineFocused) { _, focused in
-            if !focused && isInlineEditing { commitInlineEdit() }
+            guard !focused && isInlineEditing else { return }
+            Task { @MainActor in
+                await Task.yield()
+                if !inlineFocused && !isUsingInlineFontControl && isInlineEditing {
+                    commitInlineEdit()
+                }
+            }
+        }
+        .onAppear {
+            inlineFontSize = element.fontSize
+            inlineFontName = element.fontName
+        }
+    }
+
+    private var inlineFontSizeControl: some View {
+        VStack(spacing: 5) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(customFontStore.allFonts) { font in
+                        inlineFontChip(font)
+                    }
+                }
+                .padding(.horizontal, 4)
+            }
+            .frame(width: 260)
+
+            Divider().opacity(0.7)
+
+            HStack(spacing: 8) {
+            Button { changeInlineFontSize(by: -2) } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Decrease font size")
+
+            Slider(
+                value: $inlineFontSize,
+                in: TextStyle.minimumFontSize...TextStyle.maximumFontSize,
+                step: 1,
+                onEditingChanged: { isEditing in
+                    isUsingInlineFontControl = isEditing
+                    inlineFocused = true
+                }
+            )
+            .frame(width: 128)
+            .accessibilityLabel("Font size")
+            .accessibilityValue("\(Int(inlineFontSize)) points")
+
+            Text("\(Int(inlineFontSize))")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .frame(width: 30)
+                .accessibilityHidden(true)
+
+            Button { changeInlineFontSize(by: 2) } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Increase font size")
+            }
+        }
+        .foregroundStyle(Color.primary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+        .fixedSize()
+        .onTapGesture { inlineFocused = true }
+    }
+
+    private func inlineFontChip(_ font: AppFont) -> some View {
+        let selected = inlineFontName == font.name
+        return Button {
+            isUsingInlineFontControl = true
+            inlineFontName = font.name
+            inlineFocused = true
+            Task { @MainActor in
+                await Task.yield()
+                isUsingInlineFontControl = false
+            }
+        } label: {
+            Text(font.displayName)
+                .font(font.name == "system"
+                      ? .system(size: 12, weight: .medium)
+                      : .custom(font.name, size: 13))
+                .lineLimit(1)
+                .foregroundStyle(selected ? .white : Color.primary)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(
+                    Capsule().fill(selected ? Color.accentColor : Color.primary.opacity(0.07))
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(font.displayName) font")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func changeInlineFontSize(by delta: Double) {
+        isUsingInlineFontControl = true
+        inlineFontSize = TextStyle.clampedFontSize(inlineFontSize + delta)
+        inlineFocused = true
+        Task { @MainActor in
+            await Task.yield()
+            isUsingInlineFontControl = false
         }
     }
 
     private func commitInlineEdit() {
         guard !hasCommittedInline else { return }
         hasCommittedInline = true
-        vm.commitInlineText(element: element, text: inlineEditing.draft, context: context)
+        vm.commitInlineText(
+            element: element,
+            text: inlineEditing.draft,
+            fontSize: inlineFontSize,
+            fontName: inlineFontName,
+            context: context
+        )
+        if !inlineEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var style = TextStyle(
+                text: "",
+                fontSize: inlineFontSize,
+                isBold: element.isBold,
+                isItalic: element.isItalic,
+                isUnderline: element.isUnderline,
+                colorName: element.colorName,
+                fontName: inlineFontName
+            )
+            style.textAlignment = element.textAlignment
+            style.bgColorName = element.bgColorName
+            style.strokeColorName = element.strokeColorName
+            style.strokeWidth = element.strokeWidth
+            settings.rememberTextStyle(style)
+        }
     }
 
     // MARK: - Formatting toolbar
@@ -514,6 +669,23 @@ struct TextElementView: View {
         }
     }
 
+    private var inlineContentSizeReader: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .onAppear { inlineContentSize = geometry.size }
+                .onChange(of: geometry.size) { _, size in
+                    inlineContentSize = size
+                }
+        }
+    }
+
+    private var inlineEditorSize: CGSize {
+        CGSize(
+            width: max(160, inlineContentSize.width),
+            height: max(54, inlineContentSize.height)
+        )
+    }
+
     // MARK: - Corner handles
 
     private var cornerHandles: some View {
@@ -541,14 +713,22 @@ struct TextElementView: View {
     private func rotateHandle(x: CGFloat, y: CGFloat) -> some View {
         handleAppearance(icon: "arrow.trianglehead.2.clockwise", color: .orange)
             .offset(x: x, y: y)
-            .gesture(DragGesture(coordinateSpace: .global)
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace))
                 .onChanged { value in
-                    let sx = element.x * canvasScale
-                    let sy = element.y * canvasScale
-                    rotationAngle = atan2(value.location.y - sy,
-                                         value.location.x - sx) * 180 / .pi + 45
+                    rotationAngle = rotationGestureState.update(
+                        pointer: value.location,
+                        center: rotationCenter,
+                        currentRotation: rotationAngle
+                    )
                 }
-                .onEnded { _ in })
+                .onEnded { _ in
+                    rotationGestureState.reset()
+                })
+    }
+
+    private var rotationCenter: CGPoint {
+        CGPoint(x: element.x * canvasScale + canvasOffset.width,
+                y: element.y * canvasScale + canvasOffset.height)
     }
 
     private func resizeHandle(x: CGFloat, y: CGFloat) -> some View {
@@ -618,13 +798,11 @@ struct TextElementView: View {
             .lineLimit(nil)
     }
 
-    private var elementFont: Font {
-        let size = TextStyle.clampedFontSize(
-            element.fontSize + Double(resizeDelta) * 0.15
-        )
-        var f: Font = element.fontName == "system"
+    private var inlineEditorFont: Font {
+        let size = TextStyle.clampedFontSize(inlineFontSize)
+        var f: Font = inlineFontName == "system"
             ? .system(size: size)
-            : .custom(element.fontName, size: size)
+            : .custom(inlineFontName, size: size)
         if element.isBold   { f = f.bold()   }
         if element.isItalic { f = f.italic() }
         return f
@@ -635,9 +813,12 @@ struct TextElementView: View {
     }
 
     private var inlinePreviewDocument: RichTextDocument {
-        element.resolvedRichTextDocument.replacingPlainText(
-            inlineEditing.draft.isEmpty ? "Tap to type..." : inlineEditing.draft,
-            attributes: element.baseRichTextAttributes
+        var attributes = element.baseRichTextAttributes
+        attributes.fontSize = TextStyle.clampedFontSize(inlineFontSize)
+        attributes.fontName = inlineFontName
+        return element.resolvedRichTextDocument.replacingPlainText(
+            inlineEditing.draft.isEmpty ? "M" : inlineEditing.draft,
+            attributes: attributes
         )
     }
 }

@@ -161,7 +161,10 @@ struct AddTextSheet: View {
 
     private func fontChip(font: AppFont) -> some View {
         let isSelected = selectedFont == font.name
-        return Button { selectedFont = font.name } label: {
+        return Button {
+            selectedFont = font.name
+            settings.lastTextFontName = font.name
+        } label: {
             Text(font.displayName)
                 .font(font.name == "system" ? .system(size: 15, weight: .medium) : .custom(font.name, size: 16))
                 .lineLimit(1)
@@ -547,6 +550,7 @@ struct AddTextSheet: View {
             do {
                 let importedFont = try customFontStore.importFont(from: url)
                 selectedFont = importedFont.name
+                settings.lastTextFontName = importedFont.name
             } catch {
                 fontImportError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }

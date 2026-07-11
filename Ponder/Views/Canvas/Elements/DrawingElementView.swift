@@ -13,6 +13,7 @@ struct DrawingElementView: View {
     @EnvironmentObject private var settings: AppSettings
     @Bindable var element: DrawingElementModel
     let canvasScale: CGFloat
+    let canvasOffset: CGSize
     let canvasBoundary: CGSize
     @ObservedObject var vm: DrawingElementViewModel
     let isMultiSelectMode: Bool
@@ -25,6 +26,7 @@ struct DrawingElementView: View {
     @State private var resizeStartWidth: Double = 0
     @State private var resizeStartHeight: Double = 0
     @State private var rotationAngle: Double = 0
+    @State private var rotationGestureState = CanvasElementRotationState()
     @State private var hasLoadedRotation = false
 
     private var isSelected: Bool { vm.editingID == element.id }
@@ -252,18 +254,23 @@ struct DrawingElementView: View {
     }
 
     private var rotateGesture: some Gesture {
-        DragGesture(coordinateSpace: .global)
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(canvasViewportCoordinateSpace))
             .onChanged { value in
-                let sx = element.x * canvasScale
-                let sy = element.y * canvasScale
-                rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+                rotationAngle = rotationGestureState.update(
+                    pointer: value.location,
+                    center: rotationCenter,
+                    currentRotation: rotationAngle
+                )
             }
-            .onEnded { value in
-                let sx = element.x * canvasScale
-                let sy = element.y * canvasScale
-                rotationAngle = atan2(value.location.y - sy, value.location.x - sx) * 180 / .pi + 45
+            .onEnded { _ in
+                rotationGestureState.reset()
                 element.rotation = rotationAngle; element.updatedAt = Date(); try? context.save()
             }
+    }
+
+    private var rotationCenter: CGPoint {
+        CGPoint(x: element.x * canvasScale + canvasOffset.width,
+                y: element.y * canvasScale + canvasOffset.height)
     }
 
     private var resizeGesture: some Gesture {

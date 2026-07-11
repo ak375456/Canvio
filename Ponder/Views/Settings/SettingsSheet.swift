@@ -39,6 +39,7 @@ struct SettingsSheet: View {
                 VStack(alignment: .leading, spacing: 28) {
                     themeSection
                     toolbarSection
+                    defaultCanvasTextSection
                     canvasChromeSection
                     #if os(macOS)
                     macShortcutsSection
@@ -106,6 +107,56 @@ struct SettingsSheet: View {
         } message: {
             Text(fontImportError ?? "")
         }
+    }
+
+    // MARK: - Default canvas text
+    private var defaultCanvasTextSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("DEFAULT CANVAS TEXT")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Font").font(.subheadline.weight(.semibold))
+                        Text("Used when you double-tap the canvas to type.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(customFontStore.allFonts) { font in
+                            defaultCanvasTextFontChip(font)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(12)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func defaultCanvasTextFontChip(_ font: AppFont) -> some View {
+        let selected = settings.lastTextFontName == font.name
+        return Button {
+            settings.lastTextFontName = font.name
+        } label: {
+            Text(font.displayName)
+                .font(font.name == "system"
+                      ? .system(size: 15, weight: .medium)
+                      : .custom(font.name, size: 16))
+                .lineLimit(1)
+                .foregroundStyle(selected ? .white : Color.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(selected ? Color.accentColor : Color.secondary.opacity(0.12))
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Header
