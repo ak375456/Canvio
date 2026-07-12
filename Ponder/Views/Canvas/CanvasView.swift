@@ -1472,7 +1472,7 @@ private struct CanvasPageContentView: View {
         let visibleElements = visibleSortedElements(viewportSize: viewportSize)
         let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
 
-        ForEach(visibleElements, id: \.id) { element in
+        ForEach(visibleElements.filter { !$0.isLayerHidden }, id: \.id) { element in
             renderElement(element, nextZIndex: nextZIndex)
         }
 
@@ -4783,9 +4783,9 @@ private struct CanvasPageContentView: View {
                                   isCanvasGestureActive: childInteractionLocked)
             }
         }
-        .opacity(vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
-                 ? 0
-                 : layersVM.highlightedID == element.id ? 0.5 : 1)
+        .opacity((vm.showCanvasDrawingOverlay && continuingCanvasDrawingID == element.id
+                  ? 0
+                  : layersVM.highlightedID == element.id ? 0.5 : 1) * element.layerOpacity)
         .zIndex((element as? DrawingElementModel)?.isCanvasHighlighterDrawing == true ? -2 : 0)
         .offset(selectionDragOffset(for: element))
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)

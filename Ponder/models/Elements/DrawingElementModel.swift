@@ -23,6 +23,8 @@ class DrawingElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
     var isCanvasDrawing: Bool   // ← true = no background card (Draw mode)
 
     init(canvasID: UUID, x: Double = 0, y: Double = 0,

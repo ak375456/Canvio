@@ -288,7 +288,10 @@ struct AddTextSheet: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(TextStyle.colorOptions, id: \.name) { option in
-                        Button { selectedColor = option.name } label: {
+                        Button {
+                            selectedColor = option.name
+                            settings.lastTextColorName = option.name
+                        } label: {
                             ZStack {
                                 Circle().fill(option.color).frame(width: 32, height: 32)
                                     .overlay(Circle().strokeBorder(Color.primary.opacity(option.name == "white" ? 0.28 : 0.08), lineWidth: 1))
@@ -518,7 +521,10 @@ struct AddTextSheet: View {
     private var customTextColorBinding: Binding<Color> {
         Binding(
             get: { colorFromName(selectedColor) },
-            set: { selectedColor = TextStyle.storageName(for: $0, fallback: selectedColor) }
+            set: {
+                selectedColor = TextStyle.storageName(for: $0, fallback: selectedColor)
+                settings.lastTextColorName = selectedColor
+            }
         )
     }
 

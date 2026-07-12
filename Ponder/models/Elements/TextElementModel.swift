@@ -24,6 +24,8 @@ class TextElementModel: LayerableElement {
     var zIndex: Int = 0
     var groupID: UUID? = nil
     var updatedAt: Date = Date()
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
     var richTextData: Data? = nil
 
     // Optional provenance for text extracted from a PDF selection.

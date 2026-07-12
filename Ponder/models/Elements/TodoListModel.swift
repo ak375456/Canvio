@@ -19,6 +19,8 @@ class TodoListModel: LayerableElement {
     var colorName: String
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
     var zIndex: Int = 0
     var groupID: UUID? = nil
 

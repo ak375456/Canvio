@@ -24,6 +24,8 @@ class YouTubeElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     init(canvasID: UUID, videoID: String, originalURL: String,
          title: String = "", thumbnailURL: String = "",

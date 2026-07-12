@@ -132,10 +132,54 @@ struct SettingsSheet: View {
                     }
                     .padding(.vertical, 2)
                 }
+
+                Divider()
+
+                Text("Text color")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 9) {
+                        ForEach(TextStyle.colorOptions, id: \.name) { option in
+                            defaultCanvasTextColorChip(option)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
             }
             .padding(12)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         }
+    }
+
+    private func defaultCanvasTextColorChip(_ option: (name: String, color: Color)) -> some View {
+        let selected = settings.lastTextColorName == option.name
+        return Button {
+            settings.lastTextColorName = option.name
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(option.color)
+                    .frame(width: 28, height: 28)
+                    .overlay(
+                        Circle().strokeBorder(
+                            Color.primary.opacity(option.name == "white" ? 0.3 : 0.1),
+                            lineWidth: 1
+                        )
+                    )
+                if selected {
+                    Circle().strokeBorder(Color.accentColor, lineWidth: 2).frame(width: 34, height: 34)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(["white", "yellow", "mint"].contains(option.name) ? .black : .white)
+                }
+            }
+            .frame(width: 36, height: 36)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(option.name.capitalized) default text color")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func defaultCanvasTextFontChip(_ font: AppFont) -> some View {

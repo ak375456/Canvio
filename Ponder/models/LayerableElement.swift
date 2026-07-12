@@ -14,6 +14,8 @@ protocol LayerableElement: AnyObject {
     var x: Double { get set }
     var y: Double { get set }
     var updatedAt: Date { get set }
+    var isLayerHidden: Bool { get set }
+    var layerOpacity: Double { get set }
 
     var layerTitle: String { get }
     var layerIcon: String { get }

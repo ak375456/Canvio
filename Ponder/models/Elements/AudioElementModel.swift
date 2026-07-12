@@ -23,6 +23,8 @@ class AudioElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     init(canvasID: UUID, audioFileName: String, originalName: String,
          duration: Double, x: Double = 0, y: Double = 0) {

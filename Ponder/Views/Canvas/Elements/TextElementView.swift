@@ -27,6 +27,7 @@ struct TextElementView: View {
     @State private var resizeDelta: CGFloat  = 0
     @State private var inlineFontSize: Double = 16
     @State private var inlineFontName: String = "system"
+    @State private var inlineColorName: String = "primary"
     @State private var inlineContentSize: CGSize = .zero
     @State private var isUsingInlineFontControl = false
     @State private var showEditSheet: Bool   = false
@@ -99,6 +100,7 @@ struct TextElementView: View {
                 inlineEditing.load(element.text, force: true)
                 inlineFontSize   = element.fontSize
                 inlineFontName   = element.fontName
+                inlineColorName  = element.colorName
                 inlineFocused      = true
                 hasCommittedInline = false
             }
@@ -143,6 +145,7 @@ struct TextElementView: View {
                     inlineEditing.load(element.text, force: true)
                     inlineFontSize     = element.fontSize
                     inlineFontName     = element.fontName
+                    inlineColorName    = element.colorName
                     inlineFocused      = true
                 }
             }
@@ -191,7 +194,7 @@ struct TextElementView: View {
 
             TextEditor(text: $inlineEditing.draft)
                 .font(inlineEditorFont)
-                .foregroundStyle(vm.colorFromName(element.colorName))
+                .foregroundStyle(vm.colorFromName(inlineColorName))
                 .multilineTextAlignment(element.textAlignment)
                 .scrollContentBackground(.hidden)
                 .background(Color.clear)
@@ -236,7 +239,7 @@ struct TextElementView: View {
         .overlay(alignment: .bottom) {
             inlineFontSizeControl
                 .scaleEffect(1.0 / canvasScale)
-                .offset(y: 50 / canvasScale)
+                .offset(y: 72 / canvasScale)
         }
         .onChange(of: inlineFocused) { _, focused in
             guard !focused && isInlineEditing else { return }
@@ -250,6 +253,7 @@ struct TextElementView: View {
         .onAppear {
             inlineFontSize = element.fontSize
             inlineFontName = element.fontName
+            inlineColorName = element.colorName
         }
     }
 
@@ -262,6 +266,17 @@ struct TextElementView: View {
                     }
                 }
                 .padding(.horizontal, 4)
+            }
+            .frame(width: 260)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(TextStyle.colorOptions, id: \.name) { option in
+                        inlineColorChip(option)
+                    }
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
             }
             .frame(width: 260)
 
@@ -319,6 +334,43 @@ struct TextElementView: View {
         .onTapGesture { inlineFocused = true }
     }
 
+    private func inlineColorChip(_ option: (name: String, color: Color)) -> some View {
+        let selected = inlineColorName == option.name
+        return Button {
+            isUsingInlineFontControl = true
+            inlineColorName = option.name
+            inlineFocused = true
+            Task { @MainActor in
+                await Task.yield()
+                isUsingInlineFontControl = false
+            }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(option.color)
+                    .frame(width: 22, height: 22)
+                    .overlay(
+                        Circle().strokeBorder(
+                            Color.primary.opacity(option.name == "white" ? 0.28 : 0.10),
+                            lineWidth: 1
+                        )
+                    )
+                if selected {
+                    Circle()
+                        .strokeBorder(Color.accentColor, lineWidth: 2)
+                        .frame(width: 27, height: 27)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(["white", "yellow", "mint"].contains(option.name) ? .black : .white)
+                }
+            }
+            .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(option.name.capitalized) text color")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
     private func inlineFontChip(_ font: AppFont) -> some View {
         let selected = inlineFontName == font.name
         return Button {
@@ -365,6 +417,7 @@ struct TextElementView: View {
             text: inlineEditing.draft,
             fontSize: inlineFontSize,
             fontName: inlineFontName,
+            colorName: inlineColorName,
             context: context
         )
         if !inlineEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -374,7 +427,7 @@ struct TextElementView: View {
                 isBold: element.isBold,
                 isItalic: element.isItalic,
                 isUnderline: element.isUnderline,
-                colorName: element.colorName,
+                colorName: inlineColorName,
                 fontName: inlineFontName
             )
             style.textAlignment = element.textAlignment
@@ -816,6 +869,7 @@ struct TextElementView: View {
         var attributes = element.baseRichTextAttributes
         attributes.fontSize = TextStyle.clampedFontSize(inlineFontSize)
         attributes.fontName = inlineFontName
+        attributes.colorName = inlineColorName
         return element.resolvedRichTextDocument.replacingPlainText(
             inlineEditing.draft.isEmpty ? "M" : inlineEditing.draft,
             attributes: attributes

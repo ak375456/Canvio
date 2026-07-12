@@ -11,6 +11,8 @@ struct LayerRowItem: Identifiable, Equatable {
     let title: String
     let icon: String
     let tint: Color
+    var isHidden: Bool
+    var opacity: Double
 }
 
 struct LayersSheet: View {
@@ -102,11 +104,23 @@ struct LayersSheet: View {
 
     private func row(_ item: LayerRowItem) -> some View {
         HStack(spacing: 12) {
-            preview(for: item)
-            Text(item.title)
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
-            Spacer()
+            Button {
+                onSelectElement(item.id)
+                dismiss()
+            } label: {
+                HStack(spacing: 12) {
+                    preview(for: item).opacity(item.isHidden ? 0.35 : 1)
+                    Text(item.title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(item.isHidden ? .secondary : .primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            layerControls(for: item)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 4)
@@ -114,21 +128,28 @@ struct LayersSheet: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.06))
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onSelectElement(item.id)
-            dismiss()
-        }
     }
 
     #if os(macOS)
     private func macRow(item: LayerRowItem, index: Int) -> some View {
         HStack(spacing: 12) {
-            preview(for: item)
-            Text(item.title)
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
-            Spacer()
+            Button {
+                onSelectElement(item.id)
+                dismiss()
+            } label: {
+                HStack(spacing: 12) {
+                    preview(for: item).opacity(item.isHidden ? 0.35 : 1)
+                    Text(item.title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(item.isHidden ? .secondary : .primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            layerControls(for: item)
 
             // Up / Down arrows for reorder on macOS
             Button {
@@ -159,11 +180,6 @@ struct LayersSheet: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.06))
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onSelectElement(item.id)
-            dismiss()
-        }
     }
 
     private func moveItem(at index: Int, by delta: Int) {
@@ -191,8 +207,78 @@ struct LayersSheet: View {
     private func rebuildOrderedItems() {
         let sorted = allElements.sorted { $0.zIndex > $1.zIndex }
         orderedItems = sorted.map { el in
-            LayerRowItem(id: el.id, title: el.layerTitle, icon: el.layerIcon, tint: el.layerTint)
+            LayerRowItem(
+                id: el.id,
+                title: el.layerTitle,
+                icon: el.layerIcon,
+                tint: el.layerTint,
+                isHidden: el.isLayerHidden,
+                opacity: min(1, max(0.05, el.layerOpacity))
+            )
         }
+    }
+
+    private func layerControls(for item: LayerRowItem) -> some View {
+        HStack(spacing: 7) {
+            Button {
+                toggleVisibility(item.id)
+            } label: {
+                Image(systemName: item.isHidden ? "eye.slash" : "eye")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(item.isHidden ? Color.secondary : Color.accentColor)
+                    .frame(width: 30, height: 30)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(item.isHidden ? "Show \(item.title)" : "Hide \(item.title)")
+
+            VStack(spacing: 1) {
+                Text("\(Int((item.opacity * 100).rounded()))%")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Slider(
+                    value: opacityBinding(for: item.id),
+                    in: 0.05...1,
+                    step: 0.05,
+                    onEditingChanged: { editing in
+                        if !editing { persistOpacity(item.id) }
+                    }
+                )
+                .frame(width: 68)
+                .disabled(item.isHidden)
+                .opacity(item.isHidden ? 0.35 : 1)
+                .accessibilityLabel("\(item.title) opacity")
+            }
+        }
+    }
+
+    private func toggleVisibility(_ id: UUID) {
+        guard let index = orderedItems.firstIndex(where: { $0.id == id }),
+              let element = allElements.first(where: { $0.id == id }) else { return }
+        orderedItems[index].isHidden.toggle()
+        element.isLayerHidden = orderedItems[index].isHidden
+        element.updatedAt = Date()
+        try? context.save()
+    }
+
+    private func opacityBinding(for id: UUID) -> Binding<Double> {
+        Binding(
+            get: { orderedItems.first(where: { $0.id == id })?.opacity ?? 1 },
+            set: { value in
+                guard let index = orderedItems.firstIndex(where: { $0.id == id }),
+                      let element = allElements.first(where: { $0.id == id }) else { return }
+                let clamped = min(1, max(0.05, value))
+                orderedItems[index].opacity = clamped
+                element.layerOpacity = clamped
+            }
+        )
+    }
+
+    private func persistOpacity(_ id: UUID) {
+        guard let element = allElements.first(where: { $0.id == id }) else { return }
+        element.updatedAt = Date()
+        try? context.save()
     }
 
     @ViewBuilder

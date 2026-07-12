@@ -218,6 +218,7 @@ class TextElementViewModel: ObservableObject {
 
     func commitInlineText(element: TextElementModel, text: String, fontSize: Double? = nil,
                           fontName: String? = nil,
+                          colorName: String? = nil,
                           context: ModelContext,
                           undoManager: CanvasUndoManager? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -237,6 +238,9 @@ class TextElementViewModel: ObservableObject {
         }
         if let fontName {
             element.fontName = fontName
+        }
+        if let colorName {
+            element.colorName = colorName
         }
         element.setRichTextDocument(
             element.resolvedRichTextDocument.replacingPlainText(

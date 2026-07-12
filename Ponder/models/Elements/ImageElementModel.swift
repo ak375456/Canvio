@@ -30,6 +30,8 @@ class ImageElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     init(canvasID: UUID, imageFileName: String, x: Double = 0, y: Double = 0,
          width: Double = 240, height: Double = 180) {

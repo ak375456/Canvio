@@ -33,6 +33,8 @@ class StickyNoteModel: LayerableElement {
     var zIndex: Int = 0
     var groupID: UUID? = nil
     var updatedAt: Date = Date()
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     var listStyle: StickyListStyle {
         get { StickyListStyle(rawValue: listStyleRaw) ?? .none }

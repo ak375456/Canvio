@@ -76,6 +76,8 @@ final class PDFPageElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     init(documentID: UUID, canvasID: UUID, pageIndex: Int,
          pdfFileName: String = "", originalName: String = "Document",

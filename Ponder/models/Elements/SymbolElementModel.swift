@@ -18,6 +18,8 @@ class SymbolElementModel: LayerableElement {
     var y:           Double
     var createdAt:   Date
     var updatedAt:   Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
     var zIndex:      Int
     var groupID:     UUID?
 

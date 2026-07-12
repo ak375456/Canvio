@@ -22,6 +22,8 @@ class TableElementModel: LayerableElement {
     var groupID: UUID?
     var createdAt: Date
     var updatedAt: Date
+    var isLayerHidden: Bool = false
+    var layerOpacity: Double = 1
 
     // Header colors
     var colHeaderColorName: String
