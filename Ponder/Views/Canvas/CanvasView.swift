@@ -4161,9 +4161,9 @@ private struct CanvasPageContentView: View {
                                                           effectiveScale: CGFloat,
                                                           effectiveOffset: CGSize) -> Bool {
         let strokeBounds = pkDrawing.bounds
-        guard !pkDrawing.strokes.isEmpty,
-              strokeBounds.width >= 30,
-              strokeBounds.height >= 12
+        guard canvasDrawingHasVisibleInk(pkDrawing),
+              strokeBounds.width >= 12,
+              strokeBounds.height >= 8
         else { return false }
 
         let padding: CGFloat = 24
@@ -4263,8 +4263,7 @@ private struct CanvasPageContentView: View {
 
         let text = lines.map(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.count >= 2,
-              text.rangeOfCharacter(from: .alphanumerics) != nil
+        guard text.rangeOfCharacter(from: .alphanumerics) != nil
         else { return nil }
 
         let weightedConfidence = lines.reduce(Float(0)) { partial, line in
@@ -4398,7 +4397,12 @@ private struct CanvasPageContentView: View {
             UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: size))
 
+            // PencilKit uses light ink on dark canvases. Drawing that ink onto
+            // the white OCR background made the input effectively blank. OCR
+            // only needs the stroke silhouette, so normalize every ink color
+            // to opaque black while retaining the drawing's alpha and geometry.
             let drawingImage = drawing.image(from: bounds, scale: rendererFormat.scale)
+                .withTintColor(.black, renderingMode: .alwaysOriginal)
             drawingImage.draw(in: CGRect(origin: .zero, size: size))
         }
         return image.cgImage

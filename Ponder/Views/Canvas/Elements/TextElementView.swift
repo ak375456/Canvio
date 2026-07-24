@@ -45,6 +45,7 @@ struct TextElementView: View {
 
     private let toolbarHeight: CGFloat = 44
     private let cardPickerGap: CGFloat = 8
+    private let inlineFormattingPanelGap: CGFloat = 18
 
     var body: some View {
         ZStack {
@@ -236,10 +237,15 @@ struct TextElementView: View {
                 .scaleEffect(1.0 / canvasScale)
                 .allowsHitTesting(false)
         }
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .top) {
             inlineFontSizeControl
-                .scaleEffect(1.0 / canvasScale)
-                .offset(y: 72 / canvasScale)
+                // Anchor the inverse-scaled panel by its top edge so its height
+                // can never make it overlap (or sit flush against) the editor.
+                .scaleEffect(1.0 / canvasScale, anchor: .top)
+                .offset(
+                    y: inlineEditorSize.height
+                        + inlineFormattingPanelGap / canvasScale
+                )
         }
         .onChange(of: inlineFocused) { _, focused in
             guard !focused && isInlineEditing else { return }

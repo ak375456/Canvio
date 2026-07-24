@@ -26,6 +26,9 @@ struct PonderApp: App {
                 .environmentObject(networkMonitor)
                 .environmentObject(proManager)
                 .preferredColorScheme(settings.theme.colorScheme)
+                .onOpenURL { url in
+                    AuthService.shared.handleIncomingURL(url)
+                }
         }
         .modelContainer(for: [
             CanvasModel.self,

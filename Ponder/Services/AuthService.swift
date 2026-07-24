@@ -28,6 +28,7 @@ final class AuthService: NSObject, ObservableObject {
 
     private let supabase = SupabaseService.shared.client
     private(set) var currentNonce: String = ""
+    static let authCallbackURL = URL(string: "canvio://auth-callback")!
 
     private override init() { super.init() }
 
@@ -98,12 +99,37 @@ final class AuthService: NSObject, ObservableObject {
         UserDefaults.standard.set(true, forKey: "ponder.isGuest")
     }
 
+    // MARK: - Sign in with Google
+
+    func signInWithGoogle() async {
+        beginAuthRequest()
+        defer { isLoading = false }
+
+        do {
+            let session = try await supabase.auth.signInWithOAuth(
+                provider: .google,
+                redirectTo: Self.authCallbackURL
+            )
+            applySignedInSession(session)
+        } catch {
+            if let webError = error as? ASWebAuthenticationSessionError,
+               webError.code == .canceledLogin {
+                return
+            }
+            errorMessage = "Google sign in failed: \(error.localizedDescription)"
+        }
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        guard url.scheme?.lowercased() == Self.authCallbackURL.scheme else { return }
+        supabase.auth.handle(url)
+    }
+
     // MARK: - Sign in with Apple (iOS path)
 
     #if os(iOS)
     func signInWithApple() {
-        isLoading    = true
-        errorMessage = nil
+        beginAuthRequest()
         currentNonce = randomNonce()
 
         let request = ASAuthorizationAppleIDProvider().createRequest()
@@ -140,10 +166,7 @@ final class AuthService: NSObject, ObservableObject {
             let session = try await supabase.auth.signInWithIdToken(
                 credentials: .init(provider: .apple, idToken: idToken, nonce: currentNonce)
             )
-            currentUser        = session.user
-            isGuest            = false
-            wasRemotelyDeleted = false
-            UserDefaults.standard.set(false, forKey: "ponder.isGuest")
+            applySignedInSession(session)
 
             if let fullName = credential.fullName, let given = fullName.givenName {
                 let name = [given, fullName.familyName].compactMap { $0 }.joined(separator: " ")
@@ -153,9 +176,6 @@ final class AuthService: NSObject, ObservableObject {
                     .eq("id", value: session.user.id.uuidString)
                     .execute()
             }
-
-            // Notify SyncCoordinatorView to reconcile local data → Supabase
-            didSignIn.send()
 
         } catch {
             errorMessage = "Sign in failed: \(error.localizedDescription)"
@@ -305,7 +325,13 @@ final class AuthService: NSObject, ObservableObject {
             for await (event, session) in supabase.auth.authStateChanges {
                 await MainActor.run {
                     switch event {
-                    case .signedIn, .tokenRefreshed, .userUpdated:
+                    case .signedIn:
+                        self.currentUser        = session?.user
+                        self.isGuest            = false
+                        self.wasRemotelyDeleted = false
+                        UserDefaults.standard.set(false, forKey: "ponder.isGuest")
+                        self.didSignIn.send()
+                    case .tokenRefreshed, .userUpdated:
                         self.currentUser        = session?.user
                         self.isGuest            = false
                         self.wasRemotelyDeleted = false
@@ -320,6 +346,20 @@ final class AuthService: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Shared auth helpers
+
+    private func beginAuthRequest() {
+        isLoading = true
+        errorMessage = nil
+    }
+
+    private func applySignedInSession(_ session: Session) {
+        currentUser        = session.user
+        isGuest            = false
+        wasRemotelyDeleted = false
+        UserDefaults.standard.set(false, forKey: "ponder.isGuest")
     }
 
     // MARK: - Nonce helpers

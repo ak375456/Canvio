@@ -21,7 +21,7 @@ final class ProManager: ObservableObject {
     }
 
     @AppStorage("isPro") private var storedIsPro = false
-    @AppStorage("hasLifetimePro") private var hasLifetimePro = true
+    @AppStorage("hasLifetimePro") private var hasLifetimePro = false
 
     @Published private(set) var isPro: Bool
     @Published private(set) var products: [Product] = []
