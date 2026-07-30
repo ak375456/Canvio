@@ -8,6 +8,7 @@ import SwiftData
 
 struct TodoListView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     let list: TodoListModel
     let allTasks: [TodoTaskModel]
     let canvasScale: CGFloat
@@ -113,11 +114,23 @@ struct TodoListView: View {
                     .font(.headline.weight(.semibold))
                     .focused($titleFocused)
                     .onSubmit {
-                        vm.updateTitle(list: list, title: localTitle, context: context)
+                        vm.updateTitle(
+                            list: list,
+                            title: localTitle,
+                            context: context,
+                            undoManager: canvasHistory
+                        )
                         titleFocused = false
                     }
                     .onChange(of: titleFocused) { _, f in
-                        if !f { vm.updateTitle(list: list, title: localTitle, context: context) }
+                        if !f {
+                            vm.updateTitle(
+                                list: list,
+                                title: localTitle,
+                                context: context,
+                                undoManager: canvasHistory
+                            )
+                        }
                     }
             } else {
                 Text(list.title.isEmpty ? "Todo" : list.title)
@@ -132,7 +145,12 @@ struct TodoListView: View {
                 Menu {
                     ForEach(["blue","purple","green","orange","pink","red","teal"], id: \.self) { name in
                         Button {
-                            vm.updateColor(list: list, colorName: name, context: context)
+                            vm.updateColor(
+                                list: list,
+                                colorName: name,
+                                context: context,
+                                undoManager: canvasHistory
+                            )
                         } label: {
                             HStack {
                                 Circle().fill(colorFor(name)).frame(width: 12, height: 12)
@@ -181,7 +199,8 @@ struct TodoListView: View {
                     vm.deleteTask(
                         task,
                         subtasks: allTasks.filter { $0.parentTaskID == task.id },
-                        context: context
+                        context: context,
+                        undoManager: canvasHistory
                     )
                 }
             )
@@ -195,10 +214,18 @@ struct TodoListView: View {
                     ForEach(subs) { sub in
                         HStack(spacing: 8) {
                             Button {
+                                let oldState = TodoTaskHistoryState(sub)
                                 sub.isCompleted.toggle()
                                 sub.updatedAt = Date()
                                 try? context.save()
                                 Task { await TodoSyncService.shared.upsertTask(sub) }
+                                recordTodoTaskChange(
+                                    name: "Toggle subtask",
+                                    task: sub,
+                                    from: oldState,
+                                    context: context,
+                                    undoManager: canvasHistory
+                                )
                             } label: {
                                 Image(systemName: sub.isCompleted
                                       ? "checkmark.circle.fill" : "circle")
@@ -238,7 +265,12 @@ struct TodoListView: View {
         Button {
             guard !isCanvasGestureActive else { return }
             if !isSelected { vm.editingID = list.id }
-            let t = vm.addTask(to: list, existingCount: topLevelTasks.count, context: context)
+            let t = vm.addTask(
+                to: list,
+                existingCount: topLevelTasks.count,
+                context: context,
+                undoManager: canvasHistory
+            )
             openTaskID = t.id
         } label: {
             HStack(spacing: 8) {
@@ -259,7 +291,8 @@ struct TodoListView: View {
                 vm.delete(
                     list: list,
                     tasks: allTasks.filter { $0.listID == list.id },
-                    context: context
+                    context: context,
+                    undoManager: canvasHistory
                 )
             } label: {
                 handleCircle(icon: "trash", color: .red)
@@ -280,7 +313,8 @@ struct TodoListView: View {
                                 list: list,
                                 width:  list.width  + t.width,
                                 height: list.height + t.height,
-                                context: context
+                                context: context,
+                                undoManager: canvasHistory
                             )
                         }
                 )
@@ -324,7 +358,7 @@ struct TodoListView: View {
                 vm.updatePosition(
                     list: list, translation: t,
                     scale: canvasScale, boundary: canvasBoundary,
-                    context: context
+                    context: context, undoManager: canvasHistory
                 )
                 // Short delay so the tap handler sees isDragging=true and skips
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {

@@ -60,7 +60,9 @@ final class PDFPageElementViewModel: ObservableObject {
         }
 
         let ids = records.map(\.id)
+        let snapshots = records.map(PDFPageHistorySnapshot.init)
         undoManager?.push(CanvasAction(
+            name: "Add PDF pages",
             undo: {
                 let all = (try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? []
                 for record in all where ids.contains(record.id) {
@@ -70,20 +72,8 @@ final class PDFPageElementViewModel: ObservableObject {
                 try? context.save()
             },
             redo: {
-                for old in records {
-                    let restored = PDFPageElementModel(
-                        documentID: old.documentID,
-                        canvasID: old.canvasID,
-                        pageIndex: old.pageIndex,
-                        pdfFileName: old.pdfFileName,
-                        originalName: old.originalName,
-                        cropRect: old.cropRect,
-                        x: old.x, y: old.y,
-                        width: old.width, height: old.height
-                    )
-                    restored.id = old.id
-                    restored.rotation = old.rotation
-                    restored.zIndex = old.zIndex
+                for snapshot in snapshots {
+                    let restored = snapshot.makeModel()
                     context.insert(restored)
                     Task { await PDFWorkspaceSyncService.shared.upsert(restored) }
                 }
@@ -94,7 +84,9 @@ final class PDFPageElementViewModel: ObservableObject {
     }
 
     func updatePosition(element: PDFPageElementModel, translation: CGSize,
-                        boundary: CGSize, context: ModelContext) {
+                        boundary: CGSize, context: ModelContext,
+                        undoManager: CanvasUndoManager? = nil) {
+        let oldPosition = CGPoint(x: element.x, y: element.y)
         let clamped = CanvasBoundaryHelper.clamp(
             x: element.x + Double(translation.width),
             y: element.y + Double(translation.height),
@@ -104,38 +96,85 @@ final class PDFPageElementViewModel: ObservableObject {
         element.x = clamped.x
         element.y = clamped.y
         persist(element, context: context)
+        undoManager?.recordElementChange(
+            name: "Move PDF page", element: element,
+            from: oldPosition, to: CGPoint(x: element.x, y: element.y),
+            context: context
+        ) {
+            $0.x = $1.x
+            $0.y = $1.y
+        }
     }
 
     func updateSize(element: PDFPageElementModel, width: Double, height: Double,
-                    context: ModelContext) {
+                    context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+        let oldSize = CGSize(width: element.width, height: element.height)
         element.width = max(120, width)
         element.height = max(90, height)
         persist(element, context: context)
+        undoManager?.recordElementChange(
+            name: "Resize PDF page", element: element,
+            from: oldSize, to: CGSize(width: element.width, height: element.height),
+            context: context
+        ) {
+            $0.width = $1.width
+            $0.height = $1.height
+        }
     }
 
     func updateCrop(element: PDFPageElementModel, cropRect: PDFNormalizedRect,
-                    context: ModelContext) {
+                    context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.cropRect
         element.cropRect = cropRect
         persist(element, context: context)
+        undoManager?.recordElementChange(
+            name: "Crop PDF page", element: element,
+            from: oldValue, to: element.cropRect, context: context
+        ) { $0.cropRect = $1 }
     }
 
     func updateRotation(element: PDFPageElementModel, rotation: Double,
-                        context: ModelContext) {
+                        context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.rotation
         element.rotation = rotation
         persist(element, context: context)
+        undoManager?.recordElementChange(
+            name: "Rotate PDF page", element: element,
+            from: oldValue, to: element.rotation, context: context
+        ) { $0.rotation = $1 }
     }
 
-    func delete(element: PDFPageElementModel, context: ModelContext) {
+    func delete(element: PDFPageElementModel, context: ModelContext,
+                undoManager: CanvasUndoManager? = nil) {
+        let snapshot = PDFPageHistorySnapshot(element: element)
         Task { await PDFWorkspaceSyncService.shared.delete(element) }
         context.delete(element)
         try? context.save()
         if editingID == element.id { editingID = nil }
+
+        undoManager?.push(CanvasAction(
+            name: "Delete PDF page",
+            undo: {
+                let restored = snapshot.makeModel()
+                context.insert(restored)
+                try? context.save()
+                Task { await PDFWorkspaceSyncService.shared.upsert(restored) }
+            },
+            redo: {
+                guard let values = try? context.fetch(FetchDescriptor<PDFPageElementModel>()),
+                      let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                Task { await PDFWorkspaceSyncService.shared.delete(current) }
+                context.delete(current)
+                try? context.save()
+            }
+        ))
     }
 
     @discardableResult
     func duplicate(element: PDFPageElementModel, zIndex: Int,
                    offset: CGSize = CGSize(width: 30, height: 30),
-                   context: ModelContext) -> UUID {
+                   context: ModelContext,
+                   undoManager: CanvasUndoManager? = nil) -> UUID {
         let copy = PDFPageElementModel(
             documentID: element.documentID,
             canvasID: element.canvasID,
@@ -155,6 +194,23 @@ final class PDFPageElementViewModel: ObservableObject {
         try? context.save()
         Task { await PDFWorkspaceSyncService.shared.upsert(copy) }
         editingID = copy.id
+        let snapshot = PDFPageHistorySnapshot(element: copy)
+        undoManager?.push(CanvasAction(
+            name: "Duplicate PDF page",
+            undo: {
+                guard let values = try? context.fetch(FetchDescriptor<PDFPageElementModel>()),
+                      let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                context.delete(current)
+                try? context.save()
+                Task { await PDFWorkspaceSyncService.shared.delete(current) }
+            },
+            redo: {
+                let restored = snapshot.makeModel()
+                context.insert(restored)
+                try? context.save()
+                Task { await PDFWorkspaceSyncService.shared.upsert(restored) }
+            }
+        ))
         return copy.id
     }
 
@@ -164,5 +220,69 @@ final class PDFPageElementViewModel: ObservableObject {
         element.updatedAt = Date()
         try? context.save()
         Task { await PDFWorkspaceSyncService.shared.upsert(element) }
+    }
+}
+
+private struct PDFPageHistorySnapshot {
+    let id: UUID
+    let documentID: UUID
+    let canvasID: UUID
+    let pdfFileName: String
+    let originalName: String
+    let pageIndex: Int
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    let rotation: Double
+    let cropRect: PDFNormalizedRect
+    let showsAnnotations: Bool
+    let zIndex: Int
+    let groupID: UUID?
+    let isLayerHidden: Bool
+    let layerOpacity: Double
+
+    init(element: PDFPageElementModel) {
+        id = element.id
+        documentID = element.documentID
+        canvasID = element.canvasID
+        pdfFileName = element.pdfFileName
+        originalName = element.originalName
+        pageIndex = element.pageIndex
+        x = element.x
+        y = element.y
+        width = element.width
+        height = element.height
+        rotation = element.rotation
+        cropRect = element.cropRect
+        showsAnnotations = element.showsAnnotations
+        zIndex = element.zIndex
+        groupID = element.groupID
+        isLayerHidden = element.isLayerHidden
+        layerOpacity = element.layerOpacity
+    }
+
+    func makeModel() -> PDFPageElementModel {
+        let model = PDFPageElementModel(
+            documentID: documentID,
+            canvasID: canvasID,
+            pageIndex: pageIndex,
+            pdfFileName: pdfFileName,
+            originalName: originalName,
+            cropRect: cropRect,
+            x: x,
+            y: y,
+            width: width,
+            height: height
+        )
+        model.id = id
+        model.rotation = rotation
+        model.showsAnnotations = showsAnnotations
+        model.zIndex = zIndex
+        model.groupID = groupID
+        model.isLayerHidden = isLayerHidden
+        model.layerOpacity = layerOpacity
+        model.updatedAt = Date()
+        return model
     }
 }

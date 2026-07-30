@@ -5,8 +5,10 @@ import PencilKit
 
 struct CanvasGestureBridge: UIViewRepresentable {
     var isEnabled: Bool
+    var routesCanvasDrawingInput: Bool = false
     var requiresTwoFingerPan: Bool = false
     var selectedElementFrame: CGRect?
+    var canvasGestureExclusionFrames: [CGRect] = []
     var onPanBegan: () -> Void
     var onPanChanged: (CGSize) -> Void
     var onPanEnded: () -> Void
@@ -45,6 +47,7 @@ struct CanvasGestureBridge: UIViewRepresentable {
         private var pinchRecognizer: UIPinchGestureRecognizer?
         private var isPinching = false
         private var isPanning = false
+        private var activePanTouchCount = 1
 
         init(parent: CanvasGestureBridge) {
             self.parent = parent
@@ -90,14 +93,34 @@ struct CanvasGestureBridge: UIViewRepresentable {
         }
 
         func updateEnabledState() {
-            panRecognizer?.isEnabled = parent.isEnabled
-            pinchRecognizer?.isEnabled = parent.isEnabled
+            if panRecognizer?.isEnabled != parent.isEnabled {
+                panRecognizer?.isEnabled = parent.isEnabled
+            }
+            if pinchRecognizer?.isEnabled != parent.isEnabled {
+                pinchRecognizer?.isEnabled = parent.isEnabled
+            }
 
-            let panTouchCount = parent.requiresTwoFingerPan ? 2 : 1
-            panRecognizer?.minimumNumberOfTouches = panTouchCount
-            panRecognizer?.maximumNumberOfTouches = panTouchCount
-            panRecognizer?.cancelsTouchesInView = parent.requiresTwoFingerPan
-            pinchRecognizer?.cancelsTouchesInView = parent.requiresTwoFingerPan
+            synchronizeDrawingInputRouting()
+            if panRecognizer?.cancelsTouchesInView != parent.routesCanvasDrawingInput {
+                panRecognizer?.cancelsTouchesInView = parent.routesCanvasDrawingInput
+            }
+            if pinchRecognizer?.cancelsTouchesInView != parent.routesCanvasDrawingInput {
+                pinchRecognizer?.cancelsTouchesInView = parent.routesCanvasDrawingInput
+            }
+        }
+
+        /// In canvas drawing, finger navigation follows the same global
+        /// "Draw with Finger" preference that PencilKit's `.default` policy uses:
+        /// one finger pans when drawing is Pencil-only, otherwise two fingers pan.
+        private func synchronizeDrawingInputRouting() {
+            activePanTouchCount = parent.requiresTwoFingerPan
+                && !UIPencilInteraction.prefersPencilOnlyDrawing ? 2 : 1
+            if panRecognizer?.minimumNumberOfTouches != activePanTouchCount {
+                panRecognizer?.minimumNumberOfTouches = activePanTouchCount
+            }
+            if panRecognizer?.maximumNumberOfTouches != activePanTouchCount {
+                panRecognizer?.maximumNumberOfTouches = activePanTouchCount
+            }
         }
 
         private func detach() {
@@ -114,7 +137,7 @@ struct CanvasGestureBridge: UIViewRepresentable {
 
         @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
             guard parent.isEnabled, let sourceView else { return }
-            let requiredTouchCount = parent.requiresTwoFingerPan ? 2 : 1
+            let requiredTouchCount = activePanTouchCount
             switch recognizer.state {
             case .began:
                 guard recognizer.numberOfTouches == requiredTouchCount else { return }
@@ -158,11 +181,16 @@ struct CanvasGestureBridge: UIViewRepresentable {
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard parent.isEnabled, let sourceView else { return false }
+            synchronizeDrawingInputRouting()
             if isPanning && !(parent.requiresTwoFingerPan && gestureRecognizer === pinchRecognizer) {
                 return false
             }
             let point = gestureRecognizer.location(in: sourceView)
             guard sourceView.bounds.contains(point) else { return false }
+            if isCanvasNavigationRecognizer(gestureRecognizer),
+               isInsideCanvasGestureExclusion(point) {
+                return false
+            }
 
             if isCanvasNavigationRecognizer(gestureRecognizer),
                let attachedView {
@@ -189,8 +217,17 @@ struct CanvasGestureBridge: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldReceive touch: UITouch) -> Bool {
             guard parent.isEnabled, let sourceView else { return false }
+            synchronizeDrawingInputRouting()
+            // Apple Pencil is always reserved for PencilKit while drawing.
+            if parent.routesCanvasDrawingInput && touch.type == .pencil {
+                return false
+            }
             let point = touch.location(in: sourceView)
             guard sourceView.bounds.contains(point) else { return false }
+            if isCanvasNavigationRecognizer(gestureRecognizer),
+               isInsideCanvasGestureExclusion(point) {
+                return false
+            }
 
             if isCanvasNavigationRecognizer(gestureRecognizer),
                isInsideActivePencilKitRulerCanvas(touch.view) {
@@ -229,6 +266,10 @@ struct CanvasGestureBridge: UIViewRepresentable {
             gestureRecognizer === panRecognizer || gestureRecognizer === pinchRecognizer
         }
 
+        private func isInsideCanvasGestureExclusion(_ point: CGPoint) -> Bool {
+            parent.canvasGestureExclusionFrames.contains { $0.contains(point) }
+        }
+
         private func isInsideActivePencilKitRulerCanvas(_ view: UIView?) -> Bool {
             var current = view
             var depth = 0
@@ -250,7 +291,7 @@ struct CanvasGestureBridge: UIViewRepresentable {
                     return false
                 }
                 let className = NSStringFromClass(type(of: candidate))
-                if parent.requiresTwoFingerPan && className.contains("PKCanvasView") {
+                if parent.routesCanvasDrawingInput && className.contains("PKCanvasView") {
                     return false
                 }
                 if candidate is UIControl || candidate is UIScrollView {

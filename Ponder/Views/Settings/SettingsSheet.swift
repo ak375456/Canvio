@@ -404,6 +404,45 @@ struct SettingsSheet: View {
 
                 Divider()
 
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Stroke smoothing", systemImage: "waveform.path")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(drawingSmoothingLabel)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { settings.drawingPenSmoothing },
+                            set: { settings.drawingPenSmoothing = $0 }
+                        ),
+                        in: DrawingPenConfiguration.smoothingRange,
+                        step: 0.05
+                    )
+                    .accessibilityLabel("Stroke smoothing")
+                    .accessibilityValue(drawingSmoothingLabel)
+
+                    Text("Cleans up hand jitter after each new stroke. Higher values create visibly smoother curves.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Label {
+                    Text("For a pressure-free, uniform-width line, select Monoline in Apple’s drawing toolbar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "applepencil.and.scribble")
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
                 settingsToggleContent(
                     icon: "textformat.abc.dottedunderline",
                     title: "Handwriting to text",
@@ -1400,6 +1439,114 @@ struct SettingsSheet: View {
                     }
                 }
             }
+
+            if let style = adjustableCanvasPatternStyle {
+                canvasPatternSpacingControl(for: style)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    private var adjustableCanvasPatternStyle: GridStyle? {
+        switch settings.effectiveGridStyle {
+        case .squares, .horizontal, .vertical:
+            return settings.effectiveGridStyle
+        case .dotted, .none:
+            return nil
+        }
+    }
+
+    private func canvasPatternSpacingControl(for style: GridStyle) -> some View {
+        let spacing = settings.canvasPatternSpacing(for: style)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(canvasPatternSpacingTitle(for: style), systemImage: canvasPatternSpacingIcon(for: style))
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(Int(spacing.rounded()))")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 30, alignment: .trailing)
+                Text("canvas units")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    settings.setCanvasPatternSpacing(spacing - 2, for: style)
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .disabled(spacing <= AppSettings.canvasPatternSpacingRange.lowerBound)
+                .accessibilityLabel("Decrease \(canvasPatternSpacingTitle(for: style).lowercased())")
+
+                Slider(
+                    value: canvasPatternSpacingBinding(for: style),
+                    in: AppSettings.canvasPatternSpacingRange,
+                    step: 2
+                )
+                .accessibilityLabel(canvasPatternSpacingTitle(for: style))
+                .accessibilityValue("\(Int(spacing.rounded())) canvas units")
+
+                Button {
+                    settings.setCanvasPatternSpacing(spacing + 2, for: style)
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .disabled(spacing >= AppSettings.canvasPatternSpacingRange.upperBound)
+                .accessibilityLabel("Increase \(canvasPatternSpacingTitle(for: style).lowercased())")
+            }
+
+            Text(canvasPatternSpacingDescription(for: style))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func canvasPatternSpacingBinding(for style: GridStyle) -> Binding<Double> {
+        Binding(
+            get: { settings.canvasPatternSpacing(for: style) },
+            set: { settings.setCanvasPatternSpacing($0, for: style) }
+        )
+    }
+
+    private func canvasPatternSpacingTitle(for style: GridStyle) -> String {
+        switch style {
+        case .squares: return "Square size"
+        case .horizontal: return "Line height"
+        case .vertical: return "Column width"
+        case .dotted: return "Dot spacing"
+        case .none: return "Pattern spacing"
+        }
+    }
+
+    private func canvasPatternSpacingIcon(for style: GridStyle) -> String {
+        switch style {
+        case .squares: return "arrow.up.left.and.arrow.down.right"
+        case .horizontal: return "arrow.up.and.down"
+        case .vertical: return "arrow.left.and.right"
+        case .dotted: return "circle.grid.2x2"
+        case .none: return "square"
+        }
+    }
+
+    private func canvasPatternSpacingDescription(for style: GridStyle) -> String {
+        switch style {
+        case .squares:
+            return "Changes the width and height of every grid square on all canvases."
+        case .horizontal:
+            return "Changes the vertical distance between lines on all canvases."
+        case .vertical:
+            return "Changes the horizontal distance between columns on all canvases."
+        case .dotted, .none:
+            return "Changes the canvas pattern spacing."
         }
     }
 
@@ -1416,6 +1563,16 @@ struct SettingsSheet: View {
         case ..<0.3: return "Relaxed"
         case 0.3..<0.55: return "Balanced"
         default: return "Strict"
+        }
+    }
+
+    private var drawingSmoothingLabel: String {
+        let value = settings.drawingPenSmoothing
+        switch value {
+        case ..<0.05: return "Off"
+        case ..<0.3:  return "Light"
+        case ..<0.65: return "Medium"
+        default:      return "Strong"
         }
     }
 

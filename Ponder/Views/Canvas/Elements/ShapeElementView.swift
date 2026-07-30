@@ -20,8 +20,30 @@ private enum ShapeCustomColorTarget: String, Identifiable {
     }
 }
 
+private struct ShapeStyleHistoryState: Equatable {
+    let strokeColorName: String
+    let fillColorName: String
+    let hasFill: Bool
+    let strokeWidth: Double
+
+    init(_ shape: ShapeElementModel) {
+        strokeColorName = shape.strokeColorName
+        fillColorName = shape.fillColorName
+        hasFill = shape.hasFill
+        strokeWidth = shape.strokeWidth
+    }
+
+    func apply(to shape: ShapeElementModel) {
+        shape.strokeColorName = strokeColorName
+        shape.fillColorName = fillColorName
+        shape.hasFill = hasFill
+        shape.strokeWidth = strokeWidth
+    }
+}
+
 struct ShapeElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var shape: ShapeElementModel
     let canvasScale: CGFloat
     let canvasOffset: CGSize
@@ -189,8 +211,13 @@ struct ShapeElementView: View {
             if shape.shapeKind == .line {
                 Divider().frame(height: 18)
                 Button {
+                    let oldValue = shape.hasArrowHead
                     shape.hasArrowHead.toggle(); shape.updatedAt = Date(); try? context.save()
                     Task { await ShapeSyncService.shared.upsert(shape) }
+                    canvasHistory.recordElementChange(
+                        name: "Toggle arrowhead", element: shape,
+                        from: oldValue, to: shape.hasArrowHead, context: context
+                    ) { $0.hasArrowHead = $1 }
                 } label: {
                     Image(systemName: shape.hasArrowHead ? "arrow.right" : "minus")
                         .font(.system(size: 12, weight: .bold))
@@ -203,8 +230,13 @@ struct ShapeElementView: View {
                 Menu {
                     ForEach(TriangleVariant.allCases) { v in
                         Button {
+                            let oldValue = shape.triangleVariantRaw
                             shape.triangleVariant = v; shape.updatedAt = Date(); try? context.save()
                             Task { await ShapeSyncService.shared.upsert(shape) }
+                            canvasHistory.recordElementChange(
+                                name: "Change triangle type", element: shape,
+                                from: oldValue, to: shape.triangleVariantRaw, context: context
+                            ) { $0.triangleVariantRaw = $1 }
                         } label: { Text(v.title) }
                     }
                 } label: {
@@ -217,8 +249,14 @@ struct ShapeElementView: View {
                 Menu {
                     ForEach(3...12, id: \.self) { n in
                         Button {
+                            let oldValue = shape.polygonSides
                             shape.polygonSides = n; shape.updatedAt = Date(); try? context.save()
                             Task { await ShapeSyncService.shared.upsert(shape) }
+                            canvasHistory.recordElementChange(
+                                name: "Change polygon sides", element: shape,
+                                from: oldValue, to: shape.polygonSides, context: context,
+                                coalescingKey: "shape-sides-\(shape.id)"
+                            ) { $0.polygonSides = $1 }
                         } label: { Text("\(n) sides") }
                     }
                 } label: {
@@ -421,31 +459,35 @@ struct ShapeElementView: View {
     private func setStrokeColor(_ name: String) {
         guard name != "none" || canDisableStroke else { return }
         if shape.shapeKind == .line && name == "none" { return }
+        let oldState = ShapeStyleHistoryState(shape)
         shape.strokeColorName = name
         if name != "none", shape.strokeWidth <= 0 {
             shape.strokeWidth = 2.5
         }
-        persistShapeStyle()
+        persistShapeStyle(from: oldState)
     }
 
     private func setFillEnabled(_ enabled: Bool) {
         guard shape.shapeKind.supportsFill else { return }
         if !enabled && !canDisableFill { return }
+        let oldState = ShapeStyleHistoryState(shape)
         shape.hasFill = enabled
-        persistShapeStyle()
+        persistShapeStyle(from: oldState)
     }
 
     private func setFillColor(_ name: String) {
         guard shape.shapeKind.supportsFill else { return }
+        let oldState = ShapeStyleHistoryState(shape)
         shape.fillColorName = name
         shape.hasFill = true
-        persistShapeStyle()
+        persistShapeStyle(from: oldState)
     }
 
     private func setStrokeWidth(_ width: Double) {
         guard hasVisibleStroke else { return }
+        let oldState = ShapeStyleHistoryState(shape)
         shape.strokeWidth = width
-        persistShapeStyle()
+        persistShapeStyle(from: oldState)
     }
 
     private func ensureVisibleStyle() {
@@ -455,17 +497,31 @@ struct ShapeElementView: View {
         persistShapeStyle()
     }
 
-    private func persistShapeStyle() {
+    private func persistShapeStyle(from oldState: ShapeStyleHistoryState? = nil) {
         shape.updatedAt = Date()
         try? context.save()
         Task { await ShapeSyncService.shared.upsert(shape) }
+        if let oldState {
+            canvasHistory.recordElementChange(
+                name: "Change shape style",
+                element: shape,
+                from: oldState,
+                to: ShapeStyleHistoryState(shape),
+                context: context,
+                coalescingKey: "shape-style-\(shape.id)"
+            ) { target, state in
+                state.apply(to: target)
+            }
+        }
     }
 
     private var cornerHandles: some View {
         let hw = currentSize.width / 2
         let hh = currentSize.height / 2
         return ZStack {
-            tapHandle(icon: "trash", color: .red, x: -hw, y: -hh) { vm.delete(shape: shape, context: context) }
+            tapHandle(icon: "trash", color: .red, x: -hw, y: -hh) {
+                vm.delete(shape: shape, context: context, undoManager: canvasHistory)
+            }
             rotateHandle(x: -hw, y: hh)
             resizeHandle(x: hw, y: hh)
         }
@@ -488,8 +544,16 @@ struct ShapeElementView: View {
                 }
                 .onEnded { _ in
                     rotationGestureState.reset()
+                    let oldRotation = shape.rotation
                     shape.rotation = rotationAngle; shape.updatedAt = Date(); try? context.save()
                     Task { await ShapeSyncService.shared.upsert(shape) }
+                    canvasHistory.recordElementChange(
+                        name: "Rotate shape",
+                        element: shape,
+                        from: oldRotation,
+                        to: shape.rotation,
+                        context: context
+                    ) { $0.rotation = $1 }
                 })
     }
 
@@ -505,7 +569,13 @@ struct ShapeElementView: View {
                 .onChanged { resizeDelta = $0.translation }
                 .onEnded { value in
                     let t = value.translation; resizeDelta = .zero
-                    vm.updateSize(shape: shape, width: shape.width + t.width, height: shape.height + t.height, context: context)
+                    vm.updateSize(
+                        shape: shape,
+                        width: shape.width + t.width,
+                        height: shape.height + t.height,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
                 })
     }
 
@@ -531,7 +601,14 @@ struct ShapeElementView: View {
                     return
                 }
                 let t = value.translation; dragOffset = .zero
-                vm.updatePosition(shape: shape, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
+                vm.updatePosition(
+                    shape: shape,
+                    translation: t,
+                    scale: canvasScale,
+                    boundary: canvasBoundary,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
     }
 

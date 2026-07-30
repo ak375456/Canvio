@@ -8,6 +8,7 @@ import SwiftData
 
 struct SymbolElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     let element: SymbolElementModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -53,7 +54,7 @@ struct SymbolElementView: View {
             // Delete handle — top left when selected
             if isSelected && !isMultiSelectMode {
                 Button {
-                    vm.delete(element: element, context: context)
+                    vm.delete(element: element, context: context, undoManager: canvasHistory)
                 } label: {
                     ZStack {
                         Circle().fill(Color.red)
@@ -92,7 +93,12 @@ struct SymbolElementView: View {
         HStack(spacing: 6) {
             // Size -
             Button {
-                vm.setFontSize(element.fontSize - 8, element: element, context: context)
+                vm.setFontSize(
+                    element.fontSize - 8,
+                    element: element,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             } label: {
                 Image(systemName: "minus")
                     .font(.system(size: 12, weight: .semibold))
@@ -108,7 +114,12 @@ struct SymbolElementView: View {
 
             // Size +
             Button {
-                vm.setFontSize(element.fontSize + 8, element: element, context: context)
+                vm.setFontSize(
+                    element.fontSize + 8,
+                    element: element,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
@@ -124,7 +135,12 @@ struct SymbolElementView: View {
             // Color dots
             ForEach(vm.colorOptions.prefix(8), id: \.name) { option in
                 Button {
-                    vm.setColor(option.name, element: element, context: context)
+                    vm.setColor(
+                        option.name,
+                        element: element,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
                 } label: {
                     let active = element.colorName == option.name
                     Circle()
@@ -198,7 +214,7 @@ struct SymbolElementView: View {
                 vm.updatePosition(
                     element: element, translation: t,
                     scale: canvasScale, boundary: canvasBoundary,
-                    context: context
+                    context: context, undoManager: canvasHistory
                 )
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     isDragging = false

@@ -19,6 +19,20 @@ struct ElementBounds {
     let height: Double
 }
 
+private struct ConnectorStyleHistoryState: Equatable {
+    let lineStyle: ConnectorLineStyle
+    let colorName: String
+    let strokeWidth: Double
+    let hasArrowHead: Bool
+
+    init(_ connector: ConnectorModel) {
+        lineStyle = connector.lineStyle
+        colorName = connector.colorName
+        strokeWidth = connector.strokeWidth
+        hasArrowHead = connector.hasArrowHead
+    }
+}
+
 // MARK: - ViewModel
 
 @MainActor
@@ -120,6 +134,7 @@ class ConnectorViewModel: ObservableObject {
 
         let id = connector.id
         undoManager?.push(CanvasAction(
+            name: "Add connector",
             undo: {
                 if let c = try? context.fetch(FetchDescriptor<ConnectorModel>())
                     .first(where: { $0.id == id }) {
@@ -157,6 +172,7 @@ class ConnectorViewModel: ObservableObject {
         if selectedConnectorID == snap.id { selectedConnectorID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete connector",
             undo: {
                 let c = ConnectorModel(
                     canvasID: snap.canvasID,
@@ -184,7 +200,9 @@ class ConnectorViewModel: ObservableObject {
                      colorName: String? = nil,
                      strokeWidth: Double? = nil,
                      hasArrowHead: Bool? = nil,
-                     context: ModelContext) {
+                     context: ModelContext,
+                     undoManager: CanvasUndoManager? = nil) {
+        let oldState = ConnectorStyleHistoryState(connector)
         if let v = lineStyle    { connector.lineStyle    = v }
         if let v = colorName    { connector.colorName    = v }
         if let v = strokeWidth  { connector.strokeWidth  = v }
@@ -192,21 +210,37 @@ class ConnectorViewModel: ObservableObject {
         connector.updatedAt = Date()
         try? context.save()
         Task { await ConnectorSyncService.shared.upsert(connector) }
+        let newState = ConnectorStyleHistoryState(connector)
+        let id = connector.id
+        undoManager?.recordChange(
+            name: "Change connector style",
+            from: oldState,
+            to: newState
+        ) { state in
+            let connectors = (try? context.fetch(FetchDescriptor<ConnectorModel>())) ?? []
+            guard let current = connectors.first(where: { $0.id == id }) else { return }
+            current.lineStyle = state.lineStyle
+            current.colorName = state.colorName
+            current.strokeWidth = state.strokeWidth
+            current.hasArrowHead = state.hasArrowHead
+            current.updatedAt = Date()
+            try? context.save()
+            Task { await ConnectorSyncService.shared.upsert(current) }
+        }
     }
 
     // Removes all connectors that reference a deleted element
     // Now soft-deletes on Supabase too so other devices remove them.
     func deleteOrphanedConnectors(for elementID: UUID,
                                   allConnectors: [ConnectorModel],
-                                  context: ModelContext) {
+                                  context: ModelContext,
+                                  undoManager: CanvasUndoManager? = nil) {
         let orphans = allConnectors.filter {
             $0.fromElementID == elementID || $0.toElementID == elementID
         }
         for c in orphans {
-            Task { await ConnectorSyncService.shared.delete(c) }
-            context.delete(c)
+            delete(connector: c, context: context, undoManager: undoManager)
         }
-        if !orphans.isEmpty { try? context.save() }
     }
 
     func stopEditing() {

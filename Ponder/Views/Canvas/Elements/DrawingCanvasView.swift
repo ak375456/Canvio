@@ -574,6 +574,7 @@ private struct PencilShapeSnapper {
 }
 
 struct DrawingCanvasView: View {
+    @EnvironmentObject private var settings: AppSettings
     let drawing: PKDrawing
     let isEditing: Bool
     let canvasScale: CGFloat
@@ -592,17 +593,22 @@ struct DrawingCanvasView: View {
                     smartShapeSnappingEnabled: smartShapeSnappingEnabled,
                     selectedColor: $selectedColor,
                     colorRevision: pickedColorRevision,
+                    penConfiguration: settings.drawingPenConfiguration,
                     onDrawingChanged: onDrawingChanged
                 )
 
-                DrawingColorPickerButton(
-                    selectedColor: $selectedColor,
-                    compact: true,
-                    isActive: isPickingColor
-                ) {
-                    isPickingColor.toggle()
+                HStack(spacing: 6) {
+                    DrawingAssistanceButton()
+
+                    DrawingColorPickerButton(
+                        selectedColor: $selectedColor,
+                        compact: true,
+                        isActive: isPickingColor
+                    ) {
+                        isPickingColor.toggle()
+                    }
                 }
-                    .padding(8)
+                .padding(8)
 
                 if isPickingColor {
                     DrawingColorSamplingOverlay(
@@ -622,6 +628,7 @@ struct DrawingCanvasView: View {
             DrawingSnapshot(drawing: drawing, canvasScale: canvasScale)
         }
     }
+
 }
 
 // MARK: - Static snapshot
@@ -730,7 +737,7 @@ private final class DrawingSnapshotImageCache {
 }
 
 // MARK: - Live PKCanvasView (card drawing)
-// anyInput = finger or pencil draws.
+// The default policy follows the system "Draw with Finger" preference.
 // Two-finger pan is handled by PKCanvasView's built-in scroll view —
 // it automatically reserves two-finger for scroll when isScrollEnabled=true.
 private struct LivePKCanvas: UIViewRepresentable {
@@ -738,11 +745,13 @@ private struct LivePKCanvas: UIViewRepresentable {
     let smartShapeSnappingEnabled: Bool
     @Binding var selectedColor: UIColor
     let colorRevision: Int
+    let penConfiguration: DrawingPenConfiguration
     let onDrawingChanged: (PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selectedColor: $selectedColor,
+            penConfiguration: penConfiguration,
             smartShapeSnappingEnabled: smartShapeSnappingEnabled,
             onDrawingChanged: onDrawingChanged
         )
@@ -753,8 +762,7 @@ private struct LivePKCanvas: UIViewRepresentable {
         canvas.drawing         = drawing
         canvas.backgroundColor = .clear
         canvas.isOpaque        = false
-        // anyInput: finger and pencil both draw
-        canvas.drawingPolicy   = .anyInput
+        canvas.drawingPolicy   = .default
         canvas.delegate        = context.coordinator
         context.coordinator.canvas = canvas
 
@@ -778,6 +786,7 @@ private struct LivePKCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        canvas.drawingPolicy = .default
         context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         if canvas.drawing.dataRepresentation() != drawing.dataRepresentation()
             && !canvas.isFirstResponder {
@@ -788,6 +797,7 @@ private struct LivePKCanvas: UIViewRepresentable {
             selectedColor: selectedColor,
             colorRevision: colorRevision
         )
+        context.coordinator.penConfiguration = penConfiguration
         context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
         if !canvas.isFirstResponder {
             DispatchQueue.main.async { canvas.becomeFirstResponder() }
@@ -803,6 +813,7 @@ private struct LivePKCanvas: UIViewRepresentable {
 
     class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         @Binding var selectedColor: UIColor
+        var penConfiguration: DrawingPenConfiguration
         let onDrawingChanged: (PKDrawing) -> Void
         weak var canvas: PKCanvasView?
         var toolPicker: PKToolPicker?
@@ -815,18 +826,23 @@ private struct LivePKCanvas: UIViewRepresentable {
         private var lastPickerToolItemIdentifier: String?
         private var lastPickerInkType: PKInkingTool.InkType?
         private var isApplyingPickedColor = false
+        private var isApplyingStrokeProcessing = false
+        private var strokeBaseline: DrawingStrokeBaseline?
         private let shapeSnapController = PencilShapeSnapController()
 
         init(selectedColor: Binding<UIColor>,
+             penConfiguration: DrawingPenConfiguration,
              smartShapeSnappingEnabled: Bool,
              onDrawingChanged: @escaping (PKDrawing) -> Void) {
             self._selectedColor = selectedColor
+            self.penConfiguration = penConfiguration
             self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.onDrawingChanged = onDrawingChanged
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
 
         func canvasViewDrawingDidChange(_ canvas: PKCanvasView) {
+            guard !isApplyingStrokeProcessing else { return }
             onDrawingChanged(canvas.drawing)
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
             shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
@@ -834,9 +850,33 @@ private struct LivePKCanvas: UIViewRepresentable {
             }
         }
 
+        func canvasViewDidBeginUsingTool(_ canvas: PKCanvasView) {
+            strokeBaseline = canvas.tool is PKInkingTool
+                ? DrawingStrokeBaseline(drawing: canvas.drawing)
+                : nil
+        }
+
         func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
-            shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
-                self?.onDrawingChanged(snappedDrawing)
+            let baseline = strokeBaseline
+            strokeBaseline = nil
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvas] in
+                guard let self, let canvas else { return }
+                if let baseline,
+                   let processed = DrawingStrokeProcessor.processingLatestStroke(
+                       in: canvas.drawing,
+                       since: baseline,
+                       configuration: self.penConfiguration
+                   ) {
+                    self.isApplyingStrokeProcessing = true
+                    canvas.drawing = processed
+                    self.onDrawingChanged(processed)
+                    self.isApplyingStrokeProcessing = false
+                }
+
+                self.shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
+                    self?.onDrawingChanged(snappedDrawing)
+                }
             }
         }
 
@@ -873,9 +913,8 @@ private struct LivePKCanvas: UIViewRepresentable {
         }
 
         private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
-            let didSwitchTool = updatePickerSelectionState(toolPicker)
+            _ = updatePickerSelectionState(toolPicker)
             let selectedInkingTool = pickerInkingTool(from: toolPicker)
-            let didSwitchToInkingTool = didSwitchTool && selectedInkingTool != nil
             if selectedInkingTool == nil {
                 shapeSnapController.cancelPendingSnap()
             }
@@ -883,8 +922,11 @@ private struct LivePKCanvas: UIViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let canvas = self.canvas else { return }
 
-                if didSwitchToInkingTool {
-                    self.applyColor(self.selectedColor, to: canvas, switchToPenIfNeeded: false)
+                if let selectedInkingTool {
+                    let toolColor = selectedInkingTool.color.withAlphaComponent(1)
+                    if !self.selectedColor.isDrawingEquivalent(to: toolColor) {
+                        self.selectedColor = toolColor
+                    }
                 } else {
                     self.syncSelectedColorFromCurrentInkingTool(canvas)
                 }
@@ -900,9 +942,17 @@ private struct LivePKCanvas: UIViewRepresentable {
             let nextTool: PKInkingTool
 
             if let inkingTool = canvas.tool as? PKInkingTool {
-                nextTool = PKInkingTool(inkingTool.inkType, color: color, width: inkingTool.width)
+                nextTool = PKInkingTool(
+                    inkingTool.inkType,
+                    color: color.withAlphaComponent(inkingTool.color.cgColor.alpha),
+                    width: inkingTool.width
+                )
             } else if let pickerTool = pickerInkingTool(from: toolPicker) {
-                nextTool = PKInkingTool(pickerTool.inkType, color: color, width: pickerTool.width)
+                nextTool = PKInkingTool(
+                    pickerTool.inkType,
+                    color: color.withAlphaComponent(pickerTool.color.cgColor.alpha),
+                    width: pickerTool.width
+                )
             } else if switchToPenIfNeeded {
                 nextTool = PKInkingTool(.pen, color: color, width: 5)
             } else {
@@ -999,6 +1049,8 @@ struct MacDrawingToolState: Equatable {
     var sampledColor: MacDrawingSampledColor?
     var usesSampledColor = false
     var width: CGFloat = 4
+    var opacity: CGFloat = 1
+    var smoothing: CGFloat = 0.35
     var eraserWidth: CGFloat = 24
     var isErasing = false
 
@@ -1015,6 +1067,7 @@ struct MacDrawingToolState: Equatable {
         }
         return color.swatchColor(colorScheme: colorScheme)
     }
+
 }
 
 struct MacDrawingSampledColor: Equatable {
@@ -1043,6 +1096,7 @@ struct MacDrawingSampledColor: Equatable {
 
 enum MacDrawingInk: String, CaseIterable, Identifiable {
     case pen
+    case monoline
     case pencil
     case marker
     case fountainPen
@@ -1054,6 +1108,7 @@ enum MacDrawingInk: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .pen:         return "Pen"
+        case .monoline:    return "Monoline"
         case .pencil:      return "Pencil"
         case .marker:      return "Marker"
         case .fountainPen: return "Fountain Pen"
@@ -1065,6 +1120,7 @@ enum MacDrawingInk: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .pen:         return "pencil.tip"
+        case .monoline:    return "scribble.variable"
         case .pencil:      return "pencil"
         case .marker:      return "highlighter"
         case .fountainPen: return "paintbrush.pointed"
@@ -1076,6 +1132,7 @@ enum MacDrawingInk: String, CaseIterable, Identifiable {
     var inkType: PKInkingTool.InkType {
         switch self {
         case .pen:         return .pen
+        case .monoline:    return .monoline
         case .pencil:      return .pencil
         case .marker:      return .marker
         case .fountainPen: return .fountainPen
@@ -1087,6 +1144,7 @@ enum MacDrawingInk: String, CaseIterable, Identifiable {
     var defaultWidth: CGFloat {
         switch self {
         case .pen:         return 4
+        case .monoline:    return 5
         case .pencil:      return 5
         case .marker:      return 12
         case .fountainPen: return 4
@@ -1094,6 +1152,7 @@ enum MacDrawingInk: String, CaseIterable, Identifiable {
         case .crayon:      return 8
         }
     }
+
 }
 
 enum MacDrawingColor: String, CaseIterable, Identifiable {
@@ -1146,6 +1205,7 @@ enum MacDrawingColor: String, CaseIterable, Identifiable {
 }
 
 struct MacDrawingEditor: View {
+    @EnvironmentObject private var settings: AppSettings
     let drawing: PKDrawing
     let canvasScale: CGFloat
     let onDrawingChanged: (PKDrawing) -> Void
@@ -1169,6 +1229,17 @@ struct MacDrawingEditor: View {
             }
             .zIndex(1)
         }
+        .onAppear {
+            syncDrawingAssistance(settings.drawingPenConfiguration)
+        }
+        .onChange(of: settings.drawingPenConfiguration) { _, configuration in
+            syncDrawingAssistance(configuration)
+        }
+    }
+
+    private func syncDrawingAssistance(_ configuration: DrawingPenConfiguration) {
+        let normalized = configuration.normalized
+        tool.smoothing = CGFloat(normalized.smoothing)
     }
 }
 
@@ -1234,6 +1305,8 @@ private struct MacDrawingToolControls: View {
                 Slider(value: activeWidth, in: widthRange)
                     .frame(width: 96)
                     .help(tool.isErasing ? "Eraser Size" : "Stroke Width")
+
+                DrawingAssistanceButton(arrowEdge: .bottom)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
@@ -1356,6 +1429,7 @@ private struct MacFreehandPKDrawingView: View {
 
     private var strokeColor: NSColor {
         tool.strokeNSColor(colorScheme: colorScheme)
+            .withAlphaComponent(tool.opacity)
     }
 
     private var drawingGesture: some Gesture {
@@ -1405,7 +1479,11 @@ private struct MacFreehandPKDrawingView: View {
     private func drawingByAppendingCurrentStroke() -> PKDrawing {
         guard currentPoints.count > 1 else { return committedDrawing }
 
-        let strokePoints = currentPoints.enumerated().map { index, point in
+        let renderedPoints = DrawingStrokeProcessor.smoothedLocations(
+            currentPoints,
+            amount: tool.smoothing
+        )
+        let strokePoints = renderedPoints.enumerated().map { index, point in
             PKStrokePoint(
                 location: point,
                 timeOffset: TimeInterval(index) * 0.01,

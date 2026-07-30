@@ -18,12 +18,14 @@ struct LayerRowItem: Identifiable, Equatable {
 struct LayersSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
 
     let allElements: [any LayerableElement]
     @ObservedObject var vm: LayersViewModel
     let onSelectElement: (UUID) -> Void
 
     @State private var orderedItems: [LayerRowItem] = []
+    @State private var opacityStartValues: [UUID: Double] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -201,7 +203,7 @@ struct LayersSheet: View {
         let elementsInOrder = bottomToTop.compactMap { item in
             allElements.first { $0.id == item.id }
         }
-        vm.reorder(elementsInOrder, context: context)
+        vm.reorder(elementsInOrder, context: context, undoManager: canvasHistory)
     }
 
     private func rebuildOrderedItems() {
@@ -242,7 +244,13 @@ struct LayersSheet: View {
                     in: 0.05...1,
                     step: 0.05,
                     onEditingChanged: { editing in
-                        if !editing { persistOpacity(item.id) }
+                        if editing {
+                            if let element = allElements.first(where: { $0.id == item.id }) {
+                                opacityStartValues[item.id] = element.layerOpacity
+                            }
+                        } else {
+                            persistOpacity(item.id)
+                        }
                     }
                 )
                 .frame(width: 68)
@@ -256,10 +264,30 @@ struct LayersSheet: View {
     private func toggleVisibility(_ id: UUID) {
         guard let index = orderedItems.firstIndex(where: { $0.id == id }),
               let element = allElements.first(where: { $0.id == id }) else { return }
+        let oldValue = element.isLayerHidden
         orderedItems[index].isHidden.toggle()
         element.isLayerHidden = orderedItems[index].isHidden
         element.updatedAt = Date()
         try? context.save()
+        Task { await CanvasElementSyncRouter.upsert(element) }
+        let newValue = element.isLayerHidden
+        canvasHistory.recordChange(
+            name: newValue ? "Hide layer" : "Show layer",
+            from: oldValue,
+            to: newValue
+        ) { value in
+            guard let current = CanvasElementHistoryLookup.element(
+                withID: id,
+                context: context
+            ) else { return }
+            current.isLayerHidden = value
+            current.updatedAt = Date()
+            try? context.save()
+            if let row = orderedItems.firstIndex(where: { $0.id == id }) {
+                orderedItems[row].isHidden = value
+            }
+            Task { await CanvasElementSyncRouter.upsert(current) }
+        }
     }
 
     private func opacityBinding(for id: UUID) -> Binding<Double> {
@@ -277,8 +305,29 @@ struct LayersSheet: View {
 
     private func persistOpacity(_ id: UUID) {
         guard let element = allElements.first(where: { $0.id == id }) else { return }
+        let oldValue = opacityStartValues.removeValue(forKey: id) ?? element.layerOpacity
+        let newValue = element.layerOpacity
         element.updatedAt = Date()
         try? context.save()
+        Task { await CanvasElementSyncRouter.upsert(element) }
+        canvasHistory.recordChange(
+            name: "Change layer opacity",
+            from: oldValue,
+            to: newValue,
+            coalescingKey: "layer-opacity-\(id)"
+        ) { value in
+            guard let current = CanvasElementHistoryLookup.element(
+                withID: id,
+                context: context
+            ) else { return }
+            current.layerOpacity = value
+            current.updatedAt = Date()
+            try? context.save()
+            if let row = orderedItems.firstIndex(where: { $0.id == id }) {
+                orderedItems[row].opacity = value
+            }
+            Task { await CanvasElementSyncRouter.upsert(current) }
+        }
     }
 
     @ViewBuilder

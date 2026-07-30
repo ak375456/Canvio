@@ -68,6 +68,462 @@ private struct ElementPositionSnapshot {
     let y: Double
 }
 
+private struct CanvasAlignmentUnit {
+    let elements: [any LayerableElement]
+    let bounds: CGRect
+}
+
+private struct CanvasAlignmentRulerState {
+    var center: CGPoint
+    var angle: CGFloat
+    /// Screen-space length. Canvas zoom must never resize the physical ruler.
+    var length: CGFloat
+}
+
+private struct CanvasAlignmentGuideOverlay: View {
+    let screenPoint: CGPoint
+    let canvasPoint: CGPoint
+    let canvasScale: CGFloat
+    let onMove: (CGPoint) -> Void
+
+    var body: some View {
+        ZStack {
+            SwiftUI.Canvas { context, size in
+                let lineColor = Color.orange.opacity(0.82)
+                var guideLines = Path()
+                guideLines.move(to: CGPoint(x: screenPoint.x, y: 0))
+                guideLines.addLine(to: CGPoint(x: screenPoint.x, y: size.height))
+                guideLines.move(to: CGPoint(x: 0, y: screenPoint.y))
+                guideLines.addLine(to: CGPoint(x: size.width, y: screenPoint.y))
+                context.stroke(
+                    guideLines,
+                    with: .color(lineColor),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
+                )
+
+                let tickSpacing = max(20, min(64, 24 * max(canvasScale, 0.25)))
+                var ticks = Path()
+                let firstX = normalizedRemainder(screenPoint.x, spacing: tickSpacing)
+                var tickIndex = 0
+                var x = firstX
+                while x <= size.width {
+                    let length: CGFloat = tickIndex.isMultiple(of: 5) ? 10 : 5
+                    ticks.move(to: CGPoint(x: x, y: screenPoint.y - length))
+                    ticks.addLine(to: CGPoint(x: x, y: screenPoint.y + length))
+                    tickIndex += 1
+                    x += tickSpacing
+                }
+
+                let firstY = normalizedRemainder(screenPoint.y, spacing: tickSpacing)
+                tickIndex = 0
+                var y = firstY
+                while y <= size.height {
+                    let length: CGFloat = tickIndex.isMultiple(of: 5) ? 10 : 5
+                    ticks.move(to: CGPoint(x: screenPoint.x - length, y: y))
+                    ticks.addLine(to: CGPoint(x: screenPoint.x + length, y: y))
+                    tickIndex += 1
+                    y += tickSpacing
+                }
+                context.stroke(ticks, with: .color(Color.orange.opacity(0.58)), lineWidth: 1)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+
+            Text("\(Int(canvasPoint.x.rounded())), \(Int(canvasPoint.y.rounded()))")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.orange.opacity(0.45), lineWidth: 0.5))
+                .position(x: screenPoint.x, y: max(16, screenPoint.y - 34))
+                .allowsHitTesting(false)
+
+            ZStack {
+                Circle()
+                    .fill(.regularMaterial)
+                Circle()
+                    .strokeBorder(Color.orange, lineWidth: 2)
+                Image(systemName: "scope")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.orange)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .position(screenPoint)
+            .shadow(color: .black.opacity(0.16), radius: 6, y: 2)
+            .gesture(
+                DragGesture(
+                    minimumDistance: 0,
+                    coordinateSpace: .named(canvasViewportCoordinateSpace)
+                )
+                .onChanged { value in
+                    onMove(value.location)
+                }
+            )
+            .accessibilityLabel("Alignment guide")
+            .accessibilityValue(
+                "X \(Int(canvasPoint.x.rounded())), Y \(Int(canvasPoint.y.rounded()))"
+            )
+            .accessibilityHint("Drag to position the guide, then use the alignment controls.")
+        }
+    }
+
+    private func normalizedRemainder(_ value: CGFloat, spacing: CGFloat) -> CGFloat {
+        let remainder = value.truncatingRemainder(dividingBy: spacing)
+        return remainder >= 0 ? remainder : remainder + spacing
+    }
+}
+
+private struct CanvasAlignmentRulerOverlay: View {
+    let screenCenter: CGPoint
+    let canvasCenter: CGPoint
+    let canvasScale: CGFloat
+    let angle: CGFloat
+    let length: CGFloat
+    let onMove: (CGPoint) -> Void
+    let onRotate: (CGFloat) -> Void
+    let onTransform: (_ length: CGFloat, _ angle: CGFloat) -> Void
+
+    @State private var dragOrigin: CGPoint?
+    @State private var transformOriginLength: CGFloat?
+    @State private var transformOriginAngle: CGFloat?
+    @State private var transformPreviewLength: CGFloat?
+    @State private var transformPreviewAngle: CGFloat?
+    @State private var handlePreviewAngle: CGFloat?
+    @State private var isTwoFingerTransforming = false
+    @State private var transformKind: TransformKind?
+
+    private let thickness: CGFloat = 58
+    private let minimumLength: CGFloat = 160
+    private let maximumLength: CGFloat = 900
+
+    private enum TransformKind {
+        case resize
+        case rotate
+        case resizeAndRotate
+
+        var title: String {
+            switch self {
+            case .resize:
+                return "Resizing"
+            case .rotate:
+                return "Rotating"
+            case .resizeAndRotate:
+                return "Resize & rotate"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .resize:
+                return "arrow.left.and.right"
+            case .rotate:
+                return "arrow.triangle.2.circlepath"
+            case .resizeAndRotate:
+                return "move.3d"
+            }
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            rulerBar
+                .frame(width: displayedLength, height: thickness)
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .rotationEffect(.radians(Double(displayedAngle)))
+                .position(screenCenter)
+                .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                .gesture(moveGesture)
+                .simultaneousGesture(transformGesture)
+                .accessibilityLabel("Alignment ruler")
+                .accessibilityValue(
+                    "\(Int(displayedLength.rounded())) points, "
+                    + "\(displayedAngleDegrees) degrees"
+                )
+                .accessibilityHint(
+                    "Drag with one finger to move. Pinch with two fingers to resize "
+                    + "and twist with two fingers to rotate."
+                )
+
+            rotationHandle
+
+            if let transformKind {
+                transformFeedback(for: transformKind)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: transformKind?.title)
+    }
+
+    private var rulerBar: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(.regularMaterial)
+
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.indigo.opacity(0.13))
+
+            SwiftUI.Canvas { context, size in
+                var centerLine = Path()
+                centerLine.move(to: CGPoint(x: 0, y: size.height / 2))
+                centerLine.addLine(to: CGPoint(x: size.width, y: size.height / 2))
+                context.stroke(
+                    centerLine,
+                    with: .color(Color.indigo.opacity(0.9)),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [7, 4])
+                )
+
+                var ticks = Path()
+                let spacing: CGFloat = 10
+                let count = max(1, Int(size.width / spacing))
+                for index in 0...count {
+                    let x = min(CGFloat(index) * spacing, size.width)
+                    let isMajor = index.isMultiple(of: 5)
+                    let tickLength: CGFloat = isMajor ? 15 : 8
+
+                    ticks.move(to: CGPoint(x: x, y: 0))
+                    ticks.addLine(to: CGPoint(x: x, y: tickLength))
+                    ticks.move(to: CGPoint(x: x, y: size.height))
+                    ticks.addLine(to: CGPoint(x: x, y: size.height - tickLength))
+
+                    if isMajor, index > 0, x < size.width - 8 {
+                        let label = context.resolve(
+                            Text("\(index / 5)")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.indigo)
+                        )
+                        context.draw(
+                            label,
+                            at: CGPoint(x: x, y: size.height / 2 - 10),
+                            anchor: .center
+                        )
+                    }
+                }
+                context.stroke(
+                    ticks,
+                    with: .color(Color.indigo.opacity(0.68)),
+                    lineWidth: 1
+                )
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+
+            HStack(spacing: 5) {
+                Image(systemName: "move.3d")
+                Text("\(Int(displayedLength.rounded())) pt")
+                Text("•")
+                    .foregroundStyle(.tertiary)
+                Text("\(displayedAngleDegrees)°")
+                    .monospacedDigit()
+            }
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.indigo)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .allowsHitTesting(false)
+
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.indigo.opacity(0.72), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var rotationHandle: some View {
+        let radius = displayedLength / 2 + 23
+        let point = CGPoint(
+            x: screenCenter.x + cos(displayedAngle) * radius,
+            y: screenCenter.y + sin(displayedAngle) * radius
+        )
+
+        return ZStack {
+            Circle()
+                .fill(.regularMaterial)
+            Circle()
+                .strokeBorder(Color.indigo, lineWidth: 2)
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.indigo)
+        }
+        .frame(width: 42, height: 42)
+        .contentShape(Circle())
+        .position(point)
+        .shadow(color: .black.opacity(0.14), radius: 5, y: 2)
+        .gesture(rotationGesture)
+        .onTapGesture {
+            onRotate(displayedAngle + .pi / 2)
+        }
+        .accessibilityLabel("Rotate alignment ruler")
+        .accessibilityHint("Drag to rotate freely, or tap to rotate 90 degrees.")
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(
+            minimumDistance: 0,
+            coordinateSpace: .named(canvasViewportCoordinateSpace)
+        )
+        .onChanged { value in
+            guard !isTwoFingerTransforming else { return }
+            let origin: CGPoint
+            if let dragOrigin {
+                origin = dragOrigin
+            } else {
+                origin = canvasCenter
+                dragOrigin = canvasCenter
+            }
+
+            let safeScale = max(canvasScale, 0.01)
+            onMove(CGPoint(
+                x: origin.x + value.translation.width / safeScale,
+                y: origin.y + value.translation.height / safeScale
+            ))
+        }
+        .onEnded { _ in
+            dragOrigin = nil
+        }
+    }
+
+    private var transformGesture: some Gesture {
+        SimultaneousGesture(
+            MagnificationGesture(minimumScaleDelta: 0.01),
+            RotationGesture(minimumAngleDelta: .degrees(0.5))
+        )
+        .onChanged { value in
+            isTwoFingerTransforming = true
+
+            if let magnification = value.first {
+                let origin = transformOriginLength ?? length
+                if transformOriginLength == nil {
+                    transformOriginLength = length
+                }
+                transformPreviewLength = clampedLength(origin * magnification)
+            }
+
+            if let rotation = value.second {
+                let origin = transformOriginAngle ?? angle
+                if transformOriginAngle == nil {
+                    transformOriginAngle = angle
+                }
+                transformPreviewAngle = normalizedAngle(
+                    origin + CGFloat(rotation.radians)
+                )
+            }
+
+            transformKind = resolvedTransformKind(
+                magnification: value.first,
+                rotation: value.second
+            )
+        }
+        .onEnded { _ in
+            let finalLength = displayedLength
+            let finalAngle = displayedAngle
+            onTransform(finalLength, finalAngle)
+
+            transformOriginLength = nil
+            transformOriginAngle = nil
+            transformPreviewLength = nil
+            transformPreviewAngle = nil
+            isTwoFingerTransforming = false
+            transformKind = nil
+            dragOrigin = nil
+        }
+    }
+
+    private var rotationGesture: some Gesture {
+        DragGesture(
+            minimumDistance: 4,
+            coordinateSpace: .named(canvasViewportCoordinateSpace)
+        )
+        .onChanged { value in
+            let deltaX = value.location.x - screenCenter.x
+            let deltaY = value.location.y - screenCenter.y
+            guard hypot(deltaX, deltaY) > 8 else { return }
+            handlePreviewAngle = normalizedAngle(atan2(deltaY, deltaX))
+            transformKind = .rotate
+        }
+        .onEnded { _ in
+            if let handlePreviewAngle {
+                onRotate(handlePreviewAngle)
+            }
+            handlePreviewAngle = nil
+            transformKind = nil
+        }
+    }
+
+    private var displayedLength: CGFloat {
+        transformPreviewLength ?? length
+    }
+
+    private var displayedAngle: CGFloat {
+        transformPreviewAngle ?? handlePreviewAngle ?? angle
+    }
+
+    private var displayedAngleDegrees: Int {
+        var degrees = Int((normalizedAngle(displayedAngle) * 180 / .pi).rounded())
+        if degrees < 0 {
+            degrees += 360
+        }
+        return degrees == 360 ? 0 : degrees
+    }
+
+    private func clampedLength(_ value: CGFloat) -> CGFloat {
+        min(max(value, minimumLength), maximumLength)
+    }
+
+    private func normalizedAngle(_ value: CGFloat) -> CGFloat {
+        atan2(sin(value), cos(value))
+    }
+
+    private func resolvedTransformKind(
+        magnification: CGFloat?,
+        rotation: Angle?
+    ) -> TransformKind {
+        let resizeDelta = magnification.map { abs($0 - 1) } ?? 0
+        let rotationDelta = rotation.map { abs($0.radians) } ?? 0
+        let isResizing = resizeDelta > 0.015
+        let isRotating = rotationDelta > 0.015
+
+        if isResizing && isRotating {
+            return .resizeAndRotate
+        }
+        if isRotating {
+            return .rotate
+        }
+        return .resize
+    }
+
+    private func transformFeedback(for kind: TransformKind) -> some View {
+        let distance = thickness / 2 + 38
+        let point = CGPoint(
+            x: screenCenter.x + sin(displayedAngle) * distance,
+            y: screenCenter.y - cos(displayedAngle) * distance
+        )
+
+        return HStack(spacing: 7) {
+            Image(systemName: kind.icon)
+            Text(kind.title)
+
+            Divider()
+                .frame(height: 14)
+
+            Text("\(Int(displayedLength.rounded())) pt")
+                .monospacedDigit()
+            Text("\(displayedAngleDegrees)°")
+                .monospacedDigit()
+        }
+        .font(.caption.weight(.bold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(Color.indigo.opacity(0.94), in: Capsule())
+        .shadow(color: .black.opacity(0.16), radius: 5, y: 2)
+        .position(point)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 #if os(iOS)
 private struct HandwritingRecognitionLine {
     let text: String
@@ -87,6 +543,181 @@ private struct HandwritingRecognitionResult {
 private struct HandwritingTextBlock {
     let text: String
     let bounds: CGRect
+}
+
+private struct DrawingCoachMarkOverlay: View {
+    let highlightFrame: CGRect
+    let canvasSize: CGSize
+    let onDismiss: () -> Void
+    let onStartDrawing: () -> Void
+    let onOpenOptions: () -> Void
+
+    private var spotlightFrame: CGRect {
+        highlightFrame.insetBy(dx: -8, dy: -8)
+    }
+
+    private var cardWidth: CGFloat {
+        min(max(canvasSize.width - 32, 260), 420)
+    }
+
+    private var cardLeadingPadding: CGFloat {
+        max(
+            16,
+            min(
+                highlightFrame.minX - 8,
+                canvasSize.width - cardWidth - 16
+            )
+        )
+    }
+
+    private var cardBottomPadding: CGFloat {
+        max(24, canvasSize.height - highlightFrame.minY + 28)
+    }
+
+    var body: some View {
+        ZStack {
+            Button(action: onDismiss) {
+                spotlightShade
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss drawing tutorial")
+
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.orange, lineWidth: 3)
+                .frame(width: spotlightFrame.width, height: spotlightFrame.height)
+                .position(x: spotlightFrame.midX, y: spotlightFrame.midY)
+                .shadow(color: .orange.opacity(0.75), radius: 8)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
+            HStack(spacing: 0) {
+                coachTargetButton(
+                    label: "Start drawing",
+                    hint: "Starts drawing immediately.",
+                    action: onStartDrawing
+                )
+                coachTargetButton(
+                    label: "Drawing options",
+                    hint: "Opens Drawing Card and handwriting-to-text choices.",
+                    action: onOpenOptions
+                )
+            }
+            .frame(width: spotlightFrame.width, height: spotlightFrame.height)
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .position(x: spotlightFrame.midX, y: spotlightFrame.midY)
+
+            VStack {
+                Spacer(minLength: 16)
+
+                HStack {
+                    coachCard
+                        .frame(width: cardWidth)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, cardLeadingPadding)
+                .padding(.bottom, cardBottomPadding)
+            }
+        }
+        .frame(width: canvasSize.width, height: canvasSize.height)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func coachTargetButton(
+        label: String,
+        hint: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityHint(hint)
+    }
+
+    private var spotlightShade: some View {
+        var path = Path()
+        path.addRect(CGRect(origin: .zero, size: canvasSize))
+        path.addRoundedRect(
+            in: spotlightFrame,
+            cornerSize: CGSize(width: 18, height: 18)
+        )
+        return path.fill(
+            Color.black.opacity(0.72),
+            style: FillStyle(eoFill: true)
+        )
+    }
+
+    private var coachCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "pencil.and.scribble")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 42, height: 42)
+                    .background(Color.orange.opacity(0.14), in: Circle())
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Drawing is ready")
+                        .font(.headline.weight(.bold))
+                    Text("Tap Drawing to ink directly on the canvas—there is no Done step.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 30, height: 30)
+                        .background(Color.secondary.opacity(0.12), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close tutorial")
+            }
+
+            Label {
+                Text("Use Apple Pencil, or your finger when Draw with Finger is enabled.")
+            } icon: {
+                Image(systemName: "hand.draw")
+                    .foregroundStyle(.orange)
+            }
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Label {
+                Text("Tap Options—or touch and hold Drawing—for Drawing Card and handwriting-to-text.")
+            } icon: {
+                Image(systemName: "slider.horizontal.3")
+                    .foregroundStyle(.orange)
+            }
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button("Options", action: onOpenOptions)
+                    .buttonStyle(.bordered)
+
+                Spacer(minLength: 0)
+
+                Button("Start drawing", action: onStartDrawing)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+            }
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.3), radius: 24, y: 12)
+    }
 }
 #endif
 
@@ -447,7 +1078,7 @@ private struct CanvasPageContentView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var vm = CanvasViewModel()
     @ObservedObject private var pro = ProManager.shared
-    @ObservedObject private var selection: SelectionViewModel = SelectionViewModel()
+    @StateObject private var selection = SelectionViewModel()
     @StateObject private var layersVM = LayersViewModel()
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
@@ -512,6 +1143,8 @@ private struct CanvasPageContentView: View {
     @State private var draggingGroupID: UUID?
     @State private var groupDragOffset: CGSize = .zero
     @State private var multiSelectDragOffset: CGSize = .zero
+    @State private var alignmentGuidePoint: CGPoint?
+    @State private var alignmentRuler: CanvasAlignmentRulerState?
     @State private var isLassoModeActive = false
     @State private var lassoPoints: [CGPoint] = []
     @State private var lassoFeedbackText: String?
@@ -527,6 +1160,7 @@ private struct CanvasPageContentView: View {
     @State private var showScannerImagePicker = false
     @State private var selectedScannerPhotoItem: PhotosPickerItem?
     @State private var keyboardAvoidanceOffset: CGFloat = 0
+    @State private var showDrawingCoachMark = false
     #endif
 
     @Environment(\.dismiss) private var dismiss
@@ -727,6 +1361,50 @@ private struct CanvasPageContentView: View {
         return nil
     }
 
+    private var hasContextualAlignmentSelection: Bool {
+        !selection.isMultiSelectActive
+            && (selectedGroupID != nil || activeSelectedElementID != nil)
+    }
+
+    private var alignmentTargetElements: [any LayerableElement] {
+        if selection.isMultiSelectActive {
+            return selection.selectedIDs.compactMap { layerableElement(withID: $0) }
+        }
+        if let selectedGroupID {
+            return groupMembers(for: selectedGroupID)
+        }
+        if let activeSelectedElementID,
+           let element = layerableElement(withID: activeSelectedElementID) {
+            return [element]
+        }
+        return []
+    }
+
+    private var alignmentUnits: [CanvasAlignmentUnit] {
+        alignmentUnits(for: alignmentTargetElements)
+    }
+
+    private var isAlignmentGuideActive: Bool {
+        alignmentGuidePoint != nil && !alignmentUnits.isEmpty
+    }
+
+    private var isAlignmentRulerActive: Bool {
+        alignmentRuler != nil && !alignmentUnits.isEmpty
+    }
+
+    private var alignmentDockTitle: String {
+        if isAlignmentRulerActive {
+            return "Align to ruler"
+        }
+        if isAlignmentGuideActive {
+            return "Align to guide"
+        }
+        if alignmentUnits.count > 1 {
+            return "Align selection"
+        }
+        return canvas.isInfinite ? "Align to view" : "Align to page"
+    }
+
     /// Child controls only need the final zoom for hit targets and drag math. Freezing
     /// this value during navigation lets SwiftUI move/scale the parent layer without
     /// invalidating every individual element on every pinch frame.
@@ -735,6 +1413,12 @@ private struct CanvasPageContentView: View {
     }
 
     private var selectedElementGestureFrame: CGRect? {
+        if selection.isMultiSelectActive,
+           let bounds = selectedMultiSelectBounds {
+            return screenRect(for: bounds)
+                .insetBy(dx: -12, dy: -48)
+        }
+
         if let selectedGroupID,
            let bounds = groupBounds(for: selectedGroupID) {
             return screenRect(for: bounds)
@@ -746,6 +1430,44 @@ private struct CanvasPageContentView: View {
 
         return screenRect(for: bounds.rect)
             .insetBy(dx: -44, dy: -80)
+    }
+
+    private func alignmentRulerGestureExclusionFrame(
+        offset: CGSize,
+        scale: CGFloat
+    ) -> CGRect? {
+        guard let ruler = alignmentRuler else { return nil }
+
+        let center = CGPoint(
+            x: ruler.center.x * scale + offset.width,
+            y: ruler.center.y * scale + offset.height
+        )
+        let thickness: CGFloat = 58
+        let cosine = abs(cos(ruler.angle))
+        let sine = abs(sin(ruler.angle))
+        let rotatedWidth = ruler.length * cosine + thickness * sine
+        let rotatedHeight = ruler.length * sine + thickness * cosine
+        var frame = CGRect(
+            x: center.x - rotatedWidth / 2,
+            y: center.y - rotatedHeight / 2,
+            width: rotatedWidth,
+            height: rotatedHeight
+        )
+
+        let handleRadius = ruler.length / 2 + 23
+        let handleCenter = CGPoint(
+            x: center.x + cos(ruler.angle) * handleRadius,
+            y: center.y + sin(ruler.angle) * handleRadius
+        )
+        frame = frame.union(
+            CGRect(
+                x: handleCenter.x - 23,
+                y: handleCenter.y - 23,
+                width: 46,
+                height: 46
+            )
+        )
+        return frame.insetBy(dx: -10, dy: -10)
     }
 
     private var selectedGroupForUngroup: UUID? {
@@ -783,7 +1505,7 @@ private struct CanvasPageContentView: View {
         self._selectedPageID = selectedPageID
         self.onDelete = onDelete
         self.onRename = onRename
-        self._selection = ObservedObject(wrappedValue: SelectionViewModel())
+        self._selection = StateObject(wrappedValue: SelectionViewModel())
 
         let activeCanvasID = contentCanvasID
         self._allTextElements = Query(
@@ -844,6 +1566,7 @@ private struct CanvasPageContentView: View {
                 canvasNavigation(canvasReader)
             )
         )
+        .environmentObject(vm.undoManager)
     }
 
     private var canvasReader: some View {
@@ -855,6 +1578,7 @@ private struct CanvasPageContentView: View {
                         offset: offset,
                         scale: scale,
                         style: settings.effectiveGridStyle,
+                        spacing: CGFloat(settings.effectiveCanvasPatternSpacing),
                         backgroundMode: settings.canvasBackgroundMode,
                         backgroundPalette: settings.canvasBackgroundPalette,
                         customBackgroundColors: settings.customCanvasBackgroundColors
@@ -916,36 +1640,63 @@ private struct CanvasPageContentView: View {
 
                 canvasElementsSurface(geo: geo)
 
+                if isAlignmentGuideActive {
+                    alignmentGuideLayer(geo: geo)
+                }
+
+                if isAlignmentRulerActive {
+                    alignmentRulerLayer(geo: geo)
+                }
+
                 #if os(iOS)
-                CanvasGestureBridge(
-                    isEnabled: !isLassoModeActive,
-                    requiresTwoFingerPan: vm.showCanvasDrawingOverlay && isCanvasDrawingInputActive,
-                    selectedElementFrame: vm.showCanvasDrawingOverlay ? nil : selectedElementGestureFrame,
-                    onPanBegan: {
-                        beginCanvasNavigationGesture()
-                    },
-                    onPanChanged: { translation in
-                        updateCanvasNavigationPan(translation)
-                    },
-                    onPanEnded: {
-                        endCanvasNavigationGesture(viewportSize: geo.size)
-                    },
-                    onPinchBegan: {
-                        beginCanvasNavigationGesture()
-                    },
-                    onPinchChanged: { magnification, focal in
-                        updateCanvasNavigationMagnification(magnification, focalPoint: focal)
-                    },
-                    onPinchEnded: {
-                        endCanvasNavigationGesture(viewportSize: geo.size)
-                    }
-                )
+                CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+                    CanvasGestureBridge(
+                        isEnabled: !isLassoModeActive,
+                        routesCanvasDrawingInput: vm.showCanvasDrawingOverlay,
+                        requiresTwoFingerPan: vm.showCanvasDrawingOverlay && isCanvasDrawingInputActive,
+                        selectedElementFrame: vm.showCanvasDrawingOverlay
+                            ? nil : selectedElementGestureFrame,
+                        canvasGestureExclusionFrames: [
+                            alignmentRulerGestureExclusionFrame(
+                                offset: offset,
+                                scale: scale
+                            )
+                        ].compactMap { $0 },
+                        onPanBegan: {
+                            beginCanvasNavigationGesture()
+                        },
+                        onPanChanged: { translation in
+                            updateCanvasNavigationPan(translation)
+                        },
+                        onPanEnded: {
+                            endCanvasNavigationGesture(viewportSize: geo.size)
+                        },
+                        onPinchBegan: {
+                            beginCanvasNavigationGesture()
+                        },
+                        onPinchChanged: { magnification, focal in
+                            updateCanvasNavigationMagnification(magnification, focalPoint: focal)
+                        },
+                        onPinchEnded: {
+                            endCanvasNavigationGesture(viewportSize: geo.size)
+                        }
+                    )
+                }
                 .frame(width: geo.size.width, height: geo.size.height)
                 .allowsHitTesting(false)
                 #endif
 
-                if !vm.showCanvasDrawingOverlay && !selection.isMultiSelectActive && !isLassoModeActive {
+                if !vm.showCanvasDrawingOverlay
+                    && !selection.isMultiSelectActive
+                    && !isLassoModeActive
+                    && !hasContextualAlignmentSelection {
                     toolbarLayer(geo: geo)
+                }
+
+                if !vm.showCanvasDrawingOverlay
+                    && !isLassoModeActive
+                    && hasContextualAlignmentSelection {
+                    alignmentDockLayer(geo: geo)
                 }
 
                 if !vm.showCanvasDrawingOverlay && !isLassoModeActive && settings.canvasPagesPanelVisible {
@@ -957,7 +1708,7 @@ private struct CanvasPageContentView: View {
                 }
 
                 if selection.isMultiSelectActive {
-                    multiSelectOverlay
+                    multiSelectOverlay(geo: geo)
                 }
 
                 if isLassoModeActive {
@@ -1054,6 +1805,9 @@ private struct CanvasPageContentView: View {
                     }
                 }
                 pullFromCloud()
+                #if os(iOS)
+                scheduleDrawingCoachMarkIfNeeded()
+                #endif
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     let ghosts = textElements.filter {
                         $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1069,6 +1823,15 @@ private struct CanvasPageContentView: View {
             .onChange(of: settings.overlapStackPickerEnabled) { _, isEnabled in
                 if !isEnabled { stackPicker = nil }
             }
+            #if os(iOS)
+            .onChange(of: settings.toolbarPosition) { _, position in
+                if position == .bottom {
+                    scheduleDrawingCoachMarkIfNeeded(delay: 0.35)
+                } else {
+                    showDrawingCoachMark = false
+                }
+            }
+            #endif
             .onChange(of: selectedPageID) { _, _ in
                 dismissEverything()
                 pullCurrentPageContent()
@@ -1115,9 +1878,15 @@ private struct CanvasPageContentView: View {
             }
             #if os(iOS)
             .overlay(alignment: .top) {
-                if !canvasTopBarIsVisible && !vm.showCanvasDrawingOverlay {
-                    canvasTopBarRevealButton
-                        .padding(.top, 12)
+                if !vm.showCanvasDrawingOverlay {
+                    HStack(spacing: 8) {
+                        CanvasHistoryControls(undoManager: vm.undoManager)
+
+                        if !canvasTopBarIsVisible {
+                            canvasTopBarRevealButton
+                        }
+                    }
+                    .padding(.top, 12)
                 }
             }
             #endif
@@ -1132,6 +1901,43 @@ private struct CanvasPageContentView: View {
                         .padding(.bottom, 24)
                 }
             }
+            #if os(iOS)
+            .overlayPreferenceValue(DrawingToolAnchorPreferenceKey.self) { anchor in
+                GeometryReader { coachGeometry in
+                    if showDrawingCoachMark, let anchor {
+                        DrawingCoachMarkOverlay(
+                            highlightFrame: coachGeometry[anchor],
+                            canvasSize: coachGeometry.size,
+                            onDismiss: {
+                                completeDrawingCoachMark()
+                            },
+                            onStartDrawing: {
+                                completeDrawingCoachMark {
+                                    startPrimaryDrawingTool(
+                                        at: CGPoint(
+                                            x: geo.size.width / 2,
+                                            y: geo.size.height / 2
+                                        )
+                                    )
+                                }
+                            },
+                            onOpenOptions: {
+                                completeDrawingCoachMark {
+                                    openDrawingTool(
+                                        at: CGPoint(
+                                            x: geo.size.width / 2,
+                                            y: geo.size.height / 2
+                                        )
+                                    )
+                                }
+                            }
+                        )
+                        .transition(.opacity)
+                        .zIndex(50000)
+                    }
+                }
+            }
+            #endif
             .onChange(of: vm.youtubeVM.stopPlaybackRequestID) { _, requestID in
                 if settings.floatingYouTubePlaybackEnabled,
                    requestID == vm.youtubeVM.activePlayingID {
@@ -1450,14 +2256,21 @@ private struct CanvasPageContentView: View {
                 isCanvasNavigationGestureActive: isCanvasNavigationGestureInProgress,
                 smartShapeSnappingEnabled: canvasDrawingCaptureMode == .drawing && settings.smartShapeSnappingEnabled,
                 showsHandwritingTextGrouping: canvasDrawingCaptureMode == .handwritingText,
+                savesAutomatically: canvasDrawingCaptureMode == .drawing,
                 handwritingTextGrouping: Binding(
                     get: { settings.handwritingTextGrouping },
                     set: { settings.handwritingTextGrouping = $0 }
                 ),
-                isHighlighterToolSelected: $isCanvasHighlighterToolSelected
-            ) { pkDrawing, effectiveScale, effectiveOffset in
-                saveCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
-            }
+                isHighlighterToolSelected: $isCanvasHighlighterToolSelected,
+                onSave: { pkDrawing, effectiveScale, effectiveOffset in
+                    saveCanvasDrawing(
+                        pkDrawing,
+                        effectiveScale: effectiveScale,
+                        effectiveOffset: effectiveOffset
+                    )
+                },
+                onExit: finishCanvasDrawingSession
+            )
         }
         .zIndex(isCanvasHighlighterToolSelected ? -1 : 200)
         .transition(.opacity)
@@ -1473,11 +2286,15 @@ private struct CanvasPageContentView: View {
         let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
 
         ForEach(visibleElements.filter { !$0.isLayerHidden }, id: \.id) { element in
-            renderElement(element, nextZIndex: nextZIndex)
+            renderElement(
+                element,
+                nextZIndex: nextZIndex,
+                viewportSize: viewportSize
+            )
         }
 
         if selection.isMultiSelectActive {
-            multiSelectDragLayer
+            multiSelectDragLayer(viewportSize: viewportSize)
         } else {
             groupSelectionLayer
         }
@@ -1564,10 +2381,18 @@ private struct CanvasPageContentView: View {
 
         ToolbarItem(placement: .primaryAction) {
             HStack(spacing: 8) {
+                #if os(macOS)
                 Button { vm.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }
                     .disabled(!vm.undoManager.canUndo)
+                    .keyboardShortcut("z", modifiers: .command)
+                    .accessibilityLabel("Undo")
+                    .accessibilityHint("Reverses the most recent canvas change.")
                 Button { vm.undoManager.redo() } label: { Image(systemName: "arrow.uturn.forward") }
                     .disabled(!vm.undoManager.canRedo)
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .accessibilityLabel("Redo")
+                    .accessibilityHint("Restores the most recently undone canvas change.")
+                #endif
                 Button {
                     if selection.isMultiSelectActive {
                         withAnimation(.spring(duration: 0.3)) { selection.exit() }
@@ -2131,7 +2956,103 @@ private struct CanvasPageContentView: View {
         .animation(.spring(duration: 0.3), value: vm.connectorVM.isConnectModeActive)
     }
 
-    private var multiSelectOverlay: some View {
+    private func alignmentGuideLayer(geo: GeometryProxy) -> some View {
+        CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+            if let alignmentGuidePoint {
+                CanvasAlignmentGuideOverlay(
+                    screenPoint: CGPoint(
+                        x: alignmentGuidePoint.x * scale + offset.width,
+                        y: alignmentGuidePoint.y * scale + offset.height
+                    ),
+                    canvasPoint: alignmentGuidePoint,
+                    canvasScale: scale,
+                    onMove: { screenPoint in
+                        moveAlignmentGuide(
+                            to: screenPoint,
+                            viewportSize: geo.size
+                        )
+                    }
+                )
+            }
+        }
+        .frame(width: geo.size.width, height: geo.size.height)
+        .zIndex(85)
+        .transition(.opacity)
+    }
+
+    private func alignmentRulerLayer(geo: GeometryProxy) -> some View {
+        CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+            if let alignmentRuler {
+                CanvasAlignmentRulerOverlay(
+                    screenCenter: CGPoint(
+                        x: alignmentRuler.center.x * scale + offset.width,
+                        y: alignmentRuler.center.y * scale + offset.height
+                    ),
+                    canvasCenter: alignmentRuler.center,
+                    canvasScale: scale,
+                    angle: alignmentRuler.angle,
+                    length: alignmentRuler.length,
+                    onMove: { canvasPoint in
+                        moveAlignmentRuler(to: canvasPoint)
+                    },
+                    onRotate: { angle in
+                        rotateAlignmentRuler(to: angle)
+                    },
+                    onTransform: { length, angle in
+                        transformAlignmentRuler(
+                            length: length,
+                            angle: angle
+                        )
+                    }
+                )
+            }
+        }
+        .frame(width: geo.size.width, height: geo.size.height)
+        .zIndex(86)
+        .transition(.opacity)
+    }
+
+    private func alignmentDockLayer(geo: GeometryProxy) -> some View {
+        VStack {
+            Spacer()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                CanvasAlignmentDock(
+                    title: alignmentDockTitle,
+                    isGuideActive: isAlignmentGuideActive,
+                    isRulerActive: isAlignmentRulerActive,
+                    onToggleGuide: {
+                        toggleAlignmentGuide(viewportSize: geo.size)
+                    },
+                    onToggleRuler: {
+                        toggleAlignmentRuler(viewportSize: geo.size)
+                    },
+                    onAlign: { action in
+                        alignCanvasObjects(action, viewportSize: geo.size)
+                    },
+                    onAlignToRuler: { action in
+                        alignCanvasObjectsToRuler(action)
+                    },
+                    onRotateRuler: {
+                        rotateAlignmentRulerQuarterTurn()
+                    },
+                    onDone: {
+                        dismissEverything()
+                    }
+                )
+                .padding(.horizontal, 16)
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 12)
+        }
+        .frame(maxWidth: .infinity)
+        .zIndex(95)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .animation(.spring(response: 0.28, dampingFraction: 0.86),
+                   value: hasContextualAlignmentSelection)
+    }
+
+    private func multiSelectOverlay(geo: GeometryProxy) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "hand.tap")
@@ -2153,6 +3074,28 @@ private struct CanvasPageContentView: View {
                     groupActionTitle: groupActionTitle,
                     groupActionIcon: groupActionIcon,
                     canUseGroupAction: canUseGroupAction,
+                    canAlign: !alignmentUnits.isEmpty,
+                    canDistribute: alignmentUnits.count >= 3,
+                    isGuideActive: isAlignmentGuideActive,
+                    isRulerActive: isAlignmentRulerActive,
+                    onToggleGuide: {
+                        toggleAlignmentGuide(viewportSize: geo.size)
+                    },
+                    onToggleRuler: {
+                        toggleAlignmentRuler(viewportSize: geo.size)
+                    },
+                    onAlign: { action in
+                        alignCanvasObjects(action, viewportSize: geo.size)
+                    },
+                    onAlignToRuler: { action in
+                        alignCanvasObjectsToRuler(action)
+                    },
+                    onRotateRuler: {
+                        rotateAlignmentRulerQuarterTurn()
+                    },
+                    onDistribute: { action in
+                        distributeCanvasObjects(action)
+                    },
                     onGroupAction: { handleGroupAction() },
                     onDuplicate: { duplicateSelected() },
                     onDelete: { deleteSelected() },
@@ -2569,9 +3512,9 @@ private struct CanvasPageContentView: View {
     }
 
     @ViewBuilder
-    private var multiSelectDragLayer: some View {
+    private func multiSelectDragLayer(viewportSize: CGSize) -> some View {
         if let bounds = selectedMultiSelectBounds {
-            multiSelectDragView(bounds: bounds)
+            multiSelectDragView(bounds: bounds, viewportSize: viewportSize)
         }
     }
 
@@ -2588,18 +3531,14 @@ private struct CanvasPageContentView: View {
         return union.insetBy(dx: -18, dy: -18)
     }
 
-    private func multiSelectDragView(bounds: CGRect) -> some View {
+    private func multiSelectDragView(
+        bounds: CGRect,
+        viewportSize: CGSize
+    ) -> some View {
         let safeScale = max(vm.scale, 0.01)
-        let minimumHitSize = 88 / safeScale
-        let hitWidth = max(bounds.width, minimumHitSize)
-        let hitHeight = max(bounds.height, minimumHitSize)
         let isDragging = multiSelectDragOffset != .zero
 
         return ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.clear)
-                .contentShape(RoundedRectangle(cornerRadius: 14))
-
             RoundedRectangle(cornerRadius: 14)
                 .strokeBorder(
                     Color.blue.opacity(isDragging ? 0.95 : 0.78),
@@ -2626,34 +3565,78 @@ private struct CanvasPageContentView: View {
             .padding(.horizontal, 11)
             .frame(height: 30)
             .background(Color.blue, in: Capsule())
+            .contentShape(Capsule())
             .scaleEffect(1 / safeScale)
             .offset(y: -bounds.height / 2 - 28 / safeScale)
-            .allowsHitTesting(false)
+            .gesture(
+                multiSelectDragGesture(
+                    bounds: bounds,
+                    viewportSize: viewportSize
+                )
+            )
+            .accessibilityLabel("Move selected items")
+            .accessibilityHint("Drag to move the complete selection.")
         }
-        .frame(width: hitWidth, height: hitHeight)
+        .frame(width: bounds.width, height: bounds.height)
         .position(
             x: bounds.midX + multiSelectDragOffset.width,
             y: bounds.midY + multiSelectDragOffset.height
         )
         .zIndex(17000)
-        .gesture(multiSelectDragGesture)
+        .allowsHitTesting(true)
         .animation(.spring(response: 0.22, dampingFraction: 0.88), value: selection.selectedIDs)
     }
 
-    private var multiSelectDragGesture: some Gesture {
+    private func multiSelectDragGesture(
+        bounds: CGRect,
+        viewportSize: CGSize
+    ) -> some Gesture {
         DragGesture(minimumDistance: 5)
             .onChanged { value in
                 guard selection.hasSelection, !isCanvasGestureActive else { return }
-                multiSelectDragOffset = value.translation
+                multiSelectDragOffset = constrainedMultiSelectTranslation(
+                    value.translation,
+                    bounds: bounds,
+                    viewportSize: viewportSize
+                )
             }
             .onEnded { value in
                 guard selection.hasSelection else {
                     multiSelectDragOffset = .zero
                     return
                 }
-                moveSelectedElements(by: value.translation)
+                let translation = constrainedMultiSelectTranslation(
+                    value.translation,
+                    bounds: bounds,
+                    viewportSize: viewportSize
+                )
+                moveSelectedElements(by: translation)
                 multiSelectDragOffset = .zero
             }
+    }
+
+    private func constrainedMultiSelectTranslation(
+        _ translation: CGSize,
+        bounds: CGRect,
+        viewportSize: CGSize
+    ) -> CGSize {
+        guard viewportSize.height > 0 else { return translation }
+
+        let safeScale = max(vm.scale, 0.01)
+        // The multi-select dock is a persistent screen-space control. Keep selected
+        // content above it so it never becomes hidden beneath the footer.
+        let footerTop = max(96, viewportSize.height - 96)
+        let currentScreenMaxY = bounds.maxY * safeScale + vm.offset.height
+        var result = translation
+
+        if currentScreenMaxY <= footerTop {
+            let maximumDownwardTranslation = (footerTop - currentScreenMaxY) / safeScale
+            result.height = min(result.height, maximumDownwardTranslation)
+        } else if result.height > 0 {
+            result.height = 0
+        }
+
+        return result
     }
 
     @ViewBuilder
@@ -3198,6 +4181,45 @@ private struct CanvasPageContentView: View {
         }
 
         cleanupEmptyGroups(excluding: Set([group.id]))
+        let groupID = group.id
+        let groupName = group.name
+        let memberIDs = elements.map(\.id)
+        vm.undoManager.push(CanvasAction(
+            name: "Group elements",
+            undo: {
+                for id in memberIDs {
+                    guard let element = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    element.groupID = nil
+                    element.updatedAt = Date()
+                    Task { await syncElement(element) }
+                }
+                if let current = elementGroups.first(where: { $0.id == groupID }) {
+                    Task { await ElementGroupSyncService.shared.delete(current) }
+                    context.delete(current)
+                }
+                try? context.save()
+            },
+            redo: {
+                let restored = CanvasElementGroupModel(
+                    canvasID: activeContentCanvasID,
+                    name: groupName
+                )
+                restored.id = groupID
+                context.insert(restored)
+                for id in memberIDs {
+                    guard let element = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    element.groupID = groupID
+                    element.updatedAt = Date()
+                    Task { await syncElement(element) }
+                }
+                try? context.save()
+                Task { await ElementGroupSyncService.shared.upsert(restored) }
+            }
+        ))
 
         withAnimation(.spring(duration: 0.3)) {
             selection.exit()
@@ -3208,6 +4230,9 @@ private struct CanvasPageContentView: View {
     private func ungroup(_ groupID: UUID) {
         let members = groupMembers(for: groupID)
         let group = elementGroups.first { $0.id == groupID }
+        let groupName = group?.name ?? "Group"
+        let canvasID = group?.canvasID ?? activeContentCanvasID
+        let memberIDs = members.map(\.id)
         let now = Date()
 
         for element in members {
@@ -3227,6 +4252,39 @@ private struct CanvasPageContentView: View {
                 await syncElement(element)
             }
         }
+        vm.undoManager.push(CanvasAction(
+            name: "Ungroup elements",
+            undo: {
+                let restored = CanvasElementGroupModel(canvasID: canvasID, name: groupName)
+                restored.id = groupID
+                context.insert(restored)
+                for id in memberIDs {
+                    guard let element = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    element.groupID = groupID
+                    element.updatedAt = Date()
+                    Task { await syncElement(element) }
+                }
+                try? context.save()
+                Task { await ElementGroupSyncService.shared.upsert(restored) }
+            },
+            redo: {
+                for id in memberIDs {
+                    guard let element = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    element.groupID = nil
+                    element.updatedAt = Date()
+                    Task { await syncElement(element) }
+                }
+                if let current = elementGroups.first(where: { $0.id == groupID }) {
+                    Task { await ElementGroupSyncService.shared.delete(current) }
+                    context.delete(current)
+                }
+                try? context.save()
+            }
+        ))
 
         withAnimation(.spring(duration: 0.25)) {
             if selectedGroupID == groupID { selectedGroupID = nil }
@@ -3239,24 +4297,12 @@ private struct CanvasPageContentView: View {
     private func moveGroup(_ groupID: UUID, by translation: CGSize) {
         let members = groupMembers(for: groupID)
         guard !members.isEmpty else { return }
-
-        let now = Date()
-        for element in members {
-            element.x += Double(translation.width)
-            element.y += Double(translation.height)
-            element.updatedAt = now
-        }
+        guard translation != .zero else { return }
+        moveElements(members, by: translation, undoLabel: "Move Group")
 
         if let group = elementGroups.first(where: { $0.id == groupID }) {
-            group.updatedAt = now
+            group.updatedAt = Date()
             Task { await ElementGroupSyncService.shared.upsert(group) }
-        }
-
-        try? context.save()
-        Task {
-            for element in members {
-                await syncElement(element)
-            }
         }
     }
 
@@ -3266,6 +4312,433 @@ private struct CanvasPageContentView: View {
         guard !members.isEmpty else { return }
 
         moveElements(members, by: translation, undoLabel: "Move Selection")
+    }
+
+    private func alignmentUnits(
+        for elements: [any LayerableElement]
+    ) -> [CanvasAlignmentUnit] {
+        let uniqueElements = Array(
+            Dictionary(
+                elements.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            ).values
+        )
+
+        var grouped: [UUID: [any LayerableElement]] = [:]
+        var standalone: [any LayerableElement] = []
+
+        for element in uniqueElements {
+            if let groupID = element.groupID {
+                grouped[groupID, default: []].append(element)
+            } else {
+                standalone.append(element)
+            }
+        }
+
+        var units = standalone.compactMap { element -> CanvasAlignmentUnit? in
+            guard let bounds = alignmentBounds(for: [element]) else { return nil }
+            return CanvasAlignmentUnit(elements: [element], bounds: bounds)
+        }
+
+        units.append(contentsOf: grouped.values.compactMap { members in
+            guard let bounds = alignmentBounds(for: members) else { return nil }
+            return CanvasAlignmentUnit(elements: members, bounds: bounds)
+        })
+
+        return units
+    }
+
+    private func alignmentBounds(
+        for elements: [any LayerableElement]
+    ) -> CGRect? {
+        let rects = elements.map(alignmentRect(for:))
+        guard var union = rects.first else { return nil }
+        for rect in rects.dropFirst() {
+            union = union.union(rect)
+        }
+        return union
+    }
+
+    private func alignmentRect(for element: any LayerableElement) -> CGRect {
+        let base = elementBounds(for: element).rect
+        let radians = elementRotation(for: element) * .pi / 180
+        guard abs(radians) > 0.0001 else { return base }
+
+        let rotatedWidth = abs(base.width * cos(radians))
+            + abs(base.height * sin(radians))
+        let rotatedHeight = abs(base.width * sin(radians))
+            + abs(base.height * cos(radians))
+
+        return CGRect(
+            x: base.midX - rotatedWidth / 2,
+            y: base.midY - rotatedHeight / 2,
+            width: rotatedWidth,
+            height: rotatedHeight
+        )
+    }
+
+    private func elementRotation(for element: any LayerableElement) -> CGFloat {
+        if let element = element as? StickyNoteModel { return CGFloat(element.rotation) }
+        if let element = element as? ShapeElementModel { return CGFloat(element.rotation) }
+        if let element = element as? ImageElementModel { return CGFloat(element.rotation) }
+        if let element = element as? PDFElementModel { return CGFloat(element.rotation) }
+        if let element = element as? PDFPageElementModel { return CGFloat(element.rotation) }
+        if let element = element as? TableElementModel { return CGFloat(element.rotation) }
+        if let element = element as? AudioElementModel { return CGFloat(element.rotation) }
+        if let element = element as? DrawingElementModel { return CGFloat(element.rotation) }
+        return 0
+    }
+
+    private func alignmentReferenceRect(
+        for units: [CanvasAlignmentUnit],
+        viewportSize: CGSize
+    ) -> CGRect? {
+        guard let first = units.first else { return nil }
+
+        if let alignmentGuidePoint {
+            return CGRect(origin: alignmentGuidePoint, size: .zero)
+        }
+
+        if units.count > 1 {
+            return units.dropFirst().reduce(first.bounds) {
+                $0.union($1.bounds)
+            }
+        }
+
+        if !canvas.isInfinite {
+            return CGRect(origin: .zero, size: canvasNavigationBoundary)
+        }
+
+        let safeScale = max(vm.scale, 0.01)
+        let margin = 24 / safeScale
+        let visibleRect = CGRect(
+            x: -vm.offset.width / safeScale,
+            y: -vm.offset.height / safeScale,
+            width: viewportSize.width / safeScale,
+            height: viewportSize.height / safeScale
+        )
+        return visibleRect.insetBy(dx: margin, dy: margin)
+    }
+
+    private func toggleAlignmentGuide(viewportSize: CGSize) {
+        guard !alignmentUnits.isEmpty else { return }
+
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+            if alignmentGuidePoint != nil {
+                alignmentGuidePoint = nil
+                return
+            }
+
+            alignmentRuler = nil
+            let safeScale = max(vm.scale, 0.01)
+            let viewportCenter = CGPoint(
+                x: (viewportSize.width / 2 - vm.offset.width) / safeScale,
+                y: (viewportSize.height / 2 - vm.offset.height) / safeScale
+            )
+            alignmentGuidePoint = snappedAlignmentGuidePoint(viewportCenter)
+        }
+    }
+
+    private func moveAlignmentGuide(
+        to screenPoint: CGPoint,
+        viewportSize: CGSize
+    ) {
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return }
+
+        let safeScale = max(vm.scale, 0.01)
+        let canvasPoint = CGPoint(
+            x: (screenPoint.x - vm.offset.width) / safeScale,
+            y: (screenPoint.y - vm.offset.height) / safeScale
+        )
+        alignmentGuidePoint = snappedAlignmentGuidePoint(canvasPoint)
+    }
+
+    private func toggleAlignmentRuler(viewportSize: CGSize) {
+        guard !alignmentUnits.isEmpty else { return }
+
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+            if alignmentRuler != nil {
+                alignmentRuler = nil
+                return
+            }
+
+            alignmentGuidePoint = nil
+            let safeScale = max(vm.scale, 0.01)
+            let viewportCenter = CGPoint(
+                x: (viewportSize.width / 2 - vm.offset.width) / safeScale,
+                y: (viewportSize.height / 2 - vm.offset.height) / safeScale
+            )
+            alignmentRuler = CanvasAlignmentRulerState(
+                center: snappedAlignmentGuidePoint(viewportCenter),
+                angle: 0,
+                length: min(max(240, viewportSize.width - 80), 480)
+            )
+        }
+    }
+
+    private func moveAlignmentRuler(to canvasPoint: CGPoint) {
+        guard var ruler = alignmentRuler else { return }
+        ruler.center = snappedAlignmentGuidePoint(canvasPoint)
+        alignmentRuler = ruler
+    }
+
+    private func rotateAlignmentRuler(to angle: CGFloat) {
+        guard var ruler = alignmentRuler else { return }
+        ruler.angle = snappedRulerAngle(angle)
+        alignmentRuler = ruler
+    }
+
+    private func transformAlignmentRuler(length: CGFloat, angle: CGFloat) {
+        guard var ruler = alignmentRuler else { return }
+        ruler.length = min(max(length, 160), 900)
+        ruler.angle = snappedRulerAngle(angle)
+        alignmentRuler = ruler
+    }
+
+    private func rotateAlignmentRulerQuarterTurn() {
+        guard let ruler = alignmentRuler else { return }
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.86)) {
+            rotateAlignmentRuler(to: ruler.angle + .pi / 2)
+        }
+    }
+
+    private func snappedRulerAngle(_ angle: CGFloat) -> CGFloat {
+        let normalized = atan2(sin(angle), cos(angle))
+        let increment = CGFloat.pi / 12
+        let candidate = (normalized / increment).rounded() * increment
+        let difference = abs(atan2(
+            sin(normalized - candidate),
+            cos(normalized - candidate)
+        ))
+        let tolerance = CGFloat.pi / 60
+        return difference <= tolerance ? candidate : normalized
+    }
+
+    private func snappedAlignmentGuidePoint(_ point: CGPoint) -> CGPoint {
+        let safeScale = max(vm.scale, 0.01)
+        let snapTolerance = 10 / safeScale
+        var xCandidates: [CGFloat] = []
+        var yCandidates: [CGFloat] = []
+
+        for unit in alignmentUnits {
+            xCandidates.append(contentsOf: [
+                unit.bounds.minX,
+                unit.bounds.midX,
+                unit.bounds.maxX
+            ])
+            yCandidates.append(contentsOf: [
+                unit.bounds.minY,
+                unit.bounds.midY,
+                unit.bounds.maxY
+            ])
+        }
+
+        if !canvas.isInfinite {
+            let boundary = canvasNavigationBoundary
+            xCandidates.append(contentsOf: [0, boundary.width / 2, boundary.width])
+            yCandidates.append(contentsOf: [0, boundary.height / 2, boundary.height])
+        }
+
+        var result = CGPoint(
+            x: nearestSnapValue(
+                to: point.x,
+                candidates: xCandidates,
+                tolerance: snapTolerance
+            ),
+            y: nearestSnapValue(
+                to: point.y,
+                candidates: yCandidates,
+                tolerance: snapTolerance
+            )
+        )
+
+        if !canvas.isInfinite {
+            let boundary = canvasNavigationBoundary
+            result.x = min(max(0, result.x), boundary.width)
+            result.y = min(max(0, result.y), boundary.height)
+        }
+        return result
+    }
+
+    private func nearestSnapValue(
+        to value: CGFloat,
+        candidates: [CGFloat],
+        tolerance: CGFloat
+    ) -> CGFloat {
+        guard let nearest = candidates.min(by: {
+            abs($0 - value) < abs($1 - value)
+        }), abs(nearest - value) <= tolerance else {
+            return value
+        }
+        return nearest
+    }
+
+    private func alignCanvasObjectsToRuler(_ action: CanvasRulerAlignment) {
+        guard let ruler = alignmentRuler else { return }
+        let units = alignmentUnits
+        guard !units.isEmpty else { return }
+
+        let normal = CGPoint(
+            x: -sin(ruler.angle),
+            y: cos(ruler.angle)
+        )
+        let rulerProjection = ruler.center.x * normal.x
+            + ruler.center.y * normal.y
+
+        let moves = units.map { unit -> (CanvasAlignmentUnit, CGSize) in
+            let corners = [
+                CGPoint(x: unit.bounds.minX, y: unit.bounds.minY),
+                CGPoint(x: unit.bounds.maxX, y: unit.bounds.minY),
+                CGPoint(x: unit.bounds.minX, y: unit.bounds.maxY),
+                CGPoint(x: unit.bounds.maxX, y: unit.bounds.maxY)
+            ]
+            let projections = corners.map {
+                $0.x * normal.x + $0.y * normal.y
+            }
+            let minimum = projections.min() ?? rulerProjection
+            let maximum = projections.max() ?? rulerProjection
+
+            let sourceProjection: CGFloat
+            switch action {
+            case .before:
+                sourceProjection = maximum
+            case .center:
+                sourceProjection = (minimum + maximum) / 2
+            case .after:
+                sourceProjection = minimum
+            }
+
+            let distance = rulerProjection - sourceProjection
+            return (
+                unit,
+                CGSize(
+                    width: normal.x * distance,
+                    height: normal.y * distance
+                )
+            )
+        }
+
+        applyAlignmentMoves(moves, undoLabel: action.title)
+    }
+
+    private func alignCanvasObjects(
+        _ action: CanvasObjectAlignment,
+        viewportSize: CGSize
+    ) {
+        let units = alignmentUnits
+        guard let reference = alignmentReferenceRect(
+            for: units,
+            viewportSize: viewportSize
+        ) else { return }
+
+        let moves = units.map { unit -> (CanvasAlignmentUnit, CGSize) in
+            let translation: CGSize
+            switch action {
+            case .left:
+                translation = CGSize(width: reference.minX - unit.bounds.minX, height: 0)
+            case .horizontalCenter:
+                translation = CGSize(width: reference.midX - unit.bounds.midX, height: 0)
+            case .right:
+                translation = CGSize(width: reference.maxX - unit.bounds.maxX, height: 0)
+            case .top:
+                translation = CGSize(width: 0, height: reference.minY - unit.bounds.minY)
+            case .verticalCenter:
+                translation = CGSize(width: 0, height: reference.midY - unit.bounds.midY)
+            case .bottom:
+                translation = CGSize(width: 0, height: reference.maxY - unit.bounds.maxY)
+            }
+            return (unit, translation)
+        }
+
+        applyAlignmentMoves(moves, undoLabel: action.title)
+    }
+
+    private func distributeCanvasObjects(_ action: CanvasObjectDistribution) {
+        let units = alignmentUnits
+        guard units.count >= 3 else { return }
+
+        let moves: [(CanvasAlignmentUnit, CGSize)]
+        switch action {
+        case .horizontal:
+            let sorted = units.sorted { $0.bounds.minX < $1.bounds.minX }
+            let totalWidth = sorted.reduce(CGFloat.zero) { $0 + $1.bounds.width }
+            let span = sorted.last!.bounds.maxX - sorted.first!.bounds.minX
+            let gap = (span - totalWidth) / CGFloat(sorted.count - 1)
+            var cursor = sorted.first!.bounds.minX
+
+            moves = sorted.map { unit in
+                let delta = CGSize(width: cursor - unit.bounds.minX, height: 0)
+                cursor += unit.bounds.width + gap
+                return (unit, delta)
+            }
+
+        case .vertical:
+            let sorted = units.sorted { $0.bounds.minY < $1.bounds.minY }
+            let totalHeight = sorted.reduce(CGFloat.zero) { $0 + $1.bounds.height }
+            let span = sorted.last!.bounds.maxY - sorted.first!.bounds.minY
+            let gap = (span - totalHeight) / CGFloat(sorted.count - 1)
+            var cursor = sorted.first!.bounds.minY
+
+            moves = sorted.map { unit in
+                let delta = CGSize(width: 0, height: cursor - unit.bounds.minY)
+                cursor += unit.bounds.height + gap
+                return (unit, delta)
+            }
+        }
+
+        applyAlignmentMoves(moves, undoLabel: action.title)
+    }
+
+    private func applyAlignmentMoves(
+        _ moves: [(CanvasAlignmentUnit, CGSize)],
+        undoLabel: String
+    ) {
+        let meaningfulMoves = moves.filter {
+            abs($0.1.width) > 0.0001 || abs($0.1.height) > 0.0001
+        }
+        guard !meaningfulMoves.isEmpty else { return }
+
+        let movedElements = meaningfulMoves.flatMap { $0.0.elements }
+        let uniqueElements = Array(
+            Dictionary(
+                movedElements.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            ).values
+        )
+        let before = uniqueElements.map {
+            ElementPositionSnapshot(id: $0.id, x: $0.x, y: $0.y)
+        }
+        let now = Date()
+
+        for (unit, translation) in meaningfulMoves {
+            for element in unit.elements {
+                element.x += Double(translation.width)
+                element.y += Double(translation.height)
+                element.updatedAt = now
+            }
+        }
+
+        let movedGroupIDs = Set(uniqueElements.compactMap(\.groupID))
+        for group in elementGroups where movedGroupIDs.contains(group.id) {
+            group.updatedAt = now
+            Task { await ElementGroupSyncService.shared.upsert(group) }
+        }
+
+        try? context.save()
+        Task {
+            for element in uniqueElements {
+                await syncElement(element)
+            }
+        }
+
+        let after = uniqueElements.map {
+            ElementPositionSnapshot(id: $0.id, x: $0.x, y: $0.y)
+        }
+        vm.undoManager.push(CanvasAction(
+            name: undoLabel,
+            undo: { applyElementPositionSnapshots(before) },
+            redo: { applyElementPositionSnapshots(after) }
+        ))
     }
 
     private func moveElements(_ elements: [any LayerableElement],
@@ -3296,6 +4769,7 @@ private struct CanvasPageContentView: View {
         let after = uniqueElements.map { ElementPositionSnapshot(id: $0.id, x: $0.x, y: $0.y) }
 
         vm.undoManager.push(CanvasAction(
+            name: undoLabel,
             undo: {
                 applyElementPositionSnapshots(before)
             },
@@ -3310,7 +4784,9 @@ private struct CanvasPageContentView: View {
         var changed: [any LayerableElement] = []
 
         for snapshot in snapshots {
-            guard let element = layerableElement(withID: snapshot.id) else { continue }
+            guard let element = CanvasElementHistoryLookup.element(
+                withID: snapshot.id, context: context
+            ) else { continue }
             element.x = snapshot.x
             element.y = snapshot.y
             element.updatedAt = now
@@ -3329,12 +4805,36 @@ private struct CanvasPageContentView: View {
     private func duplicateGroup(_ groupID: UUID) {
         let members = groupMembers(for: groupID).sorted { $0.zIndex < $1.zIndex }
         guard !members.isEmpty else { return }
+        vm.undoManager.beginGrouping(name: "Duplicate group")
+        defer { vm.undoManager.endGrouping() }
 
         let group = CanvasElementGroupModel(
             canvasID: activeContentCanvasID,
             name: "Group \(elementGroups.count + 1)"
         )
         context.insert(group)
+        let newGroupID = group.id
+        let newGroupName = group.name
+        vm.undoManager.push(CanvasAction(
+            name: "Create duplicated group",
+            undo: {
+                let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>())) ?? []
+                guard let current = groups.first(where: { $0.id == newGroupID }) else { return }
+                Task { await ElementGroupSyncService.shared.delete(current) }
+                context.delete(current)
+                try? context.save()
+            },
+            redo: {
+                let restored = CanvasElementGroupModel(
+                    canvasID: activeContentCanvasID,
+                    name: newGroupName
+                )
+                restored.id = newGroupID
+                context.insert(restored)
+                try? context.save()
+                Task { await ElementGroupSyncService.shared.upsert(restored) }
+            }
+        ))
 
         var z = LayersViewModel.nextZ(among: allLayerableElements)
         var copies: [any LayerableElement] = []
@@ -3350,6 +4850,32 @@ private struct CanvasPageContentView: View {
         }
 
         try? context.save()
+        let copyIDs = copies.map(\.id)
+        vm.undoManager.push(CanvasAction(
+            name: "Restore duplicated group membership",
+            undo: {
+                for id in copyIDs {
+                    guard let copy = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    copy.groupID = nil
+                    copy.updatedAt = Date()
+                    Task { await syncElement(copy) }
+                }
+                try? context.save()
+            },
+            redo: {
+                for id in copyIDs {
+                    guard let copy = CanvasElementHistoryLookup.element(
+                        withID: id, context: context
+                    ) else { continue }
+                    copy.groupID = newGroupID
+                    copy.updatedAt = Date()
+                    Task { await syncElement(copy) }
+                }
+                try? context.save()
+            }
+        ))
 
         Task {
             await ElementGroupSyncService.shared.upsert(group)
@@ -3369,13 +4895,36 @@ private struct CanvasPageContentView: View {
             ungroup(groupID)
             return
         }
+        let group = elementGroups.first(where: { $0.id == groupID })
+        let canvasID = group?.canvasID ?? activeContentCanvasID
+        let groupName = group?.name ?? "Group"
+        vm.undoManager.beginGrouping(name: "Delete group")
+        defer { vm.undoManager.endGrouping() }
+        vm.undoManager.push(CanvasAction(
+            name: "Delete group container",
+            undo: {
+                let restored = CanvasElementGroupModel(canvasID: canvasID, name: groupName)
+                restored.id = groupID
+                context.insert(restored)
+                try? context.save()
+                Task { await ElementGroupSyncService.shared.upsert(restored) }
+            },
+            redo: {
+                let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>())) ?? []
+                guard let current = groups.first(where: { $0.id == groupID }) else { return }
+                Task { await ElementGroupSyncService.shared.delete(current) }
+                context.delete(current)
+                try? context.save()
+            }
+        ))
 
         selection.selectedIDs = ids
         deleteSelected()
 
-        if let group = elementGroups.first(where: { $0.id == groupID }) {
-            Task { await ElementGroupSyncService.shared.delete(group) }
-            context.delete(group)
+        let groups = (try? context.fetch(FetchDescriptor<CanvasElementGroupModel>())) ?? []
+        if let current = groups.first(where: { $0.id == groupID }) {
+            Task { await ElementGroupSyncService.shared.delete(current) }
+            context.delete(current)
             try? context.save()
         }
 
@@ -3857,11 +5406,19 @@ private struct CanvasPageContentView: View {
             forward ? $0.zIndex > $1.zIndex : $0.zIndex < $1.zIndex
         }
 
+        vm.undoManager.beginGrouping(name: forward ? "Bring layers forward" : "Send layers backward")
+        defer { vm.undoManager.endGrouping() }
         for element in orderedTargets {
             if forward {
-                layersVM.bringForward(element, in: allLayerableElements, context: context)
+                layersVM.bringForward(
+                    element, in: allLayerableElements,
+                    context: context, undoManager: vm.undoManager
+                )
             } else {
-                layersVM.sendBackward(element, in: allLayerableElements, context: context)
+                layersVM.sendBackward(
+                    element, in: allLayerableElements,
+                    context: context, undoManager: vm.undoManager
+                )
             }
         }
 
@@ -4073,15 +5630,25 @@ private struct CanvasPageContentView: View {
         }
         #endif
 
-        persistCanvasDrawing(pkDrawing, effectiveScale: effectiveScale, effectiveOffset: effectiveOffset)
+        persistCanvasDrawing(
+            pkDrawing,
+            effectiveScale: effectiveScale,
+            effectiveOffset: effectiveOffset,
+            keepsSessionActive: canvasDrawingCaptureMode == .drawing
+        )
     }
 
-    private func persistCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {
+    private func persistCanvasDrawing(
+        _ pkDrawing: PKDrawing,
+        effectiveScale: CGFloat,
+        effectiveOffset: CGSize,
+        keepsSessionActive: Bool
+    ) {
         let strokeBounds = pkDrawing.bounds
         guard canvasDrawingHasVisibleInk(pkDrawing),
               strokeBounds.width > 0, strokeBounds.height > 0 else {
             if let id = continuingCanvasDrawingID,
-               let element = drawings.first(where: { $0.id == id }) {
+               let element = canvasDrawingElement(withID: id) {
                 vm.drawingVM.delete(
                     element: element,
                     context: context,
@@ -4089,8 +5656,9 @@ private struct CanvasPageContentView: View {
                 )
             }
             continuingCanvasDrawingID = nil
-            canvasDrawingInitialDrawing = PKDrawing()
-            canvasDrawingCaptureMode = .drawing
+            if !keepsSessionActive {
+                resetCanvasDrawingSession()
+            }
             return
         }
 
@@ -4112,7 +5680,8 @@ private struct CanvasPageContentView: View {
         let localDrawing = pkDrawing.transformed(using: transform)
 
         if let id = continuingCanvasDrawingID,
-           let element = drawings.first(where: { $0.id == id }) {
+           let element = canvasDrawingElement(withID: id) {
+            let oldState = DrawingElementHistoryState(element)
             element.x = Double(canvasX)
             element.y = Double(canvasY)
             element.width = Double(elemW)
@@ -4120,9 +5689,20 @@ private struct CanvasPageContentView: View {
             element.rotation = 0
             element.isCanvasDrawing = true
             element.pkDrawing = localDrawing
+            let newState = DrawingElementHistoryState(element)
+            guard oldState != newState else { return }
             element.updatedAt = Date()
             try? context.save()
             Task { await DrawingSyncService.shared.upsert(element) }
+            vm.undoManager.recordElementChange(
+                name: "Continue drawing",
+                element: element,
+                from: oldState,
+                to: newState,
+                context: context
+            ) { target, state in
+                state.apply(to: target)
+            }
         } else {
             let element = DrawingElementModel(
                 canvasID: activeContentCanvasID,
@@ -4137,8 +5717,50 @@ private struct CanvasPageContentView: View {
             context.insert(element)
             try? context.save()
             Task { await DrawingSyncService.shared.upsert(element) }
+            if keepsSessionActive {
+                continuingCanvasDrawingID = element.id
+            }
+            let snapshot = DrawingElementHistoryState(element)
+            vm.undoManager.push(CanvasAction(
+                name: "Add canvas drawing",
+                undo: {
+                    guard let values = try? context.fetch(FetchDescriptor<DrawingElementModel>()),
+                          let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                    context.delete(current)
+                    try? context.save()
+                    Task { await DrawingSyncService.shared.delete(current) }
+                },
+                redo: {
+                    let restored = snapshot.makeModel()
+                    context.insert(restored)
+                    try? context.save()
+                    Task { await DrawingSyncService.shared.upsert(restored) }
+                }
+            ))
         }
 
+        if !keepsSessionActive {
+            resetCanvasDrawingSession()
+        }
+    }
+
+    private func canvasDrawingElement(withID id: UUID) -> DrawingElementModel? {
+        if let element = drawings.first(where: { $0.id == id }) {
+            return element
+        }
+        guard let storedDrawings = try? context.fetch(FetchDescriptor<DrawingElementModel>()) else {
+            return nil
+        }
+        return storedDrawings.first(where: { $0.id == id })
+    }
+
+    private func finishCanvasDrawingSession() {
+        resetCanvasDrawingSession()
+        isCanvasHighlighterToolSelected = false
+        isCanvasDrawingInputActive = true
+    }
+
+    private func resetCanvasDrawingSession() {
         continuingCanvasDrawingID = nil
         canvasDrawingInitialDrawing = PKDrawing()
         canvasDrawingCaptureMode = .drawing
@@ -4454,6 +6076,7 @@ private struct CanvasPageContentView: View {
                 images: images,
                 drawings: drawings,
                 gridStyle: settings.effectiveGridStyle,
+                gridSpacing: CGFloat(settings.effectiveCanvasPatternSpacing),
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
                 customBackgroundColors: settings.customCanvasBackgroundColors,
@@ -4469,6 +6092,7 @@ private struct CanvasPageContentView: View {
                 images: images,
                 drawings: drawings,
                 gridStyle: settings.effectiveGridStyle,
+                gridSpacing: CGFloat(settings.effectiveCanvasPatternSpacing),
                 backgroundMode: settings.canvasBackgroundMode,
                 backgroundPalette: settings.canvasBackgroundPalette,
                 customBackgroundColors: settings.customCanvasBackgroundColors,
@@ -4653,7 +6277,11 @@ private struct CanvasPageContentView: View {
     }
 
     @ViewBuilder
-    private func renderElement(_ element: any LayerableElement, nextZIndex: Int) -> some View {
+    private func renderElement(
+        _ element: any LayerableElement,
+        nextZIndex: Int,
+        viewportSize: CGSize
+    ) -> some View {
         let boundary       = elementInteractionBoundary
         let multiSelect    = selection.isMultiSelectActive
         let isElemSelected = isSelectedInMultiSelect(element)
@@ -4811,6 +6439,14 @@ private struct CanvasPageContentView: View {
                 toggleMultiSelection(for: element)
             } : nil
         )
+        .simultaneousGesture(
+            (multiSelect && isElemSelected && selectedMultiSelectBounds != nil)
+            ? multiSelectDragGesture(
+                bounds: selectedMultiSelectBounds ?? .zero,
+                viewportSize: viewportSize
+            )
+            : nil
+        )
         .highPriorityGesture(
             (!multiSelect && element.groupID != nil) ? TapGesture().onEnded {
                 guard !isCanvasGestureActive,
@@ -4839,7 +6475,8 @@ private struct CanvasPageContentView: View {
                 onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onLasso:        { startLassoSelection() },
-                onDrawingTool:  { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onDrawingTool:  { startPrimaryDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                onDrawingOptions: { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                 onConnect:      { toggleConnectMode() },
                 isConnectModeActive: connectActive,
@@ -4862,7 +6499,8 @@ private struct CanvasPageContentView: View {
                     onAddAudio:     { openAudioPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddYouTube:   { openYouTubeLinkSheet(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onLasso:        { startLassoSelection() },
-                    onDrawingTool:  { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onDrawingTool:  { startPrimaryDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
+                    onDrawingOptions: { openDrawingTool(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },
                     onAddSymbol:    { openSymbolPicker(at: CGPoint(x: geo.size.width/2, y: geo.size.height/2)) },  // ← NEW
                     onConnect:      { toggleConnectMode() },
                     isConnectModeActive: connectActive,
@@ -4906,7 +6544,13 @@ private struct CanvasPageContentView: View {
               let tableID = vm.pendingCSVTableID else { return }
 
         guard let table = tables.first(where: { $0.id == tableID }) else { return }
-        vm.tableVM.importCSV(csv, into: table, cells: tableCells, context: context)
+        vm.tableVM.importCSV(
+            csv,
+            into: table,
+            cells: tableCells,
+            context: context,
+            undoManager: vm.undoManager
+        )
     }
 
     #if os(iOS)
@@ -4950,6 +6594,8 @@ private struct CanvasPageContentView: View {
         selectedGroupID = nil
         draggingGroupID = nil
         groupDragOffset = .zero
+        alignmentGuidePoint = nil
+        alignmentRuler = nil
         if let inlineID = vm.textVM.inlineEditingID,
            let el = textElements.first(where: { $0.id == inlineID }),
            el.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -5035,6 +6681,48 @@ private struct CanvasPageContentView: View {
         dismissEverything()
         pendingDrawingToolLocation = point
         showDrawingModePicker = true
+    }
+
+    #if os(iOS)
+    private func scheduleDrawingCoachMarkIfNeeded(delay: TimeInterval = 0.85) {
+        guard !settings.hasSeenDrawingCoachMark,
+              settings.toolbarPosition != .hidden,
+              !showDrawingCoachMark else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard !settings.hasSeenDrawingCoachMark,
+                  settings.toolbarPosition != .hidden,
+                  !showDrawingCoachMark,
+                  !vm.showCanvasDrawingOverlay,
+                  !selection.isMultiSelectActive,
+                  !isLassoModeActive,
+                  !vm.connectorVM.isConnectModeActive else { return }
+
+            withAnimation(.easeOut(duration: 0.22)) {
+                showDrawingCoachMark = true
+            }
+        }
+    }
+
+    private func completeDrawingCoachMark(then action: (() -> Void)? = nil) {
+        settings.hasSeenDrawingCoachMark = true
+        withAnimation(.easeIn(duration: 0.18)) {
+            showDrawingCoachMark = false
+        }
+
+        guard let action else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            action()
+        }
+    }
+    #endif
+
+    private func startPrimaryDrawingTool(at point: CGPoint) {
+        #if os(iOS)
+        startCanvasDrawing()
+        #else
+        openDrawingTool(at: point)
+        #endif
     }
 
     private func handleDrawingToolMode(_ mode: CanvasDrawingToolMode, viewportSize: CGSize) {
@@ -5351,7 +7039,13 @@ private struct CanvasPageContentView: View {
                 vm.pdfVM.editingID = duplicatedID
             }
         } else if let el = element as? PDFPageElementModel {
-            duplicatedID = vm.pdfPageVM.duplicate(element: el, zIndex: z, offset: offset, context: context)
+            duplicatedID = vm.pdfPageVM.duplicate(
+                element: el,
+                zIndex: z,
+                offset: offset,
+                context: context,
+                undoManager: vm.undoManager
+            )
             if let duplicatedID, selectCopy { vm.pdfPageVM.editingID = duplicatedID }
         } else if let el = element as? TableElementModel {
             duplicatedID = vm.tableVM.duplicate(table: el, cells: tableCells, zIndex: z, offset: offset, context: context, undoManager: vm.undoManager)
@@ -5388,6 +7082,8 @@ private struct CanvasPageContentView: View {
     }
 
     private func deleteSelected() {
+        vm.undoManager.beginGrouping(name: "Delete selection")
+        defer { vm.undoManager.endGrouping() }
         for id in selection.selectedIDs {
             guard let element = layerableElement(withID: id) else { continue }
             vm.deleteLayerableElement(

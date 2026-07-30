@@ -4,6 +4,7 @@ import PencilKit
 
 struct PDFPageElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var element: PDFPageElementModel
     let source: PDFElementModel?
     let highlights: [PDFHighlightModel]
@@ -39,7 +40,13 @@ struct PDFPageElementView: View {
                     .rotationEffect(.degrees(-rotationAngle))
                 handle(icon: "trash", color: .red)
                     .offset(x: -currentWidth / 2, y: -currentHeight / 2)
-                    .onTapGesture { vm.delete(element: element, context: context) }
+                    .onTapGesture {
+                        vm.delete(
+                            element: element,
+                            context: context,
+                            undoManager: canvasHistory
+                        )
+                    }
                 handle(icon: "arrow.trianglehead.2.clockwise", color: .orange)
                     .offset(x: -currentWidth / 2, y: currentHeight / 2)
                     .gesture(rotateGesture)
@@ -169,7 +176,8 @@ struct PDFPageElementView: View {
         DragGesture().onChanged { dragOffset = $0.translation }.onEnded { value in
             dragOffset = .zero
             vm.updatePosition(element: element, translation: value.translation,
-                              boundary: canvasBoundary, context: context)
+                              boundary: canvasBoundary, context: context,
+                              undoManager: canvasHistory)
         }
     }
 
@@ -179,7 +187,8 @@ struct PDFPageElementView: View {
             vm.updateSize(element: element,
                           width: element.width + value.translation.width,
                           height: element.height + value.translation.height,
-                          context: context)
+                          context: context,
+                          undoManager: canvasHistory)
         }
     }
 
@@ -192,7 +201,12 @@ struct PDFPageElementView: View {
             )
         }.onEnded { _ in
             rotationGestureState.reset()
-            vm.updateRotation(element: element, rotation: rotationAngle, context: context)
+            vm.updateRotation(
+                element: element,
+                rotation: rotationAngle,
+                context: context,
+                undoManager: canvasHistory
+            )
         }
     }
 

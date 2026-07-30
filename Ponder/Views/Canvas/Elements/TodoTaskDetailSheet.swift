@@ -7,6 +7,7 @@ import SwiftUI
 import SwiftData
 
 struct TodoTaskDetailSheet: View {
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var task: TodoTaskModel
     let allTasks: [TodoTaskModel]
     let context: ModelContext
@@ -14,6 +15,7 @@ struct TodoTaskDetailSheet: View {
 
     @State private var tagInput: String = ""
     @State private var newSubtaskTitle: String = ""
+    @State private var initialTaskState: TodoTaskHistoryState?
     @FocusState private var titleFocused: Bool
 
     private var hasDueDate: Binding<Bool> {
@@ -63,6 +65,20 @@ struct TodoTaskDetailSheet: View {
                     subtasksSection
                 }
                 .padding(24)
+            }
+        }
+        .onAppear {
+            initialTaskState = TodoTaskHistoryState(task)
+        }
+        .onDisappear {
+            if let initialTaskState {
+                recordTodoTaskChange(
+                    name: "Edit todo details",
+                    task: task,
+                    from: initialTaskState,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
         }
     }
@@ -215,10 +231,18 @@ struct TodoTaskDetailSheet: View {
             ForEach(subtasks) { sub in
                 HStack(spacing: 10) {
                     Button {
+                        let oldState = TodoTaskHistoryState(sub)
                         sub.isCompleted.toggle()
                         sub.updatedAt = Date()
                         try? context.save()
                         Task { await TodoSyncService.shared.upsertTask(sub) }
+                        recordTodoTaskChange(
+                            name: "Toggle subtask",
+                            task: sub,
+                            from: oldState,
+                            context: context,
+                            undoManager: canvasHistory
+                        )
                     } label: {
                         Image(systemName: sub.isCompleted ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 18))
@@ -234,9 +258,7 @@ struct TodoTaskDetailSheet: View {
                     Spacer()
 
                     Button {
-                        Task { await TodoSyncService.shared.deleteTask(sub) }
-                        context.delete(sub)
-                        try? context.save()
+                        deleteSubtask(sub)
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 12))
@@ -275,6 +297,46 @@ struct TodoTaskDetailSheet: View {
         newSubtaskTitle = ""
         try? context.save()
         Task { await TodoSyncService.shared.upsertTask(sub) }
+        let snapshot = TodoTaskHistoryState(sub)
+        canvasHistory.push(CanvasAction(
+            name: "Add subtask",
+            undo: {
+                guard let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()),
+                      let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                context.delete(current)
+                try? context.save()
+                Task { await TodoSyncService.shared.deleteTask(current) }
+            },
+            redo: {
+                let restored = snapshot.makeModel()
+                context.insert(restored)
+                try? context.save()
+                Task { await TodoSyncService.shared.upsertTask(restored) }
+            }
+        ))
+    }
+
+    private func deleteSubtask(_ subtask: TodoTaskModel) {
+        let snapshot = TodoTaskHistoryState(subtask)
+        Task { await TodoSyncService.shared.deleteTask(subtask) }
+        context.delete(subtask)
+        try? context.save()
+        canvasHistory.push(CanvasAction(
+            name: "Delete subtask",
+            undo: {
+                let restored = snapshot.makeModel()
+                context.insert(restored)
+                try? context.save()
+                Task { await TodoSyncService.shared.upsertTask(restored) }
+            },
+            redo: {
+                guard let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()),
+                      let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                context.delete(current)
+                try? context.save()
+                Task { await TodoSyncService.shared.deleteTask(current) }
+            }
+        ))
     }
 
     // MARK: - Helpers

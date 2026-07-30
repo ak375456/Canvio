@@ -34,6 +34,7 @@ private enum PDFWorkspaceTool: String {
 struct PDFWorkspaceView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var settings: AppSettings
     @Bindable var element: PDFElementModel
     let canvasID: UUID
     var initialPageIndex: Int = 0
@@ -127,6 +128,7 @@ struct PDFWorkspaceView: View {
                             document: document,
                             pageIndex: $currentPageIndex,
                             drawing: inkLayer(for: currentPageIndex)?.pkDrawing ?? PKDrawing(),
+                            penConfiguration: settings.drawingPenConfiguration,
                             onChange: saveInk
                         )
                     case .crop:
@@ -223,6 +225,10 @@ struct PDFWorkspaceView: View {
                 toolButton(.read, title: "Read", icon: "book")
                 toolButton(.ink, title: "Pencil", icon: "pencil.tip.crop.circle")
                 toolButton(.crop, title: "Crop", icon: "crop")
+
+                if tool == .ink {
+                    DrawingAssistanceButton(arrowEdge: .bottom)
+                }
 
                 Divider().frame(height: 24).padding(.horizontal, 3)
 
@@ -646,6 +652,7 @@ private struct PDFInkEditor: View {
     let document: PDFDocument
     @Binding var pageIndex: Int
     let drawing: PKDrawing
+    let penConfiguration: DrawingPenConfiguration
     let onChange: (PKDrawing, CGSize) -> Void
 
     var body: some View {
@@ -657,7 +664,11 @@ private struct PDFInkEditor: View {
                     PDFPageThumbnail(fileName: document.documentURL?.lastPathComponent ?? "",
                                      pageIndex: pageIndex, directDocument: document)
                     #if canImport(UIKit)
-                    PDFPencilCanvas(drawing: drawing, onChange: { onChange($0, size) })
+                    PDFPencilCanvas(
+                        drawing: drawing,
+                        penConfiguration: penConfiguration,
+                        onChange: { onChange($0, size) }
+                    )
                         .id(pageIndex)
                     #endif
                 }
@@ -685,15 +696,21 @@ private struct PDFInkEditor: View {
 #if canImport(UIKit)
 private struct PDFPencilCanvas: UIViewRepresentable {
     let drawing: PKDrawing
+    let penConfiguration: DrawingPenConfiguration
     let onChange: (PKDrawing) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            penConfiguration: penConfiguration,
+            onChange: onChange
+        )
+    }
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.drawing = drawing
-        canvas.drawingPolicy = .pencilOnly
+        canvas.drawingPolicy = .default
         canvas.isScrollEnabled = false
         canvas.delegate = context.coordinator
         let picker = PKToolPicker()
@@ -704,7 +721,9 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         return canvas
     }
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        canvas.drawingPolicy = .default
         context.coordinator.onChange = onChange
+        context.coordinator.penConfiguration = penConfiguration
         if canvas.drawing.dataRepresentation() != drawing.dataRepresentation(), !canvas.isFirstResponder {
             canvas.drawing = drawing
         }
@@ -715,10 +734,49 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         canvas.resignFirstResponder()
     }
     final class Coordinator: NSObject, PKCanvasViewDelegate {
+        var penConfiguration: DrawingPenConfiguration
         var onChange: (PKDrawing) -> Void
         var picker: PKToolPicker?
-        init(onChange: @escaping (PKDrawing) -> Void) { self.onChange = onChange }
-        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) { onChange(canvasView.drawing) }
+        private var isApplyingStrokeProcessing = false
+        private var strokeBaseline: DrawingStrokeBaseline?
+
+        init(
+            penConfiguration: DrawingPenConfiguration,
+            onChange: @escaping (PKDrawing) -> Void
+        ) {
+            self.penConfiguration = penConfiguration
+            self.onChange = onChange
+        }
+
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            guard !isApplyingStrokeProcessing else { return }
+            onChange(canvasView.drawing)
+        }
+
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            strokeBaseline = canvasView.tool is PKInkingTool
+                ? DrawingStrokeBaseline(drawing: canvasView.drawing)
+                : nil
+        }
+
+        func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            let baseline = strokeBaseline
+            strokeBaseline = nil
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvasView] in
+                guard let self, let canvasView, let baseline else { return }
+                guard let processed = DrawingStrokeProcessor.processingLatestStroke(
+                    in: canvasView.drawing,
+                    since: baseline,
+                    configuration: self.penConfiguration
+                ) else { return }
+
+                self.isApplyingStrokeProcessing = true
+                canvasView.drawing = processed
+                self.onChange(processed)
+                self.isApplyingStrokeProcessing = false
+            }
+        }
     }
 }
 #endif

@@ -34,6 +34,7 @@ class PDFElementViewModel: ObservableObject {
 
             let id = element.id
             undoManager?.push(CanvasAction(
+                name: "Add PDF",
                 undo: {
                     if let el = try? context.fetch(FetchDescriptor<PDFElementModel>()).first(where: { $0.id == id }) {
                         Task { await PDFSyncService.shared.delete(el) }
@@ -50,6 +51,18 @@ class PDFElementViewModel: ObservableObject {
                     el.id = id; el.documentID = id; el.zIndex = zIndex
                     context.insert(el); try? context.save()
                     Task { await PDFSyncService.shared.upsert(el) }
+                },
+                onDiscard: { isApplied in
+                    guard !isApplied else { return }
+                    let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? []
+                    let pages = (try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? []
+                    if !pdfs.contains(where: { $0.pdfFileName == result.pdfFileName }),
+                       !pages.contains(where: { $0.pdfFileName == result.pdfFileName }) {
+                        PDFStorageService.delete(
+                            pdfFileName: result.pdfFileName,
+                            thumbnailFileName: result.thumbnailFileName
+                        )
+                    }
                 }
             ))
         } catch { print("⚠️ Failed to import PDF: \(error)") }
@@ -80,6 +93,7 @@ class PDFElementViewModel: ObservableObject {
 
             let id = element.id
             undoManager?.push(CanvasAction(
+                name: "Add scanned PDF",
                 undo: {
                     if let el = try? context.fetch(FetchDescriptor<PDFElementModel>())
                         .first(where: { $0.id == id }) {
@@ -101,6 +115,18 @@ class PDFElementViewModel: ObservableObject {
                     context.insert(el)
                     try? context.save()
                     Task { await PDFSyncService.shared.upsert(el) }
+                },
+                onDiscard: { isApplied in
+                    guard !isApplied else { return }
+                    let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? []
+                    let pages = (try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? []
+                    if !pdfs.contains(where: { $0.pdfFileName == result.pdfFileName }),
+                       !pages.contains(where: { $0.pdfFileName == result.pdfFileName }) {
+                        PDFStorageService.delete(
+                            pdfFileName: result.pdfFileName,
+                            thumbnailFileName: result.thumbnailFileName
+                        )
+                    }
                 }
             ))
             return id
@@ -161,27 +187,48 @@ class PDFElementViewModel: ObservableObject {
                                    x: element.x + Double(offset.width),
                                    y: element.y + Double(offset.height))
         copy.width = element.width; copy.height = element.height; copy.zIndex = zIndex
+        copy.rotation = element.rotation
         context.insert(copy); try? context.save()
         Task { await PDFSyncService.shared.upsert(copy) }
 
         let id = copy.id
+        let snapshot = (
+            canvasID: copy.canvasID, originalName: copy.originalName,
+            pageCount: copy.pageCount, x: copy.x, y: copy.y,
+            width: copy.width, height: copy.height, rotation: copy.rotation,
+            zIndex: copy.zIndex
+        )
         undoManager?.push(CanvasAction(
-            undo: {
-                if let el = try? context.fetch(FetchDescriptor<PDFElementModel>()).first(where: { $0.id == id }) {
-                    Task { await PDFSyncService.shared.delete(el) }
-                    PDFStorageService.delete(pdfFileName: newPDFName, thumbnailFileName: newThumbName)
-                    context.delete(el); try? context.save()
+            name: "Duplicate PDF",
+                undo: {
+                    if let el = try? context.fetch(FetchDescriptor<PDFElementModel>()).first(where: { $0.id == id }) {
+                        Task { await PDFSyncService.shared.delete(el) }
+                        context.delete(el); try? context.save()
                 }
             },
             redo: {
-                let el = PDFElementModel(canvasID: element.canvasID,
+                let el = PDFElementModel(canvasID: snapshot.canvasID,
                                          pdfFileName: newPDFName, thumbnailFileName: newThumbName,
-                                         originalName: element.originalName, pageCount: element.pageCount,
-                                         x: element.x + Double(offset.width),
-                                         y: element.y + Double(offset.height))
-                el.id = id; el.documentID = id; el.zIndex = zIndex
+                                         originalName: snapshot.originalName,
+                                         pageCount: snapshot.pageCount,
+                                         x: snapshot.x, y: snapshot.y)
+                el.id = id; el.documentID = id; el.zIndex = snapshot.zIndex
+                el.width = snapshot.width; el.height = snapshot.height
+                el.rotation = snapshot.rotation
                 context.insert(el); try? context.save()
                 Task { await PDFSyncService.shared.upsert(el) }
+            },
+            onDiscard: { isApplied in
+                guard !isApplied else { return }
+                let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? []
+                let pages = (try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? []
+                if !pdfs.contains(where: { $0.pdfFileName == newPDFName }),
+                   !pages.contains(where: { $0.pdfFileName == newPDFName }) {
+                    PDFStorageService.delete(
+                        pdfFileName: newPDFName,
+                        thumbnailFileName: newThumbName
+                    )
+                }
             }
         ))
         return id
@@ -218,7 +265,10 @@ class PDFElementViewModel: ObservableObject {
                     pdfFileName: element.pdfFileName, thumbFileName: element.thumbnailFileName,
                     originalName: element.originalName, pageCount: element.pageCount,
                     x: element.x, y: element.y, width: element.width,
-                    height: element.height, zIndex: element.zIndex)
+                    height: element.height, rotation: element.rotation,
+                    zIndex: element.zIndex, groupID: element.groupID,
+                    isLayerHidden: element.isLayerHidden,
+                    layerOpacity: element.layerOpacity)
 
         let hasDerivedPages = ((try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? [])
             .contains { $0.documentID == element.resolvedDocumentID }
@@ -227,6 +277,7 @@ class PDFElementViewModel: ObservableObject {
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete PDF",
             undo: {
                 let el = PDFElementModel(canvasID: snap.canvasID,
                                          pdfFileName: snap.pdfFileName,
@@ -237,16 +288,27 @@ class PDFElementViewModel: ObservableObject {
                 el.id = snap.id; el.documentID = snap.documentID
                 el.width = snap.width; el.height = snap.height
                 el.zIndex = snap.zIndex
+                el.rotation = snap.rotation; el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden; el.layerOpacity = snap.layerOpacity
                 context.insert(el); try? context.save()
                 Task { await PDFSyncService.shared.upsert(el) }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<PDFElementModel>()).first(where: { $0.id == snap.id }) {
                     Task { await PDFSyncService.shared.delete(el, deleteAsset: !hasDerivedPages) }
-                    if !hasDerivedPages {
-                        PDFStorageService.delete(pdfFileName: snap.pdfFileName, thumbnailFileName: snap.thumbFileName)
-                    }
                     context.delete(el); try? context.save()
+                }
+            },
+            onDiscard: { isApplied in
+                guard isApplied else { return }
+                let pdfs = (try? context.fetch(FetchDescriptor<PDFElementModel>())) ?? []
+                let pages = (try? context.fetch(FetchDescriptor<PDFPageElementModel>())) ?? []
+                if !pdfs.contains(where: { $0.pdfFileName == snap.pdfFileName }),
+                   !pages.contains(where: { $0.pdfFileName == snap.pdfFileName }) {
+                    PDFStorageService.delete(
+                        pdfFileName: snap.pdfFileName,
+                        thumbnailFileName: snap.thumbFileName
+                    )
                 }
             }
         ))

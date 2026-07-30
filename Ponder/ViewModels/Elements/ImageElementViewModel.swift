@@ -35,6 +35,7 @@ class ImageElementViewModel: ObservableObject {
 
             let id = element.id
             undoManager?.push(CanvasAction(
+                name: "Add image",
                 undo: {
                     if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
                         Task { await ImageSyncService.shared.delete(el) }
@@ -47,6 +48,13 @@ class ImageElementViewModel: ObservableObject {
                     el.id = id; el.zIndex = zIndex
                     context.insert(el); try? context.save()
                     Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                },
+                onDiscard: { isApplied in
+                    guard !isApplied else { return }
+                    let images = (try? context.fetch(FetchDescriptor<ImageElementModel>())) ?? []
+                    if !images.contains(where: { $0.imageFileName == filename }) {
+                        ImageStorageService.delete(fileName: filename)
+                    }
                 }
             ))
         } catch { print("⚠️ Failed to save image: \(error)") }
@@ -66,6 +74,7 @@ class ImageElementViewModel: ObservableObject {
 
         let id = element.id
         undoManager?.push(CanvasAction(
+            name: "Duplicate image",
             undo: {
                 if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
                     el.x = oldX; el.y = oldY; el.updatedAt = Date(); try? context.save()
@@ -110,11 +119,10 @@ class ImageElementViewModel: ObservableObject {
 
         let id = copy.id
         undoManager?.push(CanvasAction(
-            undo: {
-                if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
-                    Task { await ImageSyncService.shared.delete(el) }
-                    ImageStorageService.delete(fileName: el.imageFileName)
-                    context.delete(el); try? context.save()
+                undo: {
+                    if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == id }) {
+                        Task { await ImageSyncService.shared.delete(el) }
+                        context.delete(el); try? context.save()
                 }
             },
             redo: {
@@ -126,10 +134,17 @@ class ImageElementViewModel: ObservableObject {
                 el.rotation = element.rotation
                 el.cornerRadius = element.cornerRadius
                 el.opacity = element.opacity
-                el.zIndex = zIndex
-                context.insert(el); try? context.save()
-                Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
-            }
+                    el.zIndex = zIndex
+                    context.insert(el); try? context.save()
+                    Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
+                },
+                onDiscard: { isApplied in
+                    guard !isApplied else { return }
+                    let images = (try? context.fetch(FetchDescriptor<ImageElementModel>())) ?? []
+                    if !images.contains(where: { $0.imageFileName == newFileName }) {
+                        ImageStorageService.delete(fileName: newFileName)
+                    }
+                }
         ))
         return id
     }
@@ -159,19 +174,33 @@ class ImageElementViewModel: ObservableObject {
     }
 
     func updateCornerRadius(element: ImageElementModel, cornerRadius: Double,
-                            context: ModelContext) {
+                            context: ModelContext,
+                            undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.cornerRadius
         element.cornerRadius = max(0, min(48, cornerRadius))
         element.updatedAt = Date()
         try? context.save()
         Task { await ImageSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change image corners", element: element,
+            from: oldValue, to: element.cornerRadius, context: context,
+            coalescingKey: "image-corners-\(element.id)"
+        ) { $0.cornerRadius = $1 }
     }
 
     func updateOpacity(element: ImageElementModel, opacity: Double,
-                       context: ModelContext) {
+                       context: ModelContext,
+                       undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.opacity
         element.opacity = max(0.1, min(1.0, opacity))
         element.updatedAt = Date()
         try? context.save()
         Task { await ImageSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change image opacity", element: element,
+            from: oldValue, to: element.opacity, context: context,
+            coalescingKey: "image-opacity-\(element.id)"
+        ) { $0.opacity = $1 }
     }
 
     func applyFreeformCutout(
@@ -316,13 +345,16 @@ class ImageElementViewModel: ObservableObject {
                     x: element.x, y: element.y, width: element.width,
                     height: element.height, rotation: element.rotation,
                     cornerRadius: element.cornerRadius, opacity: element.opacity,
-                    zIndex: element.zIndex)
+                    zIndex: element.zIndex, groupID: element.groupID,
+                    isLayerHidden: element.isLayerHidden,
+                    layerOpacity: element.layerOpacity)
 
         Task { await ImageSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete image",
             undo: {
                 let el = ImageElementModel(canvasID: snap.canvasID, imageFileName: snap.fileName,
                                            x: snap.x, y: snap.y, width: snap.width, height: snap.height)
@@ -331,14 +363,23 @@ class ImageElementViewModel: ObservableObject {
                 el.cornerRadius = snap.cornerRadius
                 el.opacity = snap.opacity
                 el.zIndex = snap.zIndex
+                el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
                 context.insert(el); try? context.save()
                 Task { await ImageSyncService.shared.upsert(el, uploadFile: true) }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<ImageElementModel>()).first(where: { $0.id == snap.id }) {
                     Task { await ImageSyncService.shared.delete(el) }
-                    ImageStorageService.delete(fileName: snap.fileName)
                     context.delete(el); try? context.save()
+                }
+            },
+            onDiscard: { isApplied in
+                guard isApplied else { return }
+                let images = (try? context.fetch(FetchDescriptor<ImageElementModel>())) ?? []
+                if !images.contains(where: { $0.imageFileName == snap.fileName }) {
+                    ImageStorageService.delete(fileName: snap.fileName)
                 }
             }
         ))

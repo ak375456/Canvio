@@ -8,6 +8,7 @@ import SwiftData
 
 struct TodoTaskRow: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var task: TodoTaskModel
     let accentColor: Color
     @ObservedObject var vm: TodoListViewModel
@@ -24,7 +25,7 @@ struct TodoTaskRow: View {
             // Checkbox
             Button {
                 withAnimation(.spring(duration: 0.25)) {
-                    vm.toggleTask(task, context: context)
+                    vm.toggleTask(task, context: context, undoManager: canvasHistory)
                 }
             } label: {
                 ZStack {
@@ -148,9 +149,18 @@ struct TodoTaskRow: View {
 
     private func saveTaskTitle(_ title: String) -> Bool {
         guard task.title != title else { return false }
+        let oldState = TodoTaskHistoryState(task)
         task.title = title
         task.updatedAt = Date()
         try? context.save()
+        recordTodoTaskChange(
+            name: "Edit todo task",
+            task: task,
+            from: oldState,
+            context: context,
+            undoManager: canvasHistory,
+            coalescingKey: "todo-title-\(task.id)"
+        )
         return true
     }
 

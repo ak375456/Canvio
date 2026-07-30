@@ -5,6 +5,83 @@
 
 import SwiftUI
 
+/// Lets the canvas place a first-run coach mark over the real drawing controls
+/// in either toolbar layout without relying on device-specific coordinates.
+struct DrawingToolAnchorPreferenceKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+
+    static func reduce(
+        value: inout Anchor<CGRect>?,
+        nextValue: () -> Anchor<CGRect>?
+    ) {
+        value = nextValue() ?? value
+    }
+}
+
+/// Keeps the two most common history actions on the canvas itself instead of
+/// hiding them among secondary navigation-bar actions on compact devices.
+struct CanvasHistoryControls: View {
+    @ObservedObject var undoManager: CanvasUndoManager
+
+    private let buttonSize: CGFloat = 44
+
+    var body: some View {
+        HStack(spacing: 0) {
+            historyButton(
+                systemImage: "arrow.uturn.backward",
+                label: "Undo",
+                hint: "Reverses the most recent canvas change.",
+                isEnabled: undoManager.canUndo,
+                shortcut: KeyboardShortcut("z", modifiers: .command),
+                action: undoManager.undo
+            )
+
+            Divider()
+                .frame(height: 22)
+
+            historyButton(
+                systemImage: "arrow.uturn.forward",
+                label: "Redo",
+                hint: "Restores the most recently undone canvas change.",
+                isEnabled: undoManager.canRedo,
+                shortcut: KeyboardShortcut("z", modifiers: [.command, .shift]),
+                action: undoManager.redo
+            )
+        }
+        .padding(.horizontal, 2)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func historyButton(
+        systemImage: String,
+        label: String,
+        hint: String,
+        isEnabled: Bool,
+        shortcut: KeyboardShortcut,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: buttonSize, height: buttonSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.42))
+        .disabled(!isEnabled)
+        .keyboardShortcut(shortcut)
+        .accessibilityLabel(label)
+        .accessibilityHint(hint)
+        .accessibilityIdentifier("canvas.\(label.lowercased())")
+    }
+}
+
 struct CanvasToolbar: View {
     @Binding var showTextSheet: Bool
     let onAddSticky:    () -> Void
@@ -19,6 +96,7 @@ struct CanvasToolbar: View {
     let onAddYouTube:   () -> Void
     let onLasso:        () -> Void
     let onDrawingTool:  () -> Void
+    let onDrawingOptions: () -> Void
     let onAddSymbol:    () -> Void          // ← NEW
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
@@ -72,6 +150,7 @@ struct CanvasToolbar: View {
 
     @ViewBuilder
     private var toolbarItems: some View {
+        drawingControls
         toolButton(icon: "textformat",           label: "Text",    tint: .blue)   { showTextSheet = true }
         toolButton(icon: "note.text",            label: "Sticky",  tint: .orange) { onAddSticky() }
         toolButton(icon: "checklist",            label: "Todo",    tint: .green)  { onAddTodo() }
@@ -87,8 +166,38 @@ struct CanvasToolbar: View {
         toolButton(icon: "play.rectangle.fill",  label: "YouTube", tint: .red)    { onAddYouTube() }
         toolButton(icon: "square.grid.2x2.fill", label: "Symbols", tint: .mint)   { onAddSymbol() }
         toolButton(icon: "lasso",                label: "Lasso",   tint: .blue)   { onLasso() }
-        toolButton(icon: "pencil.and.scribble",  label: "Drawing", tint: .orange) { onDrawingTool() }
         connectButton
+    }
+
+    private var drawingControls: some View {
+        HStack(spacing: 2) {
+            toolButton(
+                icon: "pencil.and.scribble",
+                label: "Drawing",
+                tint: .orange,
+                action: onDrawingTool
+            )
+            .contextMenu {
+                Button(action: onDrawingOptions) {
+                    Label("More drawing options", systemImage: "slider.horizontal.3")
+                }
+            }
+            .accessibilityHint("Starts drawing immediately. Touch and hold for more drawing options.")
+
+            toolButton(
+                icon: "slider.horizontal.3",
+                label: "Options",
+                tint: .orange,
+                action: onDrawingOptions
+            )
+            .accessibilityLabel("Drawing options")
+            .accessibilityHint("Opens Drawing Card and handwriting-to-text choices.")
+        }
+        .anchorPreference(
+            key: DrawingToolAnchorPreferenceKey.self,
+            value: .bounds,
+            transform: { $0 }
+        )
     }
 
     private var collapsedButton: some View {
@@ -203,6 +312,7 @@ struct CompactCanvasToolbar: View {
     let onAddYouTube:   () -> Void
     let onLasso:        () -> Void
     let onDrawingTool:  () -> Void
+    let onDrawingOptions: () -> Void
     let onAddSymbol:    () -> Void
     let onConnect:      () -> Void
     var isConnectModeActive: Bool = false
@@ -274,6 +384,7 @@ struct CompactCanvasToolbar: View {
     private var bottomButtons: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 9) {
+                compactDrawingControls
                 compactButton(icon: "textformat", label: "Text", tint: .blue) { showTextSheet = true }
                 compactButton(icon: "note.text", label: "Sticky Note", tint: .orange, action: onAddSticky)
                 compactButton(icon: "checklist", label: "Todo List", tint: .green, action: onAddTodo)
@@ -281,7 +392,6 @@ struct CompactCanvasToolbar: View {
                 compactButton(icon: "square.on.circle", label: "Shape", tint: .purple, action: onAddShape)
                 compactButton(icon: "photo", label: "Image", tint: .cyan, isLocked: lockedTools.contains(.image), action: onAddImage)
                 compactButton(icon: "lasso", label: "Lasso", tint: .blue, action: onLasso)
-                compactButton(icon: "pencil.and.scribble", label: "Drawing", tint: .orange, action: onDrawingTool)
             }
             .padding(.horizontal, 16)
             .frame(height: buttonSize + 8, alignment: .center)
@@ -290,6 +400,36 @@ struct CompactCanvasToolbar: View {
         .frame(maxWidth: .infinity)
         .frame(height: buttonSize + 12)
         .clipped()
+    }
+
+    private var compactDrawingControls: some View {
+        HStack(spacing: 9) {
+            compactButton(
+                icon: "pencil.and.scribble",
+                label: "Drawing",
+                tint: .orange,
+                action: onDrawingTool
+            )
+            .contextMenu {
+                Button(action: onDrawingOptions) {
+                    Label("More drawing options", systemImage: "slider.horizontal.3")
+                }
+            }
+            .accessibilityHint("Starts drawing immediately. Touch and hold for more drawing options.")
+
+            compactButton(
+                icon: "slider.horizontal.3",
+                label: "Drawing Options",
+                tint: .orange,
+                action: onDrawingOptions
+            )
+            .accessibilityHint("Opens Drawing Card and handwriting-to-text choices.")
+        }
+        .anchorPreference(
+            key: DrawingToolAnchorPreferenceKey.self,
+            value: .bounds,
+            transform: { $0 }
+        )
     }
 
     private func sideButtons(safeTop: CGFloat, safeBottom: CGFloat, height: CGFloat) -> some View {

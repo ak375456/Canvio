@@ -8,6 +8,7 @@ import SwiftData
 
 struct AudioElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var element: AudioElementModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -30,7 +31,9 @@ struct AudioElementView: View {
             card
             selectionRing
             if isSelected && !isMultiSelectMode {
-                Button { vm.delete(element: element, context: context) } label: { handleCircle(icon: "trash", color: .red) }
+                Button {
+                    vm.delete(element: element, context: context, undoManager: canvasHistory)
+                } label: { handleCircle(icon: "trash", color: .red) }
                     .buttonStyle(.plain).offset(x: -(element.width / 2), y: -(element.height / 2))
             }
         }
@@ -150,7 +153,14 @@ struct AudioElementView: View {
                     return
                 }
                 let t = value.translation; dragOffset = .zero
-                vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
+                vm.updatePosition(
+                    element: element,
+                    translation: t,
+                    scale: canvasScale,
+                    boundary: canvasBoundary,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
     }
 

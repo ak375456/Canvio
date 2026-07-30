@@ -14,6 +14,7 @@ struct TableToolbarView: View {
     @ObservedObject var vm: TableElementViewModel
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
 
     let onDelete: () -> Void
     let onImportCSV: () -> Void
@@ -27,16 +28,16 @@ struct TableToolbarView: View {
                 group {
                     // Add row
                     toolButton(icon: "arrow.down.to.line", tooltip: "Add Row") {
-                        vm.addRow(to: table, cells: cells, context: context)
+                        vm.addRow(to: table, cells: cells, context: context, undoManager: canvasHistory)
                     }
                     toolButton(icon: "arrow.right.to.line", tooltip: "Add Col") {
-                        vm.addColumn(to: table, cells: cells, context: context)
+                        vm.addColumn(to: table, cells: cells, context: context, undoManager: canvasHistory)
                     }
                     toolButton(icon: "arrow.up.to.line", tooltip: "Delete Row") {
-                        vm.deleteLastRow(from: table, cells: cells, context: context)
+                        vm.deleteLastRow(from: table, cells: cells, context: context, undoManager: canvasHistory)
                     }
                     toolButton(icon: "arrow.left.to.line", tooltip: "Delete Col") {
-                        vm.deleteLastColumn(from: table, cells: cells, context: context)
+                        vm.deleteLastColumn(from: table, cells: cells, context: context, undoManager: canvasHistory)
                     }
                 }
 
@@ -54,7 +55,7 @@ struct TableToolbarView: View {
 
                     // MARK: Bold
                     Button {
-                        vm.toggleBold(cell, context: context)
+                        vm.toggleBold(cell, context: context, undoManager: canvasHistory)
                     } label: {
                         Image(systemName: "bold")
                             .font(.system(size: 13, weight: .semibold))
@@ -73,11 +74,17 @@ struct TableToolbarView: View {
                     // MARK: Merge / Split
                     if cell.colSpan > 1 {
                         toolButton(icon: "rectangle.split.2x1", tooltip: "Split") {
-                            vm.splitCell(cell, cells: cells, context: context)
+                            vm.splitCell(
+                                cell, table: table, cells: cells,
+                                context: context, undoManager: canvasHistory
+                            )
                         }
                     } else {
                         toolButton(icon: "rectangle.merge", tooltip: "Merge Right") {
-                            vm.mergeRight(cell, table: table, cells: cells, context: context)
+                            vm.mergeRight(
+                                cell, table: table, cells: cells,
+                                context: context, undoManager: canvasHistory
+                            )
                         }
                     }
 
@@ -126,7 +133,12 @@ struct TableToolbarView: View {
     private func alignButton(cell: TableCellModel, alignment: TextAlignment,
                              icon: String) -> some View {
         Button {
-            vm.setCellAlignment(cell, alignment: alignment, context: context)
+            vm.setCellAlignment(
+                cell,
+                alignment: alignment,
+                context: context,
+                undoManager: canvasHistory
+            )
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .semibold))
@@ -141,7 +153,12 @@ struct TableToolbarView: View {
     private func cellColorPicker(cell: TableCellModel) -> some View {
         Menu {
             Button {
-                vm.setCellBackground(cell, colorName: "clear", context: context)
+                vm.setCellBackground(
+                    cell,
+                    colorName: "clear",
+                    context: context,
+                    undoManager: canvasHistory
+                )
             } label: {
                 HStack {
                     Image(systemName: "xmark.circle")
@@ -150,7 +167,12 @@ struct TableToolbarView: View {
             }
             ForEach(cellColors, id: \.name) { c in
                 Button {
-                    vm.setCellBackground(cell, colorName: c.name, context: context)
+                    vm.setCellBackground(
+                        cell,
+                        colorName: c.name,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
                 } label: {
                     HStack {
                         Circle().fill(c.color).frame(width: 12, height: 12)

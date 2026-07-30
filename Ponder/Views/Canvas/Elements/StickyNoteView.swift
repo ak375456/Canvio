@@ -1,8 +1,14 @@
 import SwiftUI
 import SwiftData
 
+private struct StickyContentHistoryState: Equatable {
+    let text: String
+    let listStyleRaw: String
+}
+
 struct StickyNoteView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     let note: StickyNoteModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -127,13 +133,13 @@ struct StickyNoteView: View {
                     .onChange(of: textEditing.draft) { old, new in
                         if applyListContinuation(old: old, new: new) {
                             textEditing.handleDraftChange(
-                                localSave: saveStickyText,
+                                localSave: { saveStickyText($0) },
                                 remoteSync: syncStickyNote
                             )
                             return
                         }
                         textEditing.handleDraftChange(
-                            localSave: saveStickyText,
+                            localSave: { saveStickyText($0) },
                             remoteSync: syncStickyNote
                         )
                     }
@@ -192,6 +198,10 @@ struct StickyNoteView: View {
     }
 
     private func applyListStyle(_ style: StickyListStyle) {
+        let oldState = StickyContentHistoryState(
+            text: note.text,
+            listStyleRaw: note.listStyleRaw
+        )
         let styleChanged = note.listStyle != style
         note.listStyle = style
         var lines = textEditing.draft.components(separatedBy: "\n").map { stripPrefix($0) }
@@ -203,7 +213,7 @@ struct StickyNoteView: View {
             lines = lines.map { l in if l.isEmpty { return "" }; idx += 1; return "\(idx). \(l)" }
         }
         textEditing.draft = lines.joined(separator: "\n")
-        let textChanged = saveStickyText(textEditing.draft)
+        let textChanged = saveStickyText(textEditing.draft, recordHistory: false)
 
         guard styleChanged || textChanged else { return }
         if !textChanged {
@@ -211,6 +221,20 @@ struct StickyNoteView: View {
             try? context.save()
         }
         textEditing.scheduleRemoteSync(syncStickyNote)
+        let newState = StickyContentHistoryState(
+            text: note.text,
+            listStyleRaw: note.listStyleRaw
+        )
+        canvasHistory.recordElementChange(
+            name: "Change sticky list style",
+            element: note,
+            from: oldState,
+            to: newState,
+            context: context
+        ) {
+            $0.text = $1.text
+            $0.listStyleRaw = $1.listStyleRaw
+        }
     }
 
     private func stripPrefix(_ line: String) -> String {
@@ -239,7 +263,12 @@ struct StickyNoteView: View {
             Button {
                 commitLocalTextIfNeeded()
                 withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
-                    vm.setCollapsed(note: note, collapsed: !note.isCollapsed, context: context)
+                    vm.setCollapsed(
+                        note: note,
+                        collapsed: !note.isCollapsed,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
                 }
             } label: {
                 Image(systemName: note.isCollapsed ? "chevron.up" : "chevron.down")
@@ -262,12 +291,22 @@ struct StickyNoteView: View {
             listButton(.numbers, icon: "list.number")
             Divider().frame(height: 18)
             formatButton(icon: "bold", active: note.isBold) {
+                let oldValue = note.isBold
                 note.isBold.toggle()
                 markStickyChanged()
+                canvasHistory.recordElementChange(
+                    name: "Toggle sticky bold", element: note,
+                    from: oldValue, to: note.isBold, context: context
+                ) { $0.isBold = $1 }
             }
             formatButton(icon: "italic", active: note.isItalic) {
+                let oldValue = note.isItalic
                 note.isItalic.toggle()
                 markStickyChanged()
+                canvasHistory.recordElementChange(
+                    name: "Toggle sticky italic", element: note,
+                    from: oldValue, to: note.isItalic, context: context
+                ) { $0.isItalic = $1 }
             }
             Divider().frame(height: 18)
             colorMenu
@@ -297,8 +336,13 @@ struct StickyNoteView: View {
         Menu {
             ForEach(StickyNoteColor.allColors) { c in
                 Button {
+                    let oldValue = note.colorName
                     note.colorName = c.name
                     markStickyChanged()
+                    canvasHistory.recordElementChange(
+                        name: "Change sticky color", element: note,
+                        from: oldValue, to: note.colorName, context: context
+                    ) { $0.colorName = $1 }
                 } label: {
                     HStack {
                         Circle().fill(c.background).frame(width: 14, height: 14)
@@ -314,7 +358,9 @@ struct StickyNoteView: View {
 
     private var cornerHandles: some View {
         ZStack {
-            Button { vm.delete(note: note, context: context) } label: {
+            Button {
+                vm.delete(note: note, context: context, undoManager: canvasHistory)
+            } label: {
                 handleCircle(icon: "trash", color: .red)
             }
             .buttonStyle(.plain)
@@ -330,7 +376,8 @@ struct StickyNoteView: View {
                         .onEnded { value in
                             let t = value.translation; resizeDelta = .zero
                             vm.updateSize(note: note, width: note.width + t.width,
-                                         height: note.height + t.height, context: context)
+                                         height: note.height + t.height, context: context,
+                                         undoManager: canvasHistory)
                         }
                 )
         }
@@ -377,23 +424,39 @@ struct StickyNoteView: View {
             onExternalTap?()
         }
         if note.isCollapsed {
-            vm.setCollapsed(note: note, collapsed: false, context: context)
+            vm.setCollapsed(
+                note: note,
+                collapsed: false,
+                context: context,
+                undoManager: canvasHistory
+            )
         }
         vm.startWriting(noteID: note.id)
     }
 
     private func commitLocalTextIfNeeded() {
         textEditing.commitDraft(
-            localSave: saveStickyText,
+            localSave: { saveStickyText($0) },
             remoteSync: syncStickyNote
         )
     }
 
-    private func saveStickyText(_ text: String) -> Bool {
+    private func saveStickyText(_ text: String, recordHistory: Bool = true) -> Bool {
         guard note.text != text else { return false }
+        let oldValue = note.text
         note.text = text
         note.updatedAt = Date()
         try? context.save()
+        if recordHistory {
+            canvasHistory.recordElementChange(
+                name: "Edit sticky note",
+                element: note,
+                from: oldValue,
+                to: note.text,
+                context: context,
+                coalescingKey: "sticky-text-\(note.id)"
+            ) { $0.text = $1 }
+        }
         return true
     }
 
@@ -433,7 +496,8 @@ struct StickyNoteView: View {
                 let t = value.translation
                 dragOffset = .zero
                 vm.updatePosition(note: note, translation: t,
-                                  scale: canvasScale, boundary: canvasBoundary, context: context)
+                                  scale: canvasScale, boundary: canvasBoundary, context: context,
+                                  undoManager: canvasHistory)
                 // Small delay so the tap handler sees isDragging = true and skips
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     isDragging = false

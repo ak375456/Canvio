@@ -413,6 +413,9 @@ enum CanvasBackgroundPalette: String, CaseIterable, Identifiable {
 
 @MainActor
 class AppSettings: ObservableObject {
+    static let canvasPatternSpacingRange: ClosedRange<Double> = 16...96
+    static let defaultCanvasPatternSpacing: Double = 30
+
     @AppStorage("ponder.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("ponder.toolbarPosition") private var toolbarPositionRaw: String = ToolbarPosition.bottom.rawValue
     @AppStorage("ponder.toolbarStyle") private var toolbarStyleRaw: String = ToolbarStyle.floatingBar.rawValue
@@ -421,6 +424,9 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.canvasMinimapVisible") private var canvasMinimapVisibleRaw: Bool = true
     @AppStorage("ponder.floatingYouTubePlaybackEnabled") private var floatingYouTubePlaybackEnabledRaw: Bool = true
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
+    @AppStorage("ponder.gridSquareSize") private var gridSquareSizeRaw: Double = AppSettings.defaultCanvasPatternSpacing
+    @AppStorage("ponder.horizontalLineHeight") private var horizontalLineHeightRaw: Double = AppSettings.defaultCanvasPatternSpacing
+    @AppStorage("ponder.verticalColumnWidth") private var verticalColumnWidthRaw: Double = AppSettings.defaultCanvasPatternSpacing
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
     @AppStorage("ponder.customCanvasBackgroundLightHex") private var customCanvasBackgroundLightHexRaw: String = CanvasCustomBackgroundColors.defaults.lightHex
@@ -428,6 +434,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.customCanvasBackgroundHistory") private var customCanvasBackgroundHistoryRaw: String = ""
     @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
     @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
+    @AppStorage("ponder.drawingPenSmoothing") private var drawingPenSmoothingRaw: Double = DrawingPenConfiguration.default.smoothing
     @AppStorage("ponder.handwritingToTextEnabled") private var handwritingToTextEnabledRaw: Bool = true
     @AppStorage("ponder.handwritingToTextStrictness") private var handwritingToTextStrictnessRaw: Double = 0.35
     @AppStorage("ponder.handwritingTextGrouping") private var handwritingTextGroupingRaw: String = HandwritingTextGrouping.automatic.rawValue
@@ -453,6 +460,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.lastTextStrokeWidth") private var lastTextStrokeWidthRaw: Double = 2.0
     @AppStorage("isPro") private var isProRaw: Bool = false
     @AppStorage("hasSeenOnboarding") private var hasSeenOnboardingRaw: Bool = false
+    @AppStorage("ponder.hasSeenDrawingCoachMark.v1") private var hasSeenDrawingCoachMarkRaw: Bool = false
 
     var theme: AppTheme {
         get { AppTheme(rawValue: themeRaw) ?? .system }
@@ -496,6 +504,56 @@ class AppSettings: ObservableObject {
     var gridStyle: GridStyle {
         get { GridStyle(rawValue: gridStyleRaw) ?? .dotted }
         set { gridStyleRaw = newValue.rawValue; objectWillChange.send() }
+    }
+
+    var gridSquareSize: Double {
+        get { clampedCanvasPatternSpacing(gridSquareSizeRaw) }
+        set {
+            gridSquareSizeRaw = clampedCanvasPatternSpacing(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var horizontalLineHeight: Double {
+        get { clampedCanvasPatternSpacing(horizontalLineHeightRaw) }
+        set {
+            horizontalLineHeightRaw = clampedCanvasPatternSpacing(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var verticalColumnWidth: Double {
+        get { clampedCanvasPatternSpacing(verticalColumnWidthRaw) }
+        set {
+            verticalColumnWidthRaw = clampedCanvasPatternSpacing(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    func canvasPatternSpacing(for style: GridStyle) -> Double {
+        switch style {
+        case .squares:
+            return gridSquareSize
+        case .horizontal:
+            return horizontalLineHeight
+        case .vertical:
+            return verticalColumnWidth
+        case .dotted, .none:
+            return Self.defaultCanvasPatternSpacing
+        }
+    }
+
+    func setCanvasPatternSpacing(_ spacing: Double, for style: GridStyle) {
+        switch style {
+        case .squares:
+            gridSquareSize = spacing
+        case .horizontal:
+            horizontalLineHeight = spacing
+        case .vertical:
+            verticalColumnWidth = spacing
+        case .dotted, .none:
+            break
+        }
     }
 
     var canvasBackgroundMode: CanvasBackgroundMode {
@@ -558,6 +616,18 @@ class AppSettings: ObservableObject {
     var smartShapeSnappingEnabled: Bool {
         get { smartShapeSnappingEnabledRaw }
         set { smartShapeSnappingEnabledRaw = newValue; objectWillChange.send() }
+    }
+
+    var drawingPenSmoothing: Double {
+        get { DrawingPenConfiguration.smoothingRange.clamped(drawingPenSmoothingRaw) }
+        set {
+            drawingPenSmoothingRaw = DrawingPenConfiguration.smoothingRange.clamped(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var drawingPenConfiguration: DrawingPenConfiguration {
+        DrawingPenConfiguration(smoothing: drawingPenSmoothing)
     }
 
     var handwritingToTextEnabled: Bool {
@@ -685,8 +755,24 @@ class AppSettings: ObservableObject {
         set { hasSeenOnboardingRaw = newValue; objectWillChange.send() }
     }
 
+    var hasSeenDrawingCoachMark: Bool {
+        get { hasSeenDrawingCoachMarkRaw }
+        set { hasSeenDrawingCoachMarkRaw = newValue; objectWillChange.send() }
+    }
+
     var effectiveGridStyle: GridStyle {
         isPro ? gridStyle : .dotted
+    }
+
+    var effectiveCanvasPatternSpacing: Double {
+        canvasPatternSpacing(for: effectiveGridStyle)
+    }
+
+    private func clampedCanvasPatternSpacing(_ value: Double) -> Double {
+        min(
+            Self.canvasPatternSpacingRange.upperBound,
+            max(Self.canvasPatternSpacingRange.lowerBound, value)
+        )
     }
 
     func saveCurrentCustomCanvasBackgroundToHistory() {

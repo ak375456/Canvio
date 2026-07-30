@@ -9,6 +9,7 @@ struct CanvasGridView: View {
     let offset: CGSize
     let scale: CGFloat
     let style: GridStyle
+    let spacing: CGFloat
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
     let customBackgroundColors: CanvasCustomBackgroundColors
@@ -19,6 +20,7 @@ struct CanvasGridView: View {
         offset: CGSize,
         scale: CGFloat,
         style: GridStyle,
+        spacing: CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults
@@ -26,6 +28,7 @@ struct CanvasGridView: View {
         self.offset = offset
         self.scale = scale
         self.style = style
+        self.spacing = spacing
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
         self.customBackgroundColors = customBackgroundColors
@@ -50,9 +53,9 @@ struct CanvasGridView: View {
     private func drawBackground(in context: GraphicsContext, size: CGSize) {
         context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(appearance.base))
 
-        let spacing: CGFloat = 30
-        let stepX = max(1, spacing * scale)
-        let stepY = max(1, spacing * scale)
+        let resolvedSpacing = max(8, spacing)
+        let stepX = max(1, resolvedSpacing * scale)
+        let stepY = max(1, resolvedSpacing * scale)
 
         drawAlternatingBands(context: context, size: size, stepX: stepX, stepY: stepY)
         drawGrid(context: context, size: size, stepX: stepX, stepY: stepY)

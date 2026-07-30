@@ -86,14 +86,27 @@ class SymbolElementViewModel: ObservableObject {
 
     // MARK: - Formatting
 
-    func setColor(_ colorName: String, element: SymbolElementModel, context: ModelContext) {
+    func setColor(_ colorName: String, element: SymbolElementModel, context: ModelContext,
+                  undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.colorName
         element.colorName = colorName; element.updatedAt = Date(); try? context.save()
         Task { await SymbolSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change symbol color", element: element,
+            from: oldValue, to: element.colorName, context: context
+        ) { $0.colorName = $1 }
     }
 
-    func setFontSize(_ size: Double, element: SymbolElementModel, context: ModelContext) {
+    func setFontSize(_ size: Double, element: SymbolElementModel, context: ModelContext,
+                     undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.fontSize
         element.fontSize  = max(16, min(200, size)); element.updatedAt = Date(); try? context.save()
         Task { await SymbolSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Resize symbol", element: element,
+            from: oldValue, to: element.fontSize, context: context,
+            coalescingKey: "symbol-size-\(element.id)"
+        ) { $0.fontSize = $1 }
     }
 
     // MARK: - Duplicate
@@ -143,12 +156,15 @@ class SymbolElementViewModel: ObservableObject {
         let snap = (id: element.id, canvasID: element.canvasID,
                     symbolName: element.symbolName, colorName: element.colorName,
                     fontSize: element.fontSize, x: element.x, y: element.y,
-                    zIndex: element.zIndex)
+                    zIndex: element.zIndex, groupID: element.groupID,
+                    isLayerHidden: element.isLayerHidden,
+                    layerOpacity: element.layerOpacity)
         Task { await SymbolSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete symbol",
             undo: {
                 let e = SymbolElementModel(canvasID: snap.canvasID,
                                            symbolName: snap.symbolName,
@@ -156,6 +172,8 @@ class SymbolElementViewModel: ObservableObject {
                                            fontSize:   snap.fontSize,
                                            x: snap.x, y: snap.y)
                 e.id = snap.id; e.zIndex = snap.zIndex; e.updatedAt = Date()
+                e.groupID = snap.groupID; e.isLayerHidden = snap.isLayerHidden
+                e.layerOpacity = snap.layerOpacity
                 context.insert(e); try? context.save()
                 Task { await SymbolSyncService.shared.upsert(e) }
             },

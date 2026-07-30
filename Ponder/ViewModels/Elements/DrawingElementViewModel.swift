@@ -8,6 +8,67 @@ import SwiftData
 import PencilKit
 import Combine
 
+struct DrawingElementHistoryState: Equatable {
+    let id: UUID
+    let canvasID: UUID
+    let drawingData: Data
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+    let rotation: Double
+    let isCanvasDrawing: Bool
+    let zIndex: Int
+    let groupID: UUID?
+    let isLayerHidden: Bool
+    let layerOpacity: Double
+
+    init(_ element: DrawingElementModel) {
+        id = element.id
+        canvasID = element.canvasID
+        drawingData = element.drawingData
+        x = element.x
+        y = element.y
+        width = element.width
+        height = element.height
+        rotation = element.rotation
+        isCanvasDrawing = element.isCanvasDrawing
+        zIndex = element.zIndex
+        groupID = element.groupID
+        isLayerHidden = element.isLayerHidden
+        layerOpacity = element.layerOpacity
+    }
+
+    func apply(to element: DrawingElementModel) {
+        element.drawingData = drawingData
+        element.x = x
+        element.y = y
+        element.width = width
+        element.height = height
+        element.rotation = rotation
+        element.isCanvasDrawing = isCanvasDrawing
+        element.zIndex = zIndex
+        element.groupID = groupID
+        element.isLayerHidden = isLayerHidden
+        element.layerOpacity = layerOpacity
+        element.updatedAt = Date()
+    }
+
+    func makeModel() -> DrawingElementModel {
+        let element = DrawingElementModel(
+            canvasID: canvasID,
+            x: x,
+            y: y,
+            width: width,
+            height: height,
+            isCanvasDrawing: isCanvasDrawing
+        )
+        element.id = id
+        apply(to: element)
+        return element
+    }
+}
+
 @MainActor
 class DrawingElementViewModel: ObservableObject {
     @Published var editingID: UUID? = nil
@@ -43,11 +104,21 @@ class DrawingElementViewModel: ObservableObject {
         ))
     }
 
-    func saveDrawing(element: DrawingElementModel, drawing: PKDrawing, context: ModelContext) {
+    func saveDrawing(element: DrawingElementModel, drawing: PKDrawing, context: ModelContext,
+                     undoManager: CanvasUndoManager? = nil) {
+        let oldData = element.drawingData
         element.pkDrawing = drawing
         element.updatedAt = Date()
         try? context.save()
         Task { await DrawingSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Edit drawing",
+            element: element,
+            from: oldData,
+            to: element.drawingData,
+            context: context,
+            coalescingKey: "drawing-data-\(element.id)"
+        ) { $0.drawingData = $1 }
     }
 
     func updatePosition(element: DrawingElementModel, translation: CGSize,
@@ -89,12 +160,15 @@ class DrawingElementViewModel: ObservableObject {
                                        width: element.width, height: element.height,
                                        isCanvasDrawing: element.isCanvasDrawing)
         copy.drawingData = element.drawingData
+        copy.rotation = element.rotation
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await DrawingSyncService.shared.upsert(copy) }
 
         let id = copy.id
+        let snapshot = DrawingElementHistoryState(copy)
         undoManager?.push(CanvasAction(
+            name: "Duplicate drawing",
             undo: {
                 if let el = try? context.fetch(FetchDescriptor<DrawingElementModel>()).first(where: { $0.id == id }) {
                     context.delete(el); try? context.save()
@@ -102,11 +176,7 @@ class DrawingElementViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = DrawingElementModel(canvasID: element.canvasID,
-                                             x: element.x + Double(offset.width),
-                                             y: element.y + Double(offset.height),
-                                             width: element.width, height: element.height)
-                el.id = id; el.drawingData = element.drawingData; el.zIndex = zIndex
+                let el = snapshot.makeModel()
                 context.insert(el); try? context.save()
                 Task { await DrawingSyncService.shared.upsert(el) }
             }
@@ -141,26 +211,21 @@ class DrawingElementViewModel: ObservableObject {
 
     func delete(element: DrawingElementModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
-        let snap = (id: element.id, canvasID: element.canvasID,
-                    x: element.x, y: element.y, width: element.width, height: element.height,
-                    drawingData: element.drawingData, isCanvasDrawing: element.isCanvasDrawing,
-                    zIndex: element.zIndex)
+        let snapshot = DrawingElementHistoryState(element)
 
         Task { await DrawingSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
-        if editingID == snap.id { stopEditing() }
+        if editingID == snapshot.id { stopEditing() }
 
         undoManager?.push(CanvasAction(
+            name: "Delete drawing",
             undo: {
-                let el = DrawingElementModel(canvasID: snap.canvasID, x: snap.x, y: snap.y,
-                                             width: snap.width, height: snap.height,
-                                             isCanvasDrawing: snap.isCanvasDrawing)
-                el.id = snap.id; el.drawingData = snap.drawingData; el.zIndex = snap.zIndex
+                let el = snapshot.makeModel()
                 context.insert(el); try? context.save()
                 Task { await DrawingSyncService.shared.upsert(el) }
             },
             redo: {
-                if let el = try? context.fetch(FetchDescriptor<DrawingElementModel>()).first(where: { $0.id == snap.id }) {
+                if let el = try? context.fetch(FetchDescriptor<DrawingElementModel>()).first(where: { $0.id == snapshot.id }) {
                     context.delete(el); try? context.save()
                     Task { await DrawingSyncService.shared.delete(el) }
                 }

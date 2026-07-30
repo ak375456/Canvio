@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 
 struct EditTextSheet: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     let element: TextElementModel
     let context: ModelContext
 
@@ -456,6 +457,7 @@ struct EditTextSheet: View {
     // MARK: - Save
     private var saveButton: some View {
         Button {
+            let oldState = TextElementHistoryState(element: element)
             let document = richTextState.document.normalized
             let trimmed = document.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -481,6 +483,16 @@ struct EditTextSheet: View {
             style.strokeWidth = strokeWidth
             settings.rememberTextStyle(style)
             Task { await TextSyncService.shared.upsert(element) }
+            let newState = TextElementHistoryState(element: element)
+            canvasHistory.recordElementChange(
+                name: "Edit text",
+                element: element,
+                from: oldState,
+                to: newState,
+                context: context
+            ) { target, state in
+                state.apply(to: target)
+            }
             dismiss()
         } label: {
             let empty = richTextState.document.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

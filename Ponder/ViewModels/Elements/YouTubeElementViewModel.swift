@@ -109,9 +109,10 @@ class YouTubeElementViewModel: ObservableObject {
     }
 
     func updateSize(element: YouTubeElementModel, width: Double, height: Double,
-                    context: ModelContext, undoManager: CanvasUndoManager? = nil) {
-        let oldW = element.width
-        let oldH = element.height
+                    context: ModelContext, undoManager: CanvasUndoManager? = nil,
+                    previousSize: CGSize? = nil) {
+        let oldW = previousSize.map { Double($0.width) } ?? element.width
+        let oldH = previousSize.map { Double($0.height) } ?? element.height
         element.width = max(180, min(960, width))
         element.height = max(120, min(720, height))
         element.updatedAt = Date()
@@ -211,7 +212,10 @@ class YouTubeElementViewModel: ObservableObject {
             width: element.width,
             height: element.height,
             playbackSeconds: element.playbackSeconds,
-            zIndex: element.zIndex
+            zIndex: element.zIndex,
+            groupID: element.groupID,
+            isLayerHidden: element.isLayerHidden,
+            layerOpacity: element.layerOpacity
         )
 
         Task { await YouTubeSyncService.shared.delete(element) }
@@ -220,6 +224,7 @@ class YouTubeElementViewModel: ObservableObject {
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete YouTube video",
             undo: {
                 let el = YouTubeElementModel(
                     canvasID: snap.canvasID,
@@ -235,6 +240,9 @@ class YouTubeElementViewModel: ObservableObject {
                 el.id = snap.id
                 el.playbackSeconds = snap.playbackSeconds
                 el.zIndex = snap.zIndex
+                el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
                 context.insert(el)
                 try? context.save()
                 Task { await YouTubeSyncService.shared.upsert(el) }

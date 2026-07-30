@@ -116,7 +116,10 @@ struct ConnectorOverlayView: View {
         HStack(spacing: 6) {
             Button {
                 let next: ConnectorLineStyle = connector.lineStyle == .straight ? .curved : .straight
-                vm.updateStyle(connector: connector, lineStyle: next, context: context)
+                vm.updateStyle(
+                    connector: connector, lineStyle: next,
+                    context: context, undoManager: undoManager
+                )
             } label: {
                 Image(systemName: connector.lineStyle == .straight ? "scribble" : "minus")
                     .font(.system(size: 12, weight: .semibold))
@@ -125,7 +128,8 @@ struct ConnectorOverlayView: View {
 
             Button {
                 vm.updateStyle(connector: connector,
-                               hasArrowHead: !connector.hasArrowHead, context: context)
+                               hasArrowHead: !connector.hasArrowHead,
+                               context: context, undoManager: undoManager)
             } label: {
                 Image(systemName: connector.hasArrowHead ? "arrow.right" : "minus")
                     .font(.system(size: 12, weight: .semibold))
@@ -135,7 +139,12 @@ struct ConnectorOverlayView: View {
 
             Menu {
                 ForEach(["primary","blue","red","green","orange","purple","pink","teal","gray"], id: \.self) { name in
-                    Button { vm.updateStyle(connector: connector, colorName: name, context: context) } label: {
+                    Button {
+                        vm.updateStyle(
+                            connector: connector, colorName: name,
+                            context: context, undoManager: undoManager
+                        )
+                    } label: {
                         HStack {
                             Circle().fill(paletteColor(name)).frame(width: 12, height: 12)
                             Text(name.capitalized)
@@ -149,7 +158,12 @@ struct ConnectorOverlayView: View {
 
             Menu {
                 ForEach([1.0, 2.0, 3.0, 4.0, 6.0], id: \.self) { w in
-                    Button { vm.updateStyle(connector: connector, strokeWidth: w, context: context) } label: {
+                    Button {
+                        vm.updateStyle(
+                            connector: connector, strokeWidth: w,
+                            context: context, undoManager: undoManager
+                        )
+                    } label: {
                         Text("\(Int(w))pt")
                     }
                 }

@@ -11,7 +11,6 @@ import SwiftUI
 @MainActor
 final class ProManager: ObservableObject {
     static let shared = ProManager()
-
     enum Plan: String, CaseIterable, Identifiable {
         case monthly = "com.lexur.canvio.pro.monthlyy"
         case yearly = "com.lexur.canvio.pro.yearly"
@@ -21,7 +20,7 @@ final class ProManager: ObservableObject {
     }
 
     @AppStorage("isPro") private var storedIsPro = false
-    @AppStorage("hasLifetimePro") private var hasLifetimePro = false
+    @AppStorage("hasLifetimePro") private var hasLifetimePro = true
 
     @Published private(set) var isPro: Bool
     @Published private(set) var products: [Product] = []

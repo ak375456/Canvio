@@ -44,7 +44,9 @@ struct ImageElementView: View {
             selectionRing
             if isSelected && !isMultiSelectMode {
                 toolbar.offset(y: -(currentHeight / 2) - 28).rotationEffect(.degrees(-rotationAngle))
-                Button { vm.delete(element: element, context: context) } label: { handleCircle(icon: "trash", color: .red) }
+                Button {
+                    vm.delete(element: element, context: context, undoManager: undoManager)
+                } label: { handleCircle(icon: "trash", color: .red) }
                     .buttonStyle(.plain).offset(x: -(currentWidth / 2), y: -(currentHeight / 2))
                 handleCircle(icon: "arrow.trianglehead.2.clockwise", color: .orange)
                     .offset(x: -(currentWidth / 2), y: currentHeight / 2).gesture(rotateGesture)
@@ -168,7 +170,14 @@ struct ImageElementView: View {
         HStack(spacing: 6) {
             Menu {
                 ForEach([0.0, 4.0, 8.0, 12.0, 16.0, 24.0], id: \.self) { r in
-                    Button { vm.updateCornerRadius(element: element, cornerRadius: r, context: context) } label: {
+                    Button {
+                        vm.updateCornerRadius(
+                            element: element,
+                            cornerRadius: r,
+                            context: context,
+                            undoManager: undoManager
+                        )
+                    } label: {
                         HStack { Image(systemName: r == 0 ? "rectangle" : "rectangle.roundedtop"); Text(r == 0 ? "Sharp" : "\(Int(r))pt") }
                     }
                 }
@@ -286,7 +295,14 @@ struct ImageElementView: View {
             Slider(
                 value: Binding(
                     get: { element.opacity },
-                    set: { vm.updateOpacity(element: element, opacity: $0, context: context) }
+                    set: {
+                        vm.updateOpacity(
+                            element: element,
+                            opacity: $0,
+                            context: context,
+                            undoManager: undoManager
+                        )
+                    }
                 ),
                 in: 0.1...1.0,
                 step: 0.05
@@ -295,7 +311,12 @@ struct ImageElementView: View {
             HStack(spacing: 8) {
                 ForEach([1.0, 0.75, 0.5, 0.25, 0.1], id: \.self) { value in
                     Button {
-                        vm.updateOpacity(element: element, opacity: value, context: context)
+                        vm.updateOpacity(
+                            element: element,
+                            opacity: value,
+                            context: context,
+                            undoManager: undoManager
+                        )
                     } label: {
                         Text("\(Int(value * 100))")
                             .font(.caption.weight(.semibold))
@@ -320,7 +341,16 @@ struct ImageElementView: View {
             }
             .onEnded { _ in
                 rotationGestureState.reset()
+                let oldRotation = element.rotation
                 element.rotation = rotationAngle; element.updatedAt = Date(); try? context.save()
+                Task { await ImageSyncService.shared.upsert(element) }
+                undoManager?.recordElementChange(
+                    name: "Rotate image",
+                    element: element,
+                    from: oldRotation,
+                    to: element.rotation,
+                    context: context
+                ) { $0.rotation = $1 }
             }
     }
 
@@ -341,7 +371,13 @@ struct ImageElementView: View {
                 let dw = value.translation.width, dh = value.translation.height
                 let delta = abs(dw) > abs(dh) ? CGSize(width: dw, height: dw / aspect) : CGSize(width: dh * aspect, height: dh)
                 resizeDelta = .zero
-                vm.updateSize(element: element, width: element.width + delta.width, height: element.height + delta.height, context: context)
+                vm.updateSize(
+                    element: element,
+                    width: element.width + delta.width,
+                    height: element.height + delta.height,
+                    context: context,
+                    undoManager: undoManager
+                )
             }
     }
 
@@ -360,7 +396,14 @@ struct ImageElementView: View {
                     return
                 }
                 let t = value.translation; dragOffset = .zero
-                vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
+                vm.updatePosition(
+                    element: element,
+                    translation: t,
+                    scale: canvasScale,
+                    boundary: canvasBoundary,
+                    context: context,
+                    undoManager: undoManager
+                )
             }
     }
 

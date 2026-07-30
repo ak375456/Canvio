@@ -8,6 +8,7 @@ import SwiftData
 
 struct PDFElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var element: PDFElementModel
     let canvasScale: CGFloat
     let canvasOffset: CGSize
@@ -36,7 +37,9 @@ struct PDFElementView: View {
             selectionRing
             if isSelected && !isMultiSelectMode {
                 toolbarRow.offset(y: -(currentHeight / 2) - 28).rotationEffect(.degrees(-rotationAngle))
-                Button { vm.delete(element: element, context: context) } label: { handleCircle(icon: "trash", color: .red) }
+                Button {
+                    vm.delete(element: element, context: context, undoManager: canvasHistory)
+                } label: { handleCircle(icon: "trash", color: .red) }
                     .buttonStyle(.plain).offset(x: -(currentWidth / 2), y: -(currentHeight / 2))
                 handleCircle(icon: "arrow.trianglehead.2.clockwise", color: .orange)
                     .offset(x: -(currentWidth / 2), y: currentHeight / 2).gesture(rotateGesture)
@@ -147,7 +150,16 @@ struct PDFElementView: View {
             }
             .onEnded { _ in
                 rotationGestureState.reset()
+                let oldRotation = element.rotation
                 element.rotation = rotationAngle; element.updatedAt = Date(); try? context.save()
+                Task { await PDFSyncService.shared.upsert(element) }
+                canvasHistory.recordElementChange(
+                    name: "Rotate PDF",
+                    element: element,
+                    from: oldRotation,
+                    to: element.rotation,
+                    context: context
+                ) { $0.rotation = $1 }
             }
     }
 
@@ -161,7 +173,13 @@ struct PDFElementView: View {
             .onChanged { resizeDelta = $0.translation }
             .onEnded { value in
                 let t = value.translation; resizeDelta = .zero
-                vm.updateSize(element: element, width: element.width + t.width, height: element.height + t.height, context: context)
+                vm.updateSize(
+                    element: element,
+                    width: element.width + t.width,
+                    height: element.height + t.height,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
     }
 
@@ -180,7 +198,14 @@ struct PDFElementView: View {
                     return
                 }
                 let t = value.translation; dragOffset = .zero
-                vm.updatePosition(element: element, translation: t, scale: canvasScale, boundary: canvasBoundary, context: context)
+                vm.updatePosition(
+                    element: element,
+                    translation: t,
+                    scale: canvasScale,
+                    boundary: canvasBoundary,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
     }
 

@@ -16,6 +16,7 @@ struct TableCellView: View {
     let isHeader: Bool
     let colorScheme: ColorScheme
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @FocusState private var focused: Bool
     @StateObject private var textEditing = EditableTextBehavior()
 
@@ -97,9 +98,18 @@ struct TableCellView: View {
 
     private func saveCellValue(_ value: String) -> Bool {
         guard cell.value != value else { return false }
+        let oldState = TableCellHistoryState(cell)
         cell.value = value
         cell.updatedAt = Date()
         try? context.save()
+        recordTableCellChange(
+            name: "Edit table cell",
+            cell: cell,
+            from: oldState,
+            context: context,
+            undoManager: canvasHistory,
+            coalescingKey: "table-cell-text-\(cell.id)"
+        )
         return true
     }
 

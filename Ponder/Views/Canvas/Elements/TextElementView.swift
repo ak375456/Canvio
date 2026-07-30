@@ -9,6 +9,7 @@ import SwiftData
 struct TextElementView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     let element: TextElementModel
     let canvasScale: CGFloat
     let canvasOffset: CGSize
@@ -424,7 +425,8 @@ struct TextElementView: View {
             fontSize: inlineFontSize,
             fontName: inlineFontName,
             colorName: inlineColorName,
-            context: context
+            context: context,
+            undoManager: canvasHistory
         )
         if !inlineEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             var style = TextStyle(
@@ -449,20 +451,32 @@ struct TextElementView: View {
     private var formattingToolbar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                formatButton(icon: "bold",      active: element.isBold)      { vm.toggleBold(element: element, context: context) }
-                formatButton(icon: "italic",    active: element.isItalic)    { vm.toggleItalic(element: element, context: context) }
-                formatButton(icon: "underline", active: element.isUnderline) { vm.toggleUnderline(element: element, context: context) }
+                formatButton(icon: "bold", active: element.isBold) {
+                    vm.toggleBold(element: element, context: context, undoManager: canvasHistory)
+                }
+                formatButton(icon: "italic", active: element.isItalic) {
+                    vm.toggleItalic(element: element, context: context, undoManager: canvasHistory)
+                }
+                formatButton(icon: "underline", active: element.isUnderline) {
+                    vm.toggleUnderline(element: element, context: context, undoManager: canvasHistory)
+                }
 
                 toolbarDivider
 
                 formatButton(icon: "minus", active: false) {
-                    vm.adjustFontSize(by: -fontSizeStep, element: element, context: context)
+                    vm.adjustFontSize(
+                        by: -fontSizeStep, element: element,
+                        context: context, undoManager: canvasHistory
+                    )
                 }
                 Text("\(Int(element.fontSize))")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary).frame(width: 34)
                 formatButton(icon: "plus", active: false) {
-                    vm.adjustFontSize(by: fontSizeStep, element: element, context: context)
+                    vm.adjustFontSize(
+                        by: fontSizeStep, element: element,
+                        context: context, undoManager: canvasHistory
+                    )
                 }
 
                 toolbarDivider
@@ -475,7 +489,10 @@ struct TextElementView: View {
                     case .trailing:   next = .leading
                     @unknown default: next = .leading
                     }
-                    vm.setAlignment(next, element: element, context: context)
+                    vm.setAlignment(
+                        next, element: element,
+                        context: context, undoManager: canvasHistory
+                    )
                 } label: {
                     Image(systemName: alignmentIcon)
                         .font(.system(size: 13, weight: .medium))
@@ -487,7 +504,12 @@ struct TextElementView: View {
                 toolbarDivider
 
                 ForEach(TextStyle.colorOptions.prefix(6), id: \.name) { option in
-                    Button { vm.setColor(option.name, element: element, context: context) } label: {
+                    Button {
+                        vm.setColor(
+                            option.name, element: element,
+                            context: context, undoManager: canvasHistory
+                        )
+                    } label: {
                         let active = element.colorName == option.name
                         Circle()
                             .fill(option.color)
@@ -567,7 +589,10 @@ struct TextElementView: View {
 
                 Button("Apply") {
                     let colorName = TextStyle.storageName(for: customTextColorDraft, fallback: element.colorName)
-                    vm.setColor(colorName, element: element, context: context)
+                    vm.setColor(
+                        colorName, element: element,
+                        context: context, undoManager: canvasHistory
+                    )
                     showTextColorPicker = false
                 }
                 .buttonStyle(.borderedProminent)
@@ -590,11 +615,17 @@ struct TextElementView: View {
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).tracking(1)
                 HStack(spacing: 6) {
                     noneButton(selected: element.bgColorName == "none") {
-                        vm.setBgColor("none", element: element, context: context)
+                        vm.setBgColor(
+                            "none", element: element,
+                            context: context, undoManager: canvasHistory
+                        )
                     }
                     ForEach(vm.cardColorOptions, id: \.name) { option in
                         colorDot(option: option, selected: element.bgColorName == option.name) {
-                            vm.setBgColor(option.name, element: element, context: context)
+                            vm.setBgColor(
+                                option.name, element: element,
+                                context: context, undoManager: canvasHistory
+                            )
                         }
                     }
                 }
@@ -605,11 +636,17 @@ struct TextElementView: View {
                     .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).tracking(1)
                 HStack(spacing: 6) {
                     noneButton(selected: element.strokeColorName == "none") {
-                        vm.setStrokeColor("none", element: element, context: context)
+                        vm.setStrokeColor(
+                            "none", element: element,
+                            context: context, undoManager: canvasHistory
+                        )
                     }
                     ForEach(vm.cardColorOptions, id: \.name) { option in
                         colorDot(option: option, selected: element.strokeColorName == option.name) {
-                            vm.setStrokeColor(option.name, element: element, context: context)
+                            vm.setStrokeColor(
+                                option.name, element: element,
+                                context: context, undoManager: canvasHistory
+                            )
                         }
                     }
                 }
@@ -622,7 +659,10 @@ struct TextElementView: View {
                     HStack(spacing: 8) {
                         ForEach([1.0, 2.0, 3.0, 5.0], id: \.self) { w in
                             Button {
-                                vm.setStrokeWidth(w, element: element, context: context)
+                                vm.setStrokeWidth(
+                                    w, element: element,
+                                    context: context, undoManager: canvasHistory
+                                )
                             } label: {
                                 Text("\(Int(w))pt")
                                     .font(.system(size: 11, weight: .semibold))
@@ -752,7 +792,7 @@ struct TextElementView: View {
         let hh = textSize.height / 2
         return ZStack {
             tapHandle(icon: "trash",  color: .red,         x: -hw, y: -hh) {
-                vm.delete(element: element, context: context)
+                vm.delete(element: element, context: context, undoManager: canvasHistory)
             }
             tapHandle(icon: "pencil", color: .accentColor, x:  hw, y: -hh) {
                 showCardPicker = false
@@ -799,7 +839,12 @@ struct TextElementView: View {
                 }
                 .onEnded { value in
                     let delta = (value.translation.width + value.translation.height) / 2
-                    vm.adjustFontSize(by: delta * 0.15, element: element, context: context)
+                    vm.adjustFontSize(
+                        by: delta * 0.15,
+                        element: element,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
                     resizeDelta = 0
                 })
     }
@@ -838,7 +883,7 @@ struct TextElementView: View {
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary,
-                                  context: context)
+                                  context: context, undoManager: canvasHistory)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                     isDragging = false
                 }

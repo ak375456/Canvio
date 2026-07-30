@@ -14,6 +14,7 @@ struct CanvasDrawingOverlay: View {
     @Binding var isActive: Bool
     @Binding var isDrawingInputActive: Bool
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @EnvironmentObject private var settings: AppSettings
 
     /// Canvas state captured the moment the overlay was opened.
     let startScale:  CGFloat
@@ -34,10 +35,12 @@ struct CanvasDrawingOverlay: View {
 
     let smartShapeSnappingEnabled: Bool
     let showsHandwritingTextGrouping: Bool
+    let savesAutomatically: Bool
     @Binding var handwritingTextGrouping: HandwritingTextGrouping
     @Binding var isHighlighterToolSelected: Bool
     let isCanvasNavigationGestureActive: Bool
     let onSave: (PKDrawing, CGFloat, CGSize) -> Void
+    let onExit: () -> Void
 
     // MARK: Init
 
@@ -52,9 +55,11 @@ struct CanvasDrawingOverlay: View {
         isCanvasNavigationGestureActive: Bool = false,
         smartShapeSnappingEnabled: Bool,
         showsHandwritingTextGrouping: Bool = false,
+        savesAutomatically: Bool = true,
         handwritingTextGrouping: Binding<HandwritingTextGrouping>,
         isHighlighterToolSelected: Binding<Bool>,
-        onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void
+        onSave:      @escaping (PKDrawing, CGFloat, CGSize) -> Void,
+        onExit:      @escaping () -> Void = {}
     ) {
         self._isActive       = isActive
         self._isDrawingInputActive = isDrawingInputActive
@@ -65,9 +70,11 @@ struct CanvasDrawingOverlay: View {
         self.isCanvasNavigationGestureActive = isCanvasNavigationGestureActive
         self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         self.showsHandwritingTextGrouping = showsHandwritingTextGrouping
+        self.savesAutomatically = savesAutomatically
         self._handwritingTextGrouping = handwritingTextGrouping
         self._isHighlighterToolSelected = isHighlighterToolSelected
         self.onSave          = onSave
+        self.onExit          = onExit
         self._drawing         = State(initialValue: initialDrawing)
         self._effectiveScale  = State(initialValue: startScale)
         self._effectiveOffset = State(initialValue: startOffset)
@@ -109,8 +116,12 @@ struct CanvasDrawingOverlay: View {
                         && redrawShield == nil,
                     selectedColor: $selectedColor,
                     colorRevision: pickedColorRevision,
-                    isHighlighterToolSelected: $isHighlighterToolSelected
-                )
+                    penConfiguration: settings.drawingPenConfiguration,
+                    isHighlighterToolSelected: $isHighlighterToolSelected,
+                    isDrawingInputActive: $isDrawingInputActive
+                ) { committedDrawing in
+                    saveAutomatically(committedDrawing)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .scaleEffect(visualRatio, anchor: .topLeading)
                 .offset(visualTranslation)
@@ -187,25 +198,68 @@ struct CanvasDrawingOverlay: View {
     private var overlayToolbar: some View {
         HStack(spacing: usesCompactToolbar ? 8 : 12) {
 
-            // Done
-            Button { saveAndDismiss() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
-                    Text("Done").font(.subheadline.weight(.bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+            if savesAutomatically {
+                Button { finishAutomaticDrawing() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Select")
+                            .font(.subheadline.weight(.bold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, usesCompactToolbar ? 12 : 16)
+                    .padding(.vertical, 9)
+                    .background(Color.orange, in: Capsule())
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, usesCompactToolbar ? 12 : 16).padding(.vertical, 9)
-                .background(Color.orange, in: Capsule())
+                .buttonStyle(.plain)
+                .accessibilityHint("Return to selecting and moving canvas items.")
+
+                Button {
+                    isDrawingInputActive.toggle()
+                    isPickingColor = false
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: isDrawingInputActive ? "hand.draw" : "pencil.tip")
+                            .font(.system(size: 13, weight: .semibold))
+                        if !usesCompactToolbar {
+                            Text(isDrawingInputActive ? "Hand" : "Draw")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
+                    .foregroundStyle(isDrawingInputActive ? Color.primary : Color.orange)
+                    .padding(.horizontal, usesCompactToolbar ? 10 : 12)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isDrawingInputActive ? "Hand tool" : "Resume drawing")
+                .accessibilityHint(
+                    isDrawingInputActive
+                        ? "Use one finger to move the canvas."
+                        : "Resume drawing with the selected Apple drawing tool."
+                )
+            } else {
+                Button { saveAndDismiss() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark").font(.system(size: 13, weight: .bold))
+                        Text("Done").font(.subheadline.weight(.bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, usesCompactToolbar ? 12 : 16).padding(.vertical, 9)
+                    .background(Color.orange, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             // Clear
             Button {
                 drawing = PKDrawing()
+                saveAutomatically(PKDrawing())
             } label: {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: "trash").font(.system(size: 13, weight: .semibold))
                     if !usesCompactToolbar {
                         Text("Clear").font(.caption.weight(.semibold))
@@ -217,6 +271,8 @@ struct CanvasDrawingOverlay: View {
                 .background(.regularMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
+            .disabled(drawing.strokes.isEmpty)
+            .opacity(drawing.strokes.isEmpty ? 0.55 : 1)
 
             DrawingColorPickerButton(
                 selectedColor: $selectedColor,
@@ -225,6 +281,8 @@ struct CanvasDrawingOverlay: View {
             ) {
                 isPickingColor.toggle()
             }
+
+            DrawingAssistanceButton(compact: usesCompactToolbar)
 
             if showsHandwritingTextGrouping {
                 Menu {
@@ -256,19 +314,21 @@ struct CanvasDrawingOverlay: View {
 
             Spacer(minLength: usesCompactToolbar ? 6 : 12)
 
-            // Cancel
-            Button {
-                isDrawingInputActive = true
-                isActive = false
-            } label: {
-                Text("Cancel")
-                    .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
-                    .background(.regularMaterial, in: Capsule())
+            if !savesAutomatically {
+                Button {
+                    isDrawingInputActive = true
+                    isActive = false
+                    onExit()
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .padding(.horizontal, usesCompactToolbar ? 10 : 12).padding(.vertical, 9)
+                        .background(.regularMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -281,6 +341,24 @@ struct CanvasDrawingOverlay: View {
         onSave(drawingBakedToLiveCanvas(), liveScale, liveOffset)
         isDrawingInputActive = true
         isActive = false
+        onExit()
+    }
+
+    private func saveAutomatically(_ sourceDrawing: PKDrawing) {
+        guard savesAutomatically else { return }
+        onSave(
+            drawingBakedToLiveCanvas(sourceDrawing),
+            liveScale,
+            liveOffset
+        )
+    }
+
+    private func finishAutomaticDrawing() {
+        isPickingColor = false
+        saveAutomatically(drawing)
+        isDrawingInputActive = true
+        isActive = false
+        onExit()
     }
 
     private func bakeLiveCanvasTransformIntoDrawing(viewportSize: CGSize) {
@@ -352,14 +430,15 @@ struct CanvasDrawingOverlay: View {
         return RedrawShield(image: image)
     }
 
-    private func drawingBakedToLiveCanvas() -> PKDrawing {
+    private func drawingBakedToLiveCanvas(_ sourceDrawing: PKDrawing? = nil) -> PKDrawing {
+        let sourceDrawing = sourceDrawing ?? drawing
         let ratio = visualRatio
         let tx = visualTranslation.width
         let ty = visualTranslation.height
-        guard hasLiveCanvasTransformDelta else { return drawing }
+        guard hasLiveCanvasTransformDelta else { return sourceDrawing }
 
         let delta = CGAffineTransform(a: ratio, b: 0, c: 0, d: ratio, tx: tx, ty: ty)
-        return drawing.transformed(using: delta)
+        return sourceDrawing.transformed(using: delta)
     }
 }
 
@@ -381,14 +460,20 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     let smartShapeSnappingEnabled: Bool
     @Binding var selectedColor: UIColor
     let colorRevision: Int
+    let penConfiguration: DrawingPenConfiguration
     @Binding var isHighlighterToolSelected: Bool
+    @Binding var isDrawingInputActive: Bool
+    let onDrawingCommitted: (PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             drawing: $drawing,
             selectedColor: $selectedColor,
+            penConfiguration: penConfiguration,
             smartShapeSnappingEnabled: smartShapeSnappingEnabled,
-            isHighlighterToolSelected: $isHighlighterToolSelected
+            isHighlighterToolSelected: $isHighlighterToolSelected,
+            isDrawingInputActive: $isDrawingInputActive,
+            onDrawingCommitted: onDrawingCommitted
         )
     }
 
@@ -397,8 +482,11 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         canvas.drawing      = drawing
         canvas.backgroundColor = .clear
         canvas.isOpaque     = false
-        canvas.drawingPolicy = .anyInput
+        // Follow the system Pencil preference shown in PKToolPicker.
+        // `.anyInput` overrides "Draw with Finger" and must not be used here.
+        canvas.drawingPolicy = .default
         canvas.isScrollEnabled = false
+        setDrawingInput(isDrawingInputActive, on: canvas)
         canvas.delegate     = context.coordinator
         context.coordinator.canvasView = canvas
         context.coordinator.rememberCanvasDrawing(drawing)
@@ -421,6 +509,8 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        canvas.drawingPolicy = .default
+        setDrawingInput(isDrawingInputActive, on: canvas)
         context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         context.coordinator.applyExternalDrawingIfNeeded(drawing, to: canvas)
         context.coordinator.applyPickedColorIfNeeded(
@@ -428,6 +518,8 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             selectedColor: selectedColor,
             colorRevision: colorRevision
         )
+        context.coordinator.penConfiguration = penConfiguration
+        context.coordinator.onDrawingCommitted = onDrawingCommitted
         // Restore first-responder status only if lost (e.g. after clear).
         if !canvas.isFirstResponder {
             context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
@@ -436,16 +528,28 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        coordinator.cancelPendingCommit()
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
         coordinator.toolPicker?.removeObserver(coordinator)
         coordinator.toolPicker?.removeObserver(canvas)
         canvas.resignFirstResponder()
     }
 
+    private func setDrawingInput(_ isEnabled: Bool, on canvas: PKCanvasView) {
+        if #available(iOS 18.0, *) {
+            canvas.isDrawingEnabled = isEnabled
+        } else {
+            canvas.drawingGestureRecognizer.isEnabled = isEnabled
+        }
+    }
+
     class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         @Binding var drawing: PKDrawing
         @Binding var selectedColor: UIColor
+        var penConfiguration: DrawingPenConfiguration
         @Binding var isHighlighterToolSelected: Bool
+        @Binding var isDrawingInputActive: Bool
+        var onDrawingCommitted: (PKDrawing) -> Void
         weak var canvasView: PKCanvasView?
         var toolPicker: PKToolPicker?
         var smartShapeSnappingEnabled: Bool {
@@ -457,16 +561,27 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         private var lastPickerToolItemIdentifier: String?
         private var lastPickerInkType: PKInkingTool.InkType?
         private var isApplyingPickedColor = false
+        private var isApplyingExternalDrawing = false
+        private var isApplyingStrokeProcessing = false
+        private var strokeBaseline: DrawingStrokeBaseline?
         private var currentCanvasDrawingData = Data()
+        private var lastCommittedDrawingData = Data()
+        private var pendingCommit: DispatchWorkItem?
         private let shapeSnapController = PencilShapeSnapController()
 
         init(drawing: Binding<PKDrawing>,
              selectedColor: Binding<UIColor>,
+             penConfiguration: DrawingPenConfiguration,
              smartShapeSnappingEnabled: Bool,
-             isHighlighterToolSelected: Binding<Bool>) {
+             isHighlighterToolSelected: Binding<Bool>,
+             isDrawingInputActive: Binding<Bool>,
+             onDrawingCommitted: @escaping (PKDrawing) -> Void) {
             self._drawing = drawing
             self._selectedColor = selectedColor
+            self.penConfiguration = penConfiguration
             self._isHighlighterToolSelected = isHighlighterToolSelected
+            self._isDrawingInputActive = isDrawingInputActive
+            self.onDrawingCommitted = onDrawingCommitted
             self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
@@ -478,13 +593,19 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         func applyExternalDrawingIfNeeded(_ drawing: PKDrawing, to canvas: PKCanvasView) {
             let nextData = drawing.dataRepresentation()
             guard nextData != currentCanvasDrawingData else { return }
+            isApplyingExternalDrawing = true
             canvas.drawing = drawing
             currentCanvasDrawingData = nextData
+            isApplyingExternalDrawing = false
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            rememberCanvasDrawing(canvasView.drawing)
+            guard !isApplyingExternalDrawing, !isApplyingStrokeProcessing else { return }
+            let nextData = canvasView.drawing.dataRepresentation()
+            guard nextData != currentCanvasDrawingData else { return }
+            currentCanvasDrawingData = nextData
             drawing = canvasView.drawing
+            scheduleCommit(canvasView.drawing)
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
             shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
                 self?.rememberCanvasDrawing(snappedDrawing)
@@ -492,11 +613,61 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             }
         }
 
+        func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            cancelPendingCommit()
+            strokeBaseline = canvasView.tool is PKInkingTool
+                ? DrawingStrokeBaseline(drawing: canvasView.drawing)
+                : nil
+        }
+
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
-                self?.rememberCanvasDrawing(snappedDrawing)
-                self?.drawing = snappedDrawing
+            let baseline = strokeBaseline
+            strokeBaseline = nil
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvasView] in
+                guard let self, let canvasView else { return }
+                if let baseline,
+                   let processed = DrawingStrokeProcessor.processingLatestStroke(
+                       in: canvasView.drawing,
+                       since: baseline,
+                       configuration: self.penConfiguration
+                   ) {
+                    self.isApplyingStrokeProcessing = true
+                    canvasView.drawing = processed
+                    self.rememberCanvasDrawing(processed)
+                    self.drawing = processed
+                    self.isApplyingStrokeProcessing = false
+                }
+
+                self.commitDrawing(canvasView.drawing)
+                self.shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                    self?.rememberCanvasDrawing(snappedDrawing)
+                    self?.drawing = snappedDrawing
+                    self?.commitDrawing(snappedDrawing)
+                }
             }
+        }
+
+        func cancelPendingCommit() {
+            pendingCommit?.cancel()
+            pendingCommit = nil
+        }
+
+        private func scheduleCommit(_ drawing: PKDrawing) {
+            pendingCommit?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                self?.commitDrawing(drawing)
+            }
+            pendingCommit = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        }
+
+        private func commitDrawing(_ drawing: PKDrawing) {
+            cancelPendingCommit()
+            let data = drawing.dataRepresentation()
+            guard data != lastCommittedDrawingData else { return }
+            lastCommittedDrawingData = data
+            onDrawingCommitted(drawing)
         }
 
         func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
@@ -539,6 +710,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         private func handleToolPickerChange(_ toolPicker: PKToolPicker) {
             _ = updatePickerSelectionState(toolPicker)
+            isDrawingInputActive = true
             let selectedInkingTool = pickerInkingTool(from: toolPicker)
             if selectedInkingTool == nil {
                 shapeSnapController.cancelPendingSnap()
@@ -555,8 +727,8 @@ private struct FullCanvasDrawView: UIViewRepresentable {
                 } else {
                     self.syncSelectedColorFromCurrentInkingTool(canvas)
                 }
-                if selectedInkingTool?.inkType == .marker {
-                    self.isHighlighterToolSelected = true
+                if let selectedInkingTool {
+                    self.isHighlighterToolSelected = selectedInkingTool.inkType == .marker
                 }
             }
         }
@@ -570,9 +742,17 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             let nextTool: PKInkingTool
 
             if let inkingTool = canvas.tool as? PKInkingTool {
-                nextTool = PKInkingTool(inkingTool.inkType, color: color, width: inkingTool.width)
+                nextTool = PKInkingTool(
+                    inkingTool.inkType,
+                    color: color.withAlphaComponent(inkingTool.color.cgColor.alpha),
+                    width: inkingTool.width
+                )
             } else if let pickerTool = pickerInkingTool(from: toolPicker) {
-                nextTool = PKInkingTool(pickerTool.inkType, color: color, width: pickerTool.width)
+                nextTool = PKInkingTool(
+                    pickerTool.inkType,
+                    color: color.withAlphaComponent(pickerTool.color.cgColor.alpha),
+                    width: pickerTool.width
+                )
             } else if switchToPenIfNeeded {
                 nextTool = PKInkingTool(.pen, color: color, width: 5)
             } else {

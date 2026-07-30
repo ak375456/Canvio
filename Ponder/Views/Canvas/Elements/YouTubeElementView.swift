@@ -14,6 +14,7 @@ import AppKit
 
 struct YouTubeElementView: View {
     @Environment(\.modelContext) private var context
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var element: YouTubeElementModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -40,7 +41,7 @@ struct YouTubeElementView: View {
             selectionRing
             if isSelected && !isMultiSelectMode {
                 Button {
-                    vm.delete(element: element, context: context)
+                    vm.delete(element: element, context: context, undoManager: canvasHistory)
                 } label: {
                     handleCircle(icon: "trash", color: .red)
                 }
@@ -254,7 +255,14 @@ struct YouTubeElementView: View {
                     }
                     .onEnded { _ in
                         isResizing = false
-                        vm.updateSize(element: element, width: element.width, height: element.height, context: context)
+                        vm.updateSize(
+                            element: element,
+                            width: element.width,
+                            height: element.height,
+                            context: context,
+                            undoManager: canvasHistory,
+                            previousSize: resizeStartSize
+                        )
                     }
             )
     }
@@ -286,7 +294,13 @@ struct YouTubeElementView: View {
                 }
                 let t = value.translation
                 dragOffset = .zero
-                vm.updatePosition(element: element, translation: t, boundary: canvasBoundary, context: context)
+                vm.updatePosition(
+                    element: element,
+                    translation: t,
+                    boundary: canvasBoundary,
+                    context: context,
+                    undoManager: canvasHistory
+                )
             }
     }
 

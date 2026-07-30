@@ -89,12 +89,23 @@ class StickyNoteViewModel: ObservableObject {
         copy.fontSize = note.fontSize; copy.isBold = note.isBold
         copy.isItalic = note.isItalic; copy.width = note.width
         copy.height = note.height; copy.isCollapsed = note.isCollapsed
+        copy.rotation = note.rotation; copy.fontName = note.fontName
+        copy.listStyleRaw = note.listStyleRaw
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await StickyNoteSyncService.shared.upsert(copy) }
 
         let id = copy.id
+        let snapshot = (
+            canvasID: copy.canvasID, text: copy.text, x: copy.x, y: copy.y,
+            width: copy.width, height: copy.height, rotation: copy.rotation,
+            fontSize: copy.fontSize, isBold: copy.isBold, isItalic: copy.isItalic,
+            fontName: copy.fontName, colorName: copy.colorName,
+            listStyleRaw: copy.listStyleRaw, isCollapsed: copy.isCollapsed,
+            zIndex: copy.zIndex
+        )
         undoManager?.push(CanvasAction(
+            name: "Duplicate sticky note",
             undo: {
                 if let el = try? context.fetch(FetchDescriptor<StickyNoteModel>()).first(where: { $0.id == id }) {
                     context.delete(el); try? context.save()
@@ -102,10 +113,17 @@ class StickyNoteViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = StickyNoteModel(canvasID: note.canvasID,
-                                         x: note.x + Double(offset.width),
-                                         y: note.y + Double(offset.height))
-                el.id = id; el.zIndex = zIndex
+                let el = StickyNoteModel(
+                    canvasID: snapshot.canvasID,
+                    x: snapshot.x,
+                    y: snapshot.y
+                )
+                el.id = id; el.text = snapshot.text; el.width = snapshot.width
+                el.height = snapshot.height; el.rotation = snapshot.rotation
+                el.fontSize = snapshot.fontSize; el.isBold = snapshot.isBold
+                el.isItalic = snapshot.isItalic; el.fontName = snapshot.fontName
+                el.colorName = snapshot.colorName; el.listStyleRaw = snapshot.listStyleRaw
+                el.isCollapsed = snapshot.isCollapsed; el.zIndex = snapshot.zIndex
                 context.insert(el); try? context.save()
                 Task { await StickyNoteSyncService.shared.upsert(el) }
             }
@@ -148,7 +166,9 @@ class StickyNoteViewModel: ObservableObject {
         writingID = noteID
     }
 
-    func setCollapsed(note: StickyNoteModel, collapsed: Bool, context: ModelContext) {
+    func setCollapsed(note: StickyNoteModel, collapsed: Bool, context: ModelContext,
+                      undoManager: CanvasUndoManager? = nil) {
+        let oldValue = note.isCollapsed
         note.isCollapsed = collapsed
         note.updatedAt = Date()
         if collapsed, writingID == note.id {
@@ -156,6 +176,13 @@ class StickyNoteViewModel: ObservableObject {
         }
         try? context.save()
         Task { await StickyNoteSyncService.shared.upsert(note) }
+        undoManager?.recordElementChange(
+            name: collapsed ? "Collapse sticky note" : "Expand sticky note",
+            element: note,
+            from: oldValue,
+            to: note.isCollapsed,
+            context: context
+        ) { $0.isCollapsed = $1 }
     }
 
     func delete(note: StickyNoteModel, context: ModelContext,
@@ -164,7 +191,10 @@ class StickyNoteViewModel: ObservableObject {
                     x: note.x, y: note.y, width: note.width, height: note.height,
                     colorName: note.colorName, fontSize: note.fontSize,
                     isBold: note.isBold, isItalic: note.isItalic,
-                    isCollapsed: note.isCollapsed, zIndex: note.zIndex)
+                    fontName: note.fontName, listStyleRaw: note.listStyleRaw,
+                    rotation: note.rotation, isCollapsed: note.isCollapsed,
+                    zIndex: note.zIndex, groupID: note.groupID,
+                    isLayerHidden: note.isLayerHidden, layerOpacity: note.layerOpacity)
 
         // Soft-delete on Supabase before removing locally
         Task { await StickyNoteSyncService.shared.delete(note) }
@@ -173,6 +203,7 @@ class StickyNoteViewModel: ObservableObject {
         if writingID == snap.id { writingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete sticky note",
             undo: {
                 let el = StickyNoteModel(canvasID: snap.canvasID, x: snap.x, y: snap.y)
                 el.id = snap.id; el.text = snap.text; el.colorName = snap.colorName
@@ -180,6 +211,9 @@ class StickyNoteViewModel: ObservableObject {
                 el.isItalic = snap.isItalic; el.width = snap.width
                 el.height = snap.height; el.isCollapsed = snap.isCollapsed
                 el.zIndex = snap.zIndex
+                el.fontName = snap.fontName; el.listStyleRaw = snap.listStyleRaw
+                el.rotation = snap.rotation; el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden; el.layerOpacity = snap.layerOpacity
                 context.insert(el); try? context.save()
                 Task { await StickyNoteSyncService.shared.upsert(el) }
             },

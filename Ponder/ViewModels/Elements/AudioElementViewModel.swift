@@ -33,13 +33,20 @@ class AudioElementViewModel: ObservableObject {
                     context.delete(el); try? context.save()
                 }
             },
-            redo: {
+                redo: {
                 let el = AudioElementModel(canvasID: canvasID, audioFileName: audioFileName,
                                            originalName: originalName, duration: duration,
                                            x: canvasX, y: canvasY)
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await AudioSyncService.shared.upsert(el) }
+            },
+            onDiscard: { isApplied in
+                guard !isApplied else { return }
+                let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>())) ?? []
+                if !audio.contains(where: { $0.audioFileName == audioFileName }) {
+                    AudioStorageService.delete(fileName: audioFileName)
+                }
             }
         ))
     }
@@ -88,27 +95,45 @@ class AudioElementViewModel: ObservableObject {
                                      originalName: element.originalName, duration: element.duration,
                                      x: element.x + Double(offset.width),
                                      y: element.y + Double(offset.height))
+        copy.width = element.width; copy.height = element.height
+        copy.rotation = element.rotation
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await AudioSyncService.shared.upsert(copy) }
 
         let id = copy.id
+        let snapshot = (
+            canvasID: copy.canvasID, originalName: copy.originalName,
+            duration: copy.duration, x: copy.x, y: copy.y,
+            width: copy.width, height: copy.height, rotation: copy.rotation,
+            zIndex: copy.zIndex
+        )
         undoManager?.push(CanvasAction(
-            undo: {
-                if let el = try? context.fetch(FetchDescriptor<AudioElementModel>()).first(where: { $0.id == id }) {
-                    Task { await AudioSyncService.shared.delete(el) }
-                    AudioStorageService.delete(fileName: newFileName)
-                    context.delete(el); try? context.save()
+            name: "Duplicate audio",
+                undo: {
+                    if let el = try? context.fetch(FetchDescriptor<AudioElementModel>()).first(where: { $0.id == id }) {
+                        Task { await AudioSyncService.shared.delete(el) }
+                        context.delete(el); try? context.save()
                 }
             },
             redo: {
-                let el = AudioElementModel(canvasID: element.canvasID, audioFileName: newFileName,
-                                           originalName: element.originalName, duration: element.duration,
-                                           x: element.x + Double(offset.width),
-                                           y: element.y + Double(offset.height))
-                el.id = id; el.zIndex = zIndex
+                let el = AudioElementModel(
+                    canvasID: snapshot.canvasID, audioFileName: newFileName,
+                    originalName: snapshot.originalName, duration: snapshot.duration,
+                    x: snapshot.x, y: snapshot.y
+                )
+                el.id = id; el.zIndex = snapshot.zIndex
+                el.width = snapshot.width; el.height = snapshot.height
+                el.rotation = snapshot.rotation
                 context.insert(el); try? context.save()
                 Task { await AudioSyncService.shared.upsert(el) }
+            },
+            onDiscard: { isApplied in
+                guard !isApplied else { return }
+                let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>())) ?? []
+                if !audio.contains(where: { $0.audioFileName == newFileName }) {
+                    AudioStorageService.delete(fileName: newFileName)
+                }
             }
         ))
         return id
@@ -118,26 +143,40 @@ class AudioElementViewModel: ObservableObject {
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: element.id, canvasID: element.canvasID,
                     audioFileName: element.audioFileName, originalName: element.originalName,
-                    duration: element.duration, x: element.x, y: element.y, zIndex: element.zIndex)
+                    duration: element.duration, x: element.x, y: element.y,
+                    width: element.width, height: element.height, rotation: element.rotation,
+                    zIndex: element.zIndex, groupID: element.groupID,
+                    isLayerHidden: element.isLayerHidden,
+                    layerOpacity: element.layerOpacity)
 
         Task { await AudioSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete audio",
             undo: {
                 let el = AudioElementModel(canvasID: snap.canvasID, audioFileName: snap.audioFileName,
                                            originalName: snap.originalName, duration: snap.duration,
                                            x: snap.x, y: snap.y)
                 el.id = snap.id; el.zIndex = snap.zIndex
+                el.width = snap.width; el.height = snap.height; el.rotation = snap.rotation
+                el.groupID = snap.groupID; el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
                 context.insert(el); try? context.save()
                 Task { await AudioSyncService.shared.upsert(el) }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<AudioElementModel>()).first(where: { $0.id == snap.id }) {
                     Task { await AudioSyncService.shared.delete(el) }
-                    AudioStorageService.delete(fileName: snap.audioFileName)
                     context.delete(el); try? context.save()
+                }
+            },
+            onDiscard: { isApplied in
+                guard isApplied else { return }
+                let audio = (try? context.fetch(FetchDescriptor<AudioElementModel>())) ?? []
+                if !audio.contains(where: { $0.audioFileName == snap.audioFileName }) {
+                    AudioStorageService.delete(fileName: snap.audioFileName)
                 }
             }
         ))

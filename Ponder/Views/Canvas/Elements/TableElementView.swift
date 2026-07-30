@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 struct TableElementView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var table: TableElementModel
     let allCells: [TableCellModel]
     let canvasScale: CGFloat
@@ -62,7 +63,14 @@ struct TableElementView: View {
             if isTableSelected && !isMultiSelectMode && !isCanvasNavigationActive {
                 TableToolbarView(
                     table: table, cells: tableCells, selectedCell: selectedCell, vm: vm,
-                    onDelete: { vm.delete(table: table, cells: tableCells, context: context) },
+                    onDelete: {
+                        vm.delete(
+                            table: table,
+                            cells: tableCells,
+                            context: context,
+                            undoManager: canvasHistory
+                        )
+                    },
                     onImportCSV: onImportCSV, onExportCSV: onExportCSV
                 )
                 .fixedSize(horizontal: true, vertical: false)
@@ -300,12 +308,26 @@ struct TableElementView: View {
                 table.cellHeight = max(28, min(150, resizeStartCellHeight + dh))
             }
             .onEnded { _ in
+                let oldSize = CGSize(
+                    width: resizeStartCellWidth,
+                    height: resizeStartCellHeight
+                )
                 table.cellWidth  = max(40, min(300, table.cellWidth))
                 table.cellHeight = max(28, min(150, table.cellHeight))
                 table.updatedAt = Date()
                 try? context.save()
                 // Sync table resize to Supabase
                 Task { await TableSyncService.shared.upsertTable(table) }
+                canvasHistory.recordElementChange(
+                    name: "Resize table cells",
+                    element: table,
+                    from: oldSize,
+                    to: CGSize(width: table.cellWidth, height: table.cellHeight),
+                    context: context
+                ) {
+                    $0.cellWidth = $1.width
+                    $0.cellHeight = $1.height
+                }
                 resizeStartCellWidth = 0
                 resizeStartCellHeight = 0
             }
@@ -328,7 +350,8 @@ struct TableElementView: View {
                 if vm.editingCellID == nil {
                     let t = value.translation; dragOffset = .zero
                     vm.updatePosition(table: table, translation: t,
-                                      scale: canvasScale, boundary: canvasBoundary, context: context)
+                                      scale: canvasScale, boundary: canvasBoundary,
+                                      context: context, undoManager: canvasHistory)
                 } else {
                     dragOffset = .zero
                 }

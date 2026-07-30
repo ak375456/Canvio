@@ -156,6 +156,9 @@ extension CanvasViewModel {
                                 tableCells: [TableCellModel],
                                 connectors: [ConnectorModel],
                                 context: ModelContext) {
+        undoManager.beginGrouping(name: "Delete canvas item")
+        defer { undoManager.endGrouping() }
+
         if let element = element as? TextElementModel {
             textVM.delete(element: element, context: context, undoManager: undoManager)
         } else if let element = element as? StickyNoteModel {
@@ -174,7 +177,7 @@ extension CanvasViewModel {
         } else if let element = element as? PDFElementModel {
             pdfVM.delete(element: element, context: context, undoManager: undoManager)
         } else if let element = element as? PDFPageElementModel {
-            pdfPageVM.delete(element: element, context: context)
+            pdfPageVM.delete(element: element, context: context, undoManager: undoManager)
         } else if let element = element as? TableElementModel {
             tableVM.delete(
                 table: element,
@@ -197,7 +200,8 @@ extension CanvasViewModel {
         connectorVM.deleteOrphanedConnectors(
             for: element.id,
             allConnectors: connectors,
-            context: context
+            context: context,
+            undoManager: undoManager
         )
     }
 }

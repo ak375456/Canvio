@@ -20,6 +20,27 @@ private struct RecognizedHandwritingTextRecord {
     let zIndex: Int
 }
 
+struct TextElementHistoryState: Equatable {
+    let document: RichTextDocument
+    let backgroundColorName: String
+    let strokeColorName: String
+    let strokeWidth: Double
+
+    init(element: TextElementModel) {
+        document = element.resolvedRichTextDocument
+        backgroundColorName = element.bgColorName
+        strokeColorName = element.strokeColorName
+        strokeWidth = element.strokeWidth
+    }
+
+    func apply(to element: TextElementModel) {
+        element.setRichTextDocument(document)
+        element.bgColorName = backgroundColorName
+        element.strokeColorName = strokeColorName
+        element.strokeWidth = strokeWidth
+    }
+}
+
 @MainActor
 class TextElementViewModel: ObservableObject {
     @Published var editingID: UUID?       = nil
@@ -221,6 +242,7 @@ class TextElementViewModel: ObservableObject {
                           colorName: String? = nil,
                           context: ModelContext,
                           undoManager: CanvasUndoManager? = nil) {
+        let oldState = TextElementHistoryState(element: element)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let wasNew  = inlineElementIsNew
         inlineElementIsNew = false
@@ -269,6 +291,7 @@ class TextElementViewModel: ObservableObject {
             let strokeColorName = element.strokeColorName
             let strokeWidth = element.strokeWidth
             undoManager?.push(CanvasAction(
+                name: "Add text",
                 undo: {
                     if let el = try? context.fetch(FetchDescriptor<TextElementModel>())
                         .first(where: { $0.id == id }) {
@@ -296,6 +319,17 @@ class TextElementViewModel: ObservableObject {
                     Task { await TextSyncService.shared.upsert(el) }
                 }
             ))
+        } else {
+            let newState = TextElementHistoryState(element: element)
+            undoManager?.recordElementChange(
+                name: "Edit text",
+                element: element,
+                from: oldState,
+                to: newState,
+                context: context
+            ) { target, state in
+                state.apply(to: target)
+            }
         }
     }
 
@@ -461,44 +495,57 @@ class TextElementViewModel: ObservableObject {
 
     // MARK: - Inline formatting
 
-    func toggleBold(element: TextElementModel, context: ModelContext) {
+    func toggleBold(element: TextElementModel, context: ModelContext,
+                    undoManager: CanvasUndoManager? = nil) {
         let target = !element.isBold
-        applyRichTextStyle(element: element, context: context) { attrs in
+        applyRichTextStyle(element: element, context: context, undoManager: undoManager) { attrs in
             attrs.isBold = target
         }
     }
 
-    func toggleItalic(element: TextElementModel, context: ModelContext) {
+    func toggleItalic(element: TextElementModel, context: ModelContext,
+                      undoManager: CanvasUndoManager? = nil) {
         let target = !element.isItalic
-        applyRichTextStyle(element: element, context: context) { attrs in
+        applyRichTextStyle(element: element, context: context, undoManager: undoManager) { attrs in
             attrs.isItalic = target
         }
     }
 
-    func toggleUnderline(element: TextElementModel, context: ModelContext) {
+    func toggleUnderline(element: TextElementModel, context: ModelContext,
+                         undoManager: CanvasUndoManager? = nil) {
         let target = !element.isUnderline
-        applyRichTextStyle(element: element, context: context) { attrs in
+        applyRichTextStyle(element: element, context: context, undoManager: undoManager) { attrs in
             attrs.isUnderline = target
         }
     }
 
     func setAlignment(_ alignment: TextAlignment, element: TextElementModel,
-                      context: ModelContext) {
+                      context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+        let oldDocument = element.resolvedRichTextDocument
         var document = element.resolvedRichTextDocument
         document.paragraph.textAlignment = alignment
         element.setRichTextDocument(document)
         element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change text alignment",
+            element: element,
+            from: oldDocument,
+            to: element.resolvedRichTextDocument,
+            context: context
+        ) { $0.setRichTextDocument($1) }
     }
 
-    func adjustFontSize(by delta: Double, element: TextElementModel, context: ModelContext) {
-        applyRichTextStyle(element: element, context: context) { attrs in
+    func adjustFontSize(by delta: Double, element: TextElementModel, context: ModelContext,
+                        undoManager: CanvasUndoManager? = nil) {
+        applyRichTextStyle(element: element, context: context, undoManager: undoManager) { attrs in
             attrs.fontSize = TextStyle.clampedFontSize(attrs.fontSize + delta)
         }
     }
 
-    func setColor(_ colorName: String, element: TextElementModel, context: ModelContext) {
-        applyRichTextStyle(element: element, context: context) { attrs in
+    func setColor(_ colorName: String, element: TextElementModel, context: ModelContext,
+                  undoManager: CanvasUndoManager? = nil) {
+        applyRichTextStyle(element: element, context: context, undoManager: undoManager) { attrs in
             attrs.colorName = colorName
         }
     }
@@ -506,9 +553,11 @@ class TextElementViewModel: ObservableObject {
     private func applyRichTextStyle(
         element: TextElementModel,
         context: ModelContext,
+        undoManager: CanvasUndoManager?,
         transform: (inout RichTextAttributes) -> Void
     ) {
-        var document = element.resolvedRichTextDocument
+        let oldDocument = element.resolvedRichTextDocument
+        var document = oldDocument
         if document.runs.isEmpty, !element.text.isEmpty {
             document = RichTextDocument.legacy(
                 text: element.text,
@@ -524,23 +573,50 @@ class TextElementViewModel: ObservableObject {
         element.setRichTextDocument(document.applyingToAllRuns(transform))
         element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Format text",
+            element: element,
+            from: oldDocument,
+            to: element.resolvedRichTextDocument,
+            context: context,
+            coalescingKey: "text-format-\(element.id)"
+        ) { $0.setRichTextDocument($1) }
     }
 
     // MARK: - Card background & stroke
 
-    func setBgColor(_ colorName: String, element: TextElementModel, context: ModelContext) {
+    func setBgColor(_ colorName: String, element: TextElementModel, context: ModelContext,
+                    undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.bgColorName
         element.bgColorName = colorName; element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change text background", element: element,
+            from: oldValue, to: element.bgColorName, context: context
+        ) { $0.bgColorName = $1 }
     }
 
-    func setStrokeColor(_ colorName: String, element: TextElementModel, context: ModelContext) {
+    func setStrokeColor(_ colorName: String, element: TextElementModel, context: ModelContext,
+                        undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.strokeColorName
         element.strokeColorName = colorName; element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change text border", element: element,
+            from: oldValue, to: element.strokeColorName, context: context
+        ) { $0.strokeColorName = $1 }
     }
 
-    func setStrokeWidth(_ width: Double, element: TextElementModel, context: ModelContext) {
+    func setStrokeWidth(_ width: Double, element: TextElementModel, context: ModelContext,
+                        undoManager: CanvasUndoManager? = nil) {
+        let oldValue = element.strokeWidth
         element.strokeWidth = width; element.updatedAt = Date(); try? context.save()
         Task { await TextSyncService.shared.upsert(element) }
+        undoManager?.recordElementChange(
+            name: "Change text border width", element: element,
+            from: oldValue, to: element.strokeWidth, context: context,
+            coalescingKey: "text-stroke-width-\(element.id)"
+        ) { $0.strokeWidth = $1 }
     }
 
     // MARK: - Duplicate
@@ -614,7 +690,12 @@ class TextElementViewModel: ObservableObject {
             fontName: element.fontName, alignmentRaw: element.alignmentRaw,
             bgColorName: element.bgColorName, strokeColorName: element.strokeColorName,
             strokeWidth: element.strokeWidth, zIndex: element.zIndex,
-            richText: element.resolvedRichTextDocument
+            richText: element.resolvedRichTextDocument,
+            groupID: element.groupID, isLayerHidden: element.isLayerHidden,
+            layerOpacity: element.layerOpacity,
+            sourcePDFDocumentID: element.sourcePDFDocumentID,
+            sourcePDFPageIndex: element.sourcePDFPageIndex,
+            sourcePDFRectsData: element.sourcePDFRectsData
         )
         Task { await TextSyncService.shared.delete(element) }
         context.delete(element); try? context.save()
@@ -622,6 +703,7 @@ class TextElementViewModel: ObservableObject {
         if inlineEditingID == snap.id { inlineEditingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete text",
             undo: {
                 let el = TextElementModel(canvasID: snap.canvasID, text: snap.text,
                                           x: snap.x, y: snap.y)
@@ -633,6 +715,12 @@ class TextElementViewModel: ObservableObject {
                 el.strokeColorName = snap.strokeColorName
                 el.strokeWidth = snap.strokeWidth
                 el.richTextDocument = snap.richText
+                el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
+                el.sourcePDFDocumentID = snap.sourcePDFDocumentID
+                el.sourcePDFPageIndex = snap.sourcePDFPageIndex
+                el.sourcePDFRectsData = snap.sourcePDFRectsData
                 el.updatedAt = Date()
                 context.insert(el); try? context.save()
                 Task { await TextSyncService.shared.upsert(el) }

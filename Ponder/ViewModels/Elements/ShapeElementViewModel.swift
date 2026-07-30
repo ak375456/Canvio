@@ -80,12 +80,23 @@ class ShapeElementViewModel: ObservableObject {
         copy.strokeColorName = shape.strokeColorName; copy.fillColorName = shape.fillColorName
         copy.hasFill = shape.hasFill; copy.strokeWidth = shape.strokeWidth
         copy.hasArrowHead = shape.hasArrowHead; copy.polygonSides = shape.polygonSides
+        copy.rotation = shape.rotation; copy.triangleVariantRaw = shape.triangleVariantRaw
         copy.zIndex = zIndex
         context.insert(copy); try? context.save()
         Task { await ShapeSyncService.shared.upsert(copy) }
 
         let id = copy.id
+        let snapshot = (
+            canvasID: copy.canvasID, kind: copy.shapeKind,
+            x: copy.x, y: copy.y, width: copy.width, height: copy.height,
+            rotation: copy.rotation, strokeColorName: copy.strokeColorName,
+            fillColorName: copy.fillColorName, hasFill: copy.hasFill,
+            strokeWidth: copy.strokeWidth, hasArrowHead: copy.hasArrowHead,
+            triangleVariantRaw: copy.triangleVariantRaw,
+            polygonSides: copy.polygonSides, zIndex: copy.zIndex
+        )
         undoManager?.push(CanvasAction(
+            name: "Duplicate shape",
             undo: {
                 if let el = try? context.fetch(FetchDescriptor<ShapeElementModel>()).first(where: { $0.id == id }) {
                     context.delete(el); try? context.save()
@@ -93,10 +104,17 @@ class ShapeElementViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = ShapeElementModel(canvasID: shape.canvasID, kind: shape.shapeKind,
-                                           x: shape.x + Double(offset.width),
-                                           y: shape.y + Double(offset.height))
-                el.id = id; el.zIndex = zIndex
+                let el = ShapeElementModel(
+                    canvasID: snapshot.canvasID, kind: snapshot.kind,
+                    x: snapshot.x, y: snapshot.y
+                )
+                el.id = id; el.width = snapshot.width; el.height = snapshot.height
+                el.rotation = snapshot.rotation
+                el.strokeColorName = snapshot.strokeColorName
+                el.fillColorName = snapshot.fillColorName; el.hasFill = snapshot.hasFill
+                el.strokeWidth = snapshot.strokeWidth; el.hasArrowHead = snapshot.hasArrowHead
+                el.triangleVariantRaw = snapshot.triangleVariantRaw
+                el.polygonSides = snapshot.polygonSides; el.zIndex = snapshot.zIndex
                 context.insert(el); try? context.save()
                 Task { await ShapeSyncService.shared.upsert(el) }
             }
@@ -136,18 +154,36 @@ class ShapeElementViewModel: ObservableObject {
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: shape.id, canvasID: shape.canvasID, kind: shape.shapeKind,
                     x: shape.x, y: shape.y, width: shape.width, height: shape.height,
-                    zIndex: shape.zIndex)
+                    rotation: shape.rotation, strokeColorName: shape.strokeColorName,
+                    fillColorName: shape.fillColorName, hasFill: shape.hasFill,
+                    strokeWidth: shape.strokeWidth, hasArrowHead: shape.hasArrowHead,
+                    triangleVariantRaw: shape.triangleVariantRaw,
+                    polygonSides: shape.polygonSides, zIndex: shape.zIndex,
+                    groupID: shape.groupID, isLayerHidden: shape.isLayerHidden,
+                    layerOpacity: shape.layerOpacity)
 
         Task { await ShapeSyncService.shared.delete(shape) }
         context.delete(shape); try? context.save()
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete shape",
             undo: {
                 let el = ShapeElementModel(canvasID: snap.canvasID, kind: snap.kind,
                                            x: snap.x, y: snap.y)
                 el.id = snap.id; el.width = snap.width; el.height = snap.height
                 el.zIndex = snap.zIndex
+                el.rotation = snap.rotation
+                el.strokeColorName = snap.strokeColorName
+                el.fillColorName = snap.fillColorName
+                el.hasFill = snap.hasFill
+                el.strokeWidth = snap.strokeWidth
+                el.hasArrowHead = snap.hasArrowHead
+                el.triangleVariantRaw = snap.triangleVariantRaw
+                el.polygonSides = snap.polygonSides
+                el.groupID = snap.groupID
+                el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
                 context.insert(el); try? context.save()
                 Task { await ShapeSyncService.shared.upsert(el) }
             },

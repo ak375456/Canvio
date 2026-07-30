@@ -11,6 +11,7 @@ struct DrawingElementView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var canvasHistory: CanvasUndoManager
     @Bindable var element: DrawingElementModel
     let canvasScale: CGFloat
     let canvasOffset: CGSize
@@ -107,7 +108,14 @@ struct DrawingElementView: View {
                 isEditing: isEditing,
                 canvasScale: canvasScale,
                 smartShapeSnappingEnabled: settings.smartShapeSnappingEnabled,
-                onDrawingChanged: { vm.saveDrawing(element: element, drawing: $0, context: context) }
+                onDrawingChanged: {
+                    vm.saveDrawing(
+                        element: element,
+                        drawing: $0,
+                        context: context,
+                        undoManager: canvasHistory
+                    )
+                }
             )
             .clipShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))
 
@@ -154,7 +162,9 @@ struct DrawingElementView: View {
     }
 
     private var deleteHandle: some View {
-        Button { vm.delete(element: element, context: context) } label: {
+        Button {
+            vm.delete(element: element, context: context, undoManager: canvasHistory)
+        } label: {
             ZStack {
                 Color.clear.frame(width: handleHitSize, height: handleHitSize).contentShape(Rectangle())
                 handleCircle(icon: "trash", color: .red)
@@ -208,7 +218,12 @@ struct DrawingElementView: View {
 
     private var clearDrawingButton: some View {
         Button {
-            vm.saveDrawing(element: element, drawing: PKDrawing(), context: context)
+            vm.saveDrawing(
+                element: element,
+                drawing: PKDrawing(),
+                context: context,
+                undoManager: canvasHistory
+            )
         } label: {
             Image(systemName: "trash")
                 .font(.system(size: 13, weight: .semibold))
@@ -245,7 +260,8 @@ struct DrawingElementView: View {
                 let t = value.translation
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
-                                  scale: canvasScale, boundary: canvasBoundary, context: context)
+                                  scale: canvasScale, boundary: canvasBoundary,
+                                  context: context, undoManager: canvasHistory)
             }
     }
 
@@ -264,7 +280,16 @@ struct DrawingElementView: View {
             }
             .onEnded { _ in
                 rotationGestureState.reset()
+                let oldRotation = element.rotation
                 element.rotation = rotationAngle; element.updatedAt = Date(); try? context.save()
+                Task { await DrawingSyncService.shared.upsert(element) }
+                canvasHistory.recordElementChange(
+                    name: "Rotate drawing",
+                    element: element,
+                    from: oldRotation,
+                    to: element.rotation,
+                    context: context
+                ) { $0.rotation = $1 }
             }
     }
 
@@ -284,7 +309,19 @@ struct DrawingElementView: View {
                 element.height = max(80,  min(1200, resizeStartHeight + Double(value.translation.height)))
             }
             .onEnded { _ in
+                let oldSize = CGSize(width: resizeStartWidth, height: resizeStartHeight)
                 element.updatedAt = Date(); try? context.save()
+                Task { await DrawingSyncService.shared.upsert(element) }
+                canvasHistory.recordElementChange(
+                    name: "Resize drawing",
+                    element: element,
+                    from: oldSize,
+                    to: CGSize(width: element.width, height: element.height),
+                    context: context
+                ) {
+                    $0.width = $1.width
+                    $0.height = $1.height
+                }
                 resizeStartWidth = 0; resizeStartHeight = 0
             }
     }

@@ -37,6 +37,7 @@ final class CanvasExporter {
         connectors:    [ConnectorModel],
         colorScheme:   ColorScheme = .light,
         gridStyle:     GridStyle = .dotted,
+        gridSpacing:   CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -82,6 +83,7 @@ final class CanvasExporter {
             connectors:    connectors,
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
+            gridSpacing:   gridSpacing,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -117,6 +119,7 @@ final class CanvasExporter {
         connectors:    [ConnectorModel],
         colorScheme:   ColorScheme = .light,
         gridStyle:     GridStyle = .dotted,
+        gridSpacing:   CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -162,6 +165,7 @@ final class CanvasExporter {
             connectors:    connectors,
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
+            gridSpacing:   gridSpacing,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -191,6 +195,7 @@ final class CanvasExporter {
         connectors:    [ConnectorModel],
         colorScheme:   ColorScheme,
         gridStyle:     GridStyle,
+        gridSpacing:   CGFloat,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
         customBackgroundColors: CanvasCustomBackgroundColors,
@@ -210,6 +215,7 @@ final class CanvasExporter {
             exportRect:    exportRect,
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
+            gridSpacing:   gridSpacing,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -522,6 +528,7 @@ struct CanvasExportView: View {
     let exportRect:    CGRect
     let colorScheme:   ColorScheme
     let gridStyle:     GridStyle
+    let gridSpacing:   CGFloat
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
     let customBackgroundColors: CanvasCustomBackgroundColors
@@ -548,6 +555,7 @@ struct CanvasExportView: View {
         exportRect:    CGRect,
         colorScheme:   ColorScheme,
         gridStyle:     GridStyle,
+        gridSpacing:   CGFloat,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
         customBackgroundColors: CanvasCustomBackgroundColors,
@@ -573,6 +581,7 @@ struct CanvasExportView: View {
         self.exportRect    = exportRect
         self.colorScheme   = colorScheme
         self.gridStyle     = gridStyle
+        self.gridSpacing   = gridSpacing
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
         self.customBackgroundColors = customBackgroundColors
@@ -664,6 +673,7 @@ struct CanvasExportView: View {
                 offset: CGSize(width: -exportRect.minX, height: -exportRect.minY),
                 scale: 1,
                 style: gridStyle,
+                spacing: gridSpacing,
                 backgroundMode: backgroundMode,
                 backgroundPalette: backgroundPalette,
                 customBackgroundColors: customBackgroundColors

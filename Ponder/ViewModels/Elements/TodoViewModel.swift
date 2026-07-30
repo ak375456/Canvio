@@ -7,6 +7,78 @@ import SwiftUI
 import SwiftData
 import Combine
 
+struct TodoTaskHistoryState: Equatable {
+    let id: UUID
+    let listID: UUID
+    let parentTaskID: UUID?
+    let title: String
+    let isCompleted: Bool
+    let priorityRaw: String
+    let dueDate: Date?
+    let tagsRaw: String
+    let order: Int
+
+    init(_ task: TodoTaskModel) {
+        id = task.id
+        listID = task.listID
+        parentTaskID = task.parentTaskID
+        title = task.title
+        isCompleted = task.isCompleted
+        priorityRaw = task.priorityRaw
+        dueDate = task.dueDate
+        tagsRaw = task.tagsRaw
+        order = task.order
+    }
+
+    func apply(to task: TodoTaskModel) {
+        task.parentTaskID = parentTaskID
+        task.title = title
+        task.isCompleted = isCompleted
+        task.priorityRaw = priorityRaw
+        task.dueDate = dueDate
+        task.tagsRaw = tagsRaw
+        task.order = order
+        task.updatedAt = Date()
+    }
+
+    func makeModel() -> TodoTaskModel {
+        let task = TodoTaskModel(
+            listID: listID,
+            parentTaskID: parentTaskID,
+            title: title,
+            order: order
+        )
+        task.id = id
+        apply(to: task)
+        return task
+    }
+}
+
+@MainActor
+func recordTodoTaskChange(
+    name: String,
+    task: TodoTaskModel,
+    from oldState: TodoTaskHistoryState,
+    context: ModelContext,
+    undoManager: CanvasUndoManager,
+    coalescingKey: String? = nil
+) {
+    let newState = TodoTaskHistoryState(task)
+    let id = task.id
+    undoManager.recordChange(
+        name: name,
+        from: oldState,
+        to: newState,
+        coalescingKey: coalescingKey
+    ) { state in
+        guard let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()),
+              let current = values.first(where: { $0.id == id }) else { return }
+        state.apply(to: current)
+        try? context.save()
+        Task { await TodoSyncService.shared.upsertTask(current) }
+    }
+}
+
 @MainActor
 class TodoListViewModel: ObservableObject {
     @Published var editingID: UUID? = nil
@@ -101,14 +173,26 @@ class TodoListViewModel: ObservableObject {
         return id
     }
 
-    func updateTitle(list: TodoListModel, title: String, context: ModelContext) {
+    func updateTitle(list: TodoListModel, title: String, context: ModelContext,
+                     undoManager: CanvasUndoManager? = nil) {
+        let oldValue = list.title
         list.title = title; list.updatedAt = Date(); try? context.save()
         Task { await TodoSyncService.shared.upsertList(list) }
+        undoManager?.recordElementChange(
+            name: "Rename todo list", element: list,
+            from: oldValue, to: list.title, context: context
+        ) { $0.title = $1 }
     }
 
-    func updateColor(list: TodoListModel, colorName: String, context: ModelContext) {
+    func updateColor(list: TodoListModel, colorName: String, context: ModelContext,
+                     undoManager: CanvasUndoManager? = nil) {
+        let oldValue = list.colorName
         list.colorName = colorName; list.updatedAt = Date(); try? context.save()
         Task { await TodoSyncService.shared.upsertList(list) }
+        undoManager?.recordElementChange(
+            name: "Change todo color", element: list,
+            from: oldValue, to: list.colorName, context: context
+        ) { $0.colorName = $1 }
     }
 
     func updateSize(list: TodoListModel, width: Double, height: Double,
@@ -137,19 +221,50 @@ class TodoListViewModel: ObservableObject {
 
     // MARK: - Task CRUD
 
-    func addTask(to list: TodoListModel, existingCount: Int, context: ModelContext) -> TodoTaskModel {
+    func addTask(to list: TodoListModel, existingCount: Int, context: ModelContext,
+                 undoManager: CanvasUndoManager? = nil) -> TodoTaskModel {
         let task = TodoTaskModel(listID: list.id, title: "", order: existingCount)
         context.insert(task); try? context.save()
         Task { await TodoSyncService.shared.upsertTask(task) }
+        let snapshot = TodoTaskHistoryState(task)
+        undoManager?.push(CanvasAction(
+            name: "Add todo task",
+            undo: {
+                guard let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()),
+                      let current = values.first(where: { $0.id == snapshot.id }) else { return }
+                context.delete(current)
+                try? context.save()
+                Task { await TodoSyncService.shared.deleteTask(current) }
+            },
+            redo: {
+                let restored = snapshot.makeModel()
+                context.insert(restored)
+                try? context.save()
+                Task { await TodoSyncService.shared.upsertTask(restored) }
+            }
+        ))
         return task
     }
 
-    func toggleTask(_ task: TodoTaskModel, context: ModelContext) {
+    func toggleTask(_ task: TodoTaskModel, context: ModelContext,
+                    undoManager: CanvasUndoManager? = nil) {
+        let oldState = TodoTaskHistoryState(task)
         task.isCompleted.toggle(); task.updatedAt = Date(); try? context.save()
         Task { await TodoSyncService.shared.upsertTask(task) }
+        if let undoManager {
+            recordTodoTaskChange(
+                name: "Toggle todo task",
+                task: task,
+                from: oldState,
+                context: context,
+                undoManager: undoManager
+            )
+        }
     }
 
-    func deleteTask(_ task: TodoTaskModel, subtasks: [TodoTaskModel], context: ModelContext) {
+    func deleteTask(_ task: TodoTaskModel, subtasks: [TodoTaskModel], context: ModelContext,
+                    undoManager: CanvasUndoManager? = nil) {
+        let snapshots = ([task] + subtasks).map(TodoTaskHistoryState.init)
         // Soft-delete subtasks in Supabase first
         for sub in subtasks {
             Task { await TodoSyncService.shared.deleteTask(sub) }
@@ -157,13 +272,36 @@ class TodoListViewModel: ObservableObject {
         }
         Task { await TodoSyncService.shared.deleteTask(task) }
         context.delete(task); try? context.save()
+        undoManager?.push(CanvasAction(
+            name: "Delete todo task",
+            undo: {
+                for snapshot in snapshots {
+                    let restored = snapshot.makeModel()
+                    context.insert(restored)
+                    Task { await TodoSyncService.shared.upsertTask(restored) }
+                }
+                try? context.save()
+            },
+            redo: {
+                guard let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()) else { return }
+                let ids = Set(snapshots.map(\.id))
+                for current in values where ids.contains(current.id) {
+                    Task { await TodoSyncService.shared.deleteTask(current) }
+                    context.delete(current)
+                }
+                try? context.save()
+            }
+        ))
     }
 
     func delete(list: TodoListModel, tasks: [TodoTaskModel], context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: list.id, canvasID: list.canvasID, title: list.title,
                     x: list.x, y: list.y, width: list.width, height: list.height,
-                    colorName: list.colorName, zIndex: list.zIndex)
+                    colorName: list.colorName, zIndex: list.zIndex,
+                    groupID: list.groupID, isLayerHidden: list.isLayerHidden,
+                    layerOpacity: list.layerOpacity)
+        let taskSnapshots = tasks.map(TodoTaskHistoryState.init)
 
         // Soft-delete tasks + list in Supabase
         Task { await TodoSyncService.shared.deleteList(list, tasks: tasks) }
@@ -173,17 +311,33 @@ class TodoListViewModel: ObservableObject {
         if editingID == snap.id { editingID = nil }
 
         undoManager?.push(CanvasAction(
+            name: "Delete todo list",
             undo: {
                 let el = TodoListModel(canvasID: snap.canvasID, x: snap.x, y: snap.y)
                 el.id = snap.id; el.title = snap.title; el.colorName = snap.colorName
                 el.width = snap.width; el.height = snap.height; el.zIndex = snap.zIndex
-                context.insert(el); try? context.save()
+                el.groupID = snap.groupID; el.isLayerHidden = snap.isLayerHidden
+                el.layerOpacity = snap.layerOpacity
+                context.insert(el)
+                for taskSnapshot in taskSnapshots {
+                    context.insert(taskSnapshot.makeModel())
+                }
+                try? context.save()
                 Task { await TodoSyncService.shared.upsertList(el) }
+                for taskSnapshot in taskSnapshots {
+                    if let values = try? context.fetch(FetchDescriptor<TodoTaskModel>()),
+                       let task = values.first(where: { $0.id == taskSnapshot.id }) {
+                        Task { await TodoSyncService.shared.upsertTask(task) }
+                    }
+                }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<TodoListModel>()).first(where: { $0.id == snap.id }) {
+                    let currentTasks = (try? context.fetch(FetchDescriptor<TodoTaskModel>()))?
+                        .filter { $0.listID == snap.id } ?? []
+                    currentTasks.forEach { context.delete($0) }
                     context.delete(el); try? context.save()
-                    Task { await TodoSyncService.shared.deleteList(el, tasks: []) }
+                    Task { await TodoSyncService.shared.deleteList(el, tasks: currentTasks) }
                 }
             }
         ))
