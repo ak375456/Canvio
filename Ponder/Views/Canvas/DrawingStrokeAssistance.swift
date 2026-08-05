@@ -3,16 +3,92 @@ import CoreGraphics
 import PencilKit
 import SwiftUI
 
+enum DrawingStrokeStyle: String, CaseIterable, Identifiable {
+    case solid
+    case dotted
+    case dashed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .solid:  return "Solid"
+        case .dotted: return "Dotted"
+        case .dashed: return "Dashed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .solid:  return "pencil.tip"
+        case .dotted: return "ellipsis"
+        case .dashed: return "line.3.horizontal"
+        }
+    }
+}
+
 struct DrawingPenConfiguration: Equatable {
     static let smoothingRange: ClosedRange<Double> = 0...1
-    static let `default` = DrawingPenConfiguration(smoothing: 0.35)
+    static let patternWidthRange: ClosedRange<Double> = 1...24
+    static let dashLengthRange: ClosedRange<Double> = 2...40
+    static let patternGapRange: ClosedRange<Double> = 1...40
+    static let `default` = DrawingPenConfiguration(
+        smoothing: 0.35,
+        lineStyle: .solid,
+        patternWidth: 4,
+        dashLength: 12,
+        patternGap: 8
+    )
 
     var smoothing: Double
+    var lineStyle: DrawingStrokeStyle
+    var patternWidth: Double
+    var dashLength: Double
+    var patternGap: Double
+
+    init(
+        smoothing: Double,
+        lineStyle: DrawingStrokeStyle = .solid,
+        patternWidth: Double = 4,
+        dashLength: Double = 12,
+        patternGap: Double = 8
+    ) {
+        self.smoothing = smoothing
+        self.lineStyle = lineStyle
+        self.patternWidth = patternWidth
+        self.dashLength = dashLength
+        self.patternGap = patternGap
+    }
 
     var normalized: DrawingPenConfiguration {
         DrawingPenConfiguration(
-            smoothing: Self.smoothingRange.clamped(smoothing)
+            smoothing: Self.smoothingRange.clamped(smoothing),
+            lineStyle: lineStyle,
+            patternWidth: Self.patternWidthRange.clamped(patternWidth),
+            dashLength: Self.dashLengthRange.clamped(dashLength),
+            patternGap: Self.patternGapRange.clamped(patternGap)
         )
+    }
+
+    var usesPattern: Bool { lineStyle != .solid }
+
+    fileprivate var visiblePatternLength: CGFloat {
+        switch lineStyle {
+        case .solid:
+            return .greatestFiniteMagnitude
+        case .dotted:
+            // A very short path with round ink caps renders as a clean dot.
+            return CGFloat(min(max(patternWidth * 0.15, 0.65), 1.5))
+        case .dashed:
+            return CGFloat(dashLength)
+        }
+    }
+
+    fileprivate var hiddenPatternLength: CGFloat {
+        // PencilKit's rounded caps extend by roughly half the stroke width on
+        // either side. Including the width keeps the visible blank gap close
+        // to the value selected by the user.
+        CGFloat(patternGap + patternWidth)
     }
 }
 
@@ -84,28 +160,32 @@ enum DrawingStrokeProcessor {
         let config = configuration.normalized
         guard startIndex >= 0,
               startIndex < drawing.strokes.count,
-              config.smoothing > 0.001
+              config.smoothing > 0.001 || config.usesPattern
         else { return nil }
 
-        var strokes = drawing.strokes
+        let sourceStrokes = drawing.strokes
+        var strokes = Array(sourceStrokes[..<startIndex])
         var changed = false
 
-        for index in startIndex..<strokes.count {
-            let original = strokes[index]
+        for index in startIndex..<sourceStrokes.count {
+            let original = sourceStrokes[index]
             guard original.mask == nil,
-                  let processed = processedStroke(original, configuration: config)
-            else { continue }
-            strokes[index] = processed
+                  let processed = processedStrokes(original, configuration: config)
+            else {
+                strokes.append(original)
+                continue
+            }
+            strokes.append(contentsOf: processed)
             changed = true
         }
 
         return changed ? PKDrawing(strokes: strokes) : nil
     }
 
-    private static func processedStroke(
+    private static func processedStrokes(
         _ stroke: PKStroke,
         configuration: DrawingPenConfiguration
-    ) -> PKStroke? {
+    ) -> [PKStroke]? {
         let source = Array(stroke.path)
         guard source.count >= 2 else { return nil }
 
@@ -132,13 +212,185 @@ enum DrawingStrokeProcessor {
             controlPoints: controls,
             creationDate: stroke.path.creationDate
         )
-        return PKStroke(
+        let smoothedStroke = PKStroke(
             ink: stroke.ink,
             path: path,
             transform: stroke.transform,
             mask: stroke.mask,
             randomSeed: stroke.randomSeed
         )
+
+        return applyingLineStyle(
+            to: smoothedStroke,
+            configuration: configuration
+        )
+    }
+
+    static func applyingLineStyle(
+        to stroke: PKStroke,
+        configuration: DrawingPenConfiguration
+    ) -> [PKStroke] {
+        let config = configuration.normalized
+        guard config.usesPattern else { return [stroke] }
+
+        let source = Array(stroke.path).map { point in
+            PKStrokePoint(
+                location: point.location,
+                timeOffset: point.timeOffset,
+                size: CGSize(width: config.patternWidth, height: config.patternWidth),
+                opacity: point.opacity,
+                force: point.force,
+                azimuth: point.azimuth,
+                altitude: point.altitude,
+                secondaryScale: point.secondaryScale
+            )
+        }
+        guard source.count >= 2 else { return [stroke] }
+
+        let visibleLength = config.visiblePatternLength
+        let hiddenLength = config.hiddenPatternLength
+        let epsilon: CGFloat = 0.0001
+        var isVisible = true
+        var remainingInPhase = visibleLength
+        var visiblePoints = [source[0]]
+        var segments: [[PKStrokePoint]] = []
+
+        for index in 1..<source.count {
+            var cursor = source[index - 1]
+            let destination = source[index]
+            var remainingInSourceSegment = pointDistance(
+                cursor.location,
+                destination.location
+            )
+
+            guard remainingInSourceSegment > epsilon else { continue }
+
+            while remainingInSourceSegment > epsilon {
+                let step = min(remainingInSourceSegment, remainingInPhase)
+                let fraction = step / remainingInSourceSegment
+                let boundary = interpolatedPoint(
+                    from: cursor,
+                    to: destination,
+                    fraction: fraction
+                )
+
+                if isVisible {
+                    if visiblePoints.isEmpty {
+                        visiblePoints.append(cursor)
+                    }
+                    appendIfDistinct(boundary, to: &visiblePoints)
+                }
+
+                cursor = boundary
+                remainingInSourceSegment -= step
+                remainingInPhase -= step
+
+                if remainingInPhase <= epsilon {
+                    if isVisible, visiblePoints.count >= 2 {
+                        segments.append(visiblePoints)
+                    }
+                    isVisible.toggle()
+                    remainingInPhase = isVisible ? visibleLength : hiddenLength
+                    visiblePoints = isVisible ? [boundary] : []
+                }
+            }
+        }
+
+        if isVisible, visiblePoints.count >= 2 {
+            segments.append(visiblePoints)
+        }
+
+        guard !segments.isEmpty else {
+            // Preserve taps and extremely short marks as a single dot.
+            return [strokeWithUniformWidth(stroke, width: config.patternWidth)]
+        }
+
+        return segments.enumerated().map { index, points in
+            PKStroke(
+                ink: stroke.ink,
+                path: PKStrokePath(
+                    controlPoints: points,
+                    creationDate: stroke.path.creationDate
+                ),
+                transform: stroke.transform,
+                mask: stroke.mask,
+                randomSeed: stroke.randomSeed &+ UInt32(index)
+            )
+        }
+    }
+
+    private static func strokeWithUniformWidth(
+        _ stroke: PKStroke,
+        width: Double
+    ) -> PKStroke {
+        let points = stroke.path.map { point in
+            PKStrokePoint(
+                location: point.location,
+                timeOffset: point.timeOffset,
+                size: CGSize(width: width, height: width),
+                opacity: point.opacity,
+                force: point.force,
+                azimuth: point.azimuth,
+                altitude: point.altitude,
+                secondaryScale: point.secondaryScale
+            )
+        }
+        return PKStroke(
+            ink: stroke.ink,
+            path: PKStrokePath(
+                controlPoints: points,
+                creationDate: stroke.path.creationDate
+            ),
+            transform: stroke.transform,
+            mask: stroke.mask,
+            randomSeed: stroke.randomSeed
+        )
+    }
+
+    private static func interpolatedPoint(
+        from start: PKStrokePoint,
+        to end: PKStrokePoint,
+        fraction: CGFloat
+    ) -> PKStrokePoint {
+        let amount = min(max(fraction, 0), 1)
+        return PKStrokePoint(
+            location: CGPoint(
+                x: interpolate(start.location.x, end.location.x, amount),
+                y: interpolate(start.location.y, end.location.y, amount)
+            ),
+            timeOffset: interpolate(start.timeOffset, end.timeOffset, Double(amount)),
+            size: CGSize(
+                width: interpolate(start.size.width, end.size.width, amount),
+                height: interpolate(start.size.height, end.size.height, amount)
+            ),
+            opacity: interpolate(start.opacity, end.opacity, amount),
+            force: interpolate(start.force, end.force, amount),
+            azimuth: interpolate(start.azimuth, end.azimuth, amount),
+            altitude: interpolate(start.altitude, end.altitude, amount),
+            secondaryScale: interpolate(start.secondaryScale, end.secondaryScale, amount)
+        )
+    }
+
+    private static func appendIfDistinct(
+        _ point: PKStrokePoint,
+        to points: inout [PKStrokePoint]
+    ) {
+        guard points.last.map({
+            pointDistance($0.location, point.location) > 0.0001
+        }) ?? true else { return }
+        points.append(point)
+    }
+
+    private static func pointDistance(_ first: CGPoint, _ second: CGPoint) -> CGFloat {
+        hypot(second.x - first.x, second.y - first.y)
+    }
+
+    private static func interpolate<T: BinaryFloatingPoint>(
+        _ start: T,
+        _ end: T,
+        _ amount: T
+    ) -> T {
+        start + (end - start) * amount
     }
 
     static func smoothedLocations(_ points: [CGPoint], amount: CGFloat) -> [CGPoint] {
@@ -186,6 +438,7 @@ enum DrawingStrokeProcessor {
 struct DrawingAssistanceButton: View {
     var compact = true
     var arrowEdge: Edge = .top
+    @EnvironmentObject private var settings: AppSettings
     @State private var isPresented = false
 
     var body: some View {
@@ -193,27 +446,27 @@ struct DrawingAssistanceButton: View {
             isPresented = true
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: "waveform.path")
+                Image(systemName: settings.drawingStrokeStyle.icon)
                     .font(.system(size: 13, weight: .semibold))
                 if !compact {
-                    Text("Assist")
+                    Text(settings.drawingStrokeStyle == .solid ? "Pen" : settings.drawingStrokeStyle.title)
                         .font(.caption.weight(.semibold))
                 }
             }
-            .foregroundStyle(Color.primary)
+            .foregroundStyle(settings.drawingStrokeStyle == .solid ? Color.primary : Color.orange)
             .padding(.horizontal, compact ? 10 : 12)
             .padding(.vertical, 9)
             .background(.regularMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Stroke Assist")
-        .accessibilityHint("Adjust stroke smoothing.")
+        .accessibilityLabel("Pen style: \(settings.drawingStrokeStyle.title)")
+        .accessibilityHint("Adjust line style, pattern width, spacing, and stroke smoothing.")
         .popover(isPresented: $isPresented, arrowEdge: arrowEdge) {
             DrawingAssistancePanel()
-                .frame(idealWidth: 340)
+                .frame(idealWidth: 360)
                 #if os(iOS)
                 .presentationCompactAdaptation(.sheet)
-                .presentationDetents([.height(330)])
+                .presentationDetents([.height(560), .large])
                 #endif
         }
     }
@@ -224,57 +477,161 @@ private struct DrawingAssistancePanel: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Stroke Assist")
-                        .font(.headline)
-                    Text("Applies when each new stroke finishes")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pen & Stroke")
+                            .font(.headline)
+                        Text("Applies when each new stroke finishes")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Done") { dismiss() }
+                        .font(.subheadline.weight(.semibold))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Line style", systemImage: "pencil.tip")
+                        .font(.subheadline.weight(.semibold))
+
+                    Picker(
+                        "Line style",
+                        selection: Binding(
+                            get: { settings.drawingStrokeStyle },
+                            set: { settings.drawingStrokeStyle = $0 }
+                        )
+                    ) {
+                        ForEach(DrawingStrokeStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    DrawingLineStylePreview(configuration: settings.drawingPenConfiguration)
+
+                    Text(lineStyleExplanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Button("Done") { dismiss() }
-                    .font(.subheadline.weight(.semibold))
-            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Smoothing", systemImage: "waveform.path")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text(smoothingLabel)
-                        .font(.caption.monospacedDigit().weight(.semibold))
+                if settings.drawingStrokeStyle != .solid {
+                    Divider()
+
+                    configurationSlider(
+                        title: "Pattern width",
+                        icon: "lineweight",
+                        value: Binding(
+                            get: { settings.drawingPatternWidth },
+                            set: { settings.drawingPatternWidth = $0 }
+                        ),
+                        range: DrawingPenConfiguration.patternWidthRange,
+                        step: 0.5,
+                        displayValue: "\(settings.drawingPatternWidth.formatted(.number.precision(.fractionLength(0...1)))) pt"
+                    )
+
+                    if settings.drawingStrokeStyle == .dashed {
+                        configurationSlider(
+                            title: "Dash length",
+                            icon: "arrow.left.and.right",
+                            value: Binding(
+                                get: { settings.drawingDashLength },
+                                set: { settings.drawingDashLength = $0 }
+                            ),
+                            range: DrawingPenConfiguration.dashLengthRange,
+                            step: 1,
+                            displayValue: "\(Int(settings.drawingDashLength.rounded())) pt"
+                        )
+                    }
+
+                    configurationSlider(
+                        title: "Gap",
+                        icon: "arrow.left.and.right",
+                        value: Binding(
+                            get: { settings.drawingPatternGap },
+                            set: { settings.drawingPatternGap = $0 }
+                        ),
+                        range: DrawingPenConfiguration.patternGapRange,
+                        step: 1,
+                        displayValue: "\(Int(settings.drawingPatternGap.rounded())) pt"
+                    )
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label("Smoothing", systemImage: "waveform.path")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(smoothingLabel)
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { settings.drawingPenSmoothing },
+                            set: { settings.drawingPenSmoothing = $0 }
+                        ),
+                        in: DrawingPenConfiguration.smoothingRange,
+                        step: 0.05
+                    )
+                    .accessibilityLabel("Stroke smoothing")
+                    .accessibilityValue(smoothingLabel)
+
+                    Text("Higher values remove more hand jitter.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Slider(
-                    value: Binding(
-                        get: { settings.drawingPenSmoothing },
-                        set: { settings.drawingPenSmoothing = $0 }
-                    ),
-                    in: DrawingPenConfiguration.smoothingRange,
-                    step: 0.05
-                )
-                .accessibilityLabel("Stroke smoothing")
-                .accessibilityValue(smoothingLabel)
-
-                Text("Higher values remove more hand jitter.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Label {
+                    Text("Solid lines keep the width from Apple’s drawing toolbar. Patterned lines use the width above.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "applepencil.and.scribble")
+                        .foregroundStyle(.secondary)
+                }
             }
-
-            Label {
-                Text("For a pressure-free, uniform-width line, select Monoline in Apple’s drawing toolbar.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } icon: {
-                Image(systemName: "applepencil.and.scribble")
-                    .foregroundStyle(.secondary)
-            }
+            .padding(20)
         }
-        .padding(20)
         .frame(minWidth: 300)
+    }
+
+    private func configurationSlider(
+        title: String,
+        icon: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        displayValue: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(title, systemImage: icon)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(displayValue)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: value, in: range, step: step)
+                .accessibilityLabel(title)
+                .accessibilityValue(displayValue)
+        }
+    }
+
+    private var lineStyleExplanation: String {
+        switch settings.drawingStrokeStyle {
+        case .solid:
+            return "Draw a continuous line using the selected Apple pen."
+        case .dotted:
+            return "Draw evenly spaced dots; Gap controls when the next dot appears."
+        case .dashed:
+            return "Alternate short lines and blank spaces using your chosen Dash length and Gap."
+        }
     }
 
     private var smoothingLabel: String {
@@ -283,6 +640,48 @@ private struct DrawingAssistancePanel: View {
         case ..<0.3:  return "Light"
         case ..<0.65: return "Medium"
         default:      return "Strong"
+        }
+    }
+}
+
+private struct DrawingLineStylePreview: View {
+    let configuration: DrawingPenConfiguration
+
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 14, y: size.height / 2))
+            path.addLine(to: CGPoint(x: max(14, size.width - 14), y: size.height / 2))
+            context.stroke(
+                path,
+                with: .color(.primary),
+                style: StrokeStyle(
+                    lineWidth: previewWidth,
+                    lineCap: .round,
+                    dash: dashPattern
+                )
+            )
+        }
+        .frame(height: 42)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityHidden(true)
+    }
+
+    private var previewWidth: CGFloat {
+        configuration.lineStyle == .solid
+            ? 4
+            : CGFloat(configuration.normalized.patternWidth)
+    }
+
+    private var dashPattern: [CGFloat] {
+        let config = configuration.normalized
+        switch config.lineStyle {
+        case .solid:
+            return []
+        case .dotted:
+            return [config.visiblePatternLength, config.hiddenPatternLength]
+        case .dashed:
+            return [CGFloat(config.dashLength), config.hiddenPatternLength]
         }
     }
 }

@@ -47,7 +47,7 @@ final class PencilShapeSnapController {
         guard isEnabled,
               !isApplyingSnap,
               canvas.tool is PKInkingTool,
-              let snapped = PencilShapeSnapper.snappedDrawing(from: canvas.drawing),
+              let snapped = drawingBySnappingLatestStroke(in: canvas.drawing),
               snapped.dataRepresentation() != canvas.drawing.dataRepresentation()
         else {
             pendingSnap = nil
@@ -64,6 +64,11 @@ final class PencilShapeSnapController {
 
     var isApplyingProgrammaticSnap: Bool {
         isApplyingSnap
+    }
+
+    func drawingBySnappingLatestStroke(in drawing: PKDrawing) -> PKDrawing? {
+        guard isEnabled else { return nil }
+        return PencilShapeSnapper.snappedDrawing(from: drawing)
     }
 }
 
@@ -798,6 +803,9 @@ private struct LivePKCanvas: UIViewRepresentable {
             colorRevision: colorRevision
         )
         context.coordinator.penConfiguration = penConfiguration
+        if penConfiguration.usesPattern {
+            context.coordinator.cancelPendingShapeSnap()
+        }
         context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
         if !canvas.isFirstResponder {
             DispatchQueue.main.async { canvas.becomeFirstResponder() }
@@ -845,6 +853,10 @@ private struct LivePKCanvas: UIViewRepresentable {
             guard !isApplyingStrokeProcessing else { return }
             onDrawingChanged(canvas.drawing)
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
+            guard !penConfiguration.usesPattern else {
+                shapeSnapController.cancelPendingSnap()
+                return
+            }
             shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
                 self?.onDrawingChanged(snappedDrawing)
             }
@@ -859,25 +871,48 @@ private struct LivePKCanvas: UIViewRepresentable {
         func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
             let baseline = strokeBaseline
             strokeBaseline = nil
+            if penConfiguration.usesPattern {
+                shapeSnapController.cancelPendingSnap()
+            }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvas] in
                 guard let self, let canvas else { return }
+                let drawingBeforeProcessing = canvas.drawing
+                let drawingForProcessing: PKDrawing
+                if self.penConfiguration.usesPattern,
+                   let snappedDrawing = self.shapeSnapController
+                    .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
+                    drawingForProcessing = snappedDrawing
+                } else {
+                    drawingForProcessing = drawingBeforeProcessing
+                }
+
+                var finalDrawing = drawingForProcessing
                 if let baseline,
                    let processed = DrawingStrokeProcessor.processingLatestStroke(
-                       in: canvas.drawing,
+                       in: drawingForProcessing,
                        since: baseline,
                        configuration: self.penConfiguration
                    ) {
+                    finalDrawing = processed
+                }
+
+                if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
                     self.isApplyingStrokeProcessing = true
-                    canvas.drawing = processed
-                    self.onDrawingChanged(processed)
+                    canvas.drawing = finalDrawing
+                    self.onDrawingChanged(finalDrawing)
                     self.isApplyingStrokeProcessing = false
                 }
 
+                guard !self.penConfiguration.usesPattern else { return }
                 self.shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
                     self?.onDrawingChanged(snappedDrawing)
                 }
             }
+        }
+
+        func cancelPendingShapeSnap() {
+            shapeSnapController.cancelPendingSnap()
         }
 
         func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
@@ -1051,8 +1086,22 @@ struct MacDrawingToolState: Equatable {
     var width: CGFloat = 4
     var opacity: CGFloat = 1
     var smoothing: CGFloat = 0.35
+    var lineStyle: DrawingStrokeStyle = .solid
+    var patternWidth: CGFloat = 4
+    var dashLength: CGFloat = 12
+    var patternGap: CGFloat = 8
     var eraserWidth: CGFloat = 24
     var isErasing = false
+
+    var penConfiguration: DrawingPenConfiguration {
+        DrawingPenConfiguration(
+            smoothing: Double(smoothing),
+            lineStyle: lineStyle,
+            patternWidth: Double(patternWidth),
+            dashLength: Double(dashLength),
+            patternGap: Double(patternGap)
+        )
+    }
 
     func strokeNSColor(colorScheme: ColorScheme) -> NSColor {
         if usesSampledColor, let sampledColor {
@@ -1240,19 +1289,35 @@ struct MacDrawingEditor: View {
     private func syncDrawingAssistance(_ configuration: DrawingPenConfiguration) {
         let normalized = configuration.normalized
         tool.smoothing = CGFloat(normalized.smoothing)
+        tool.lineStyle = normalized.lineStyle
+        tool.patternWidth = CGFloat(normalized.patternWidth)
+        tool.dashLength = CGFloat(normalized.dashLength)
+        tool.patternGap = CGFloat(normalized.patternGap)
     }
 }
 
 private struct MacDrawingToolControls: View {
     @Binding var tool: MacDrawingToolState
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.colorScheme) private var colorScheme
 
     private var activeWidth: Binding<Double> {
         Binding(
-            get: { Double(tool.isErasing ? tool.eraserWidth : tool.width) },
+            get: {
+                if tool.isErasing {
+                    return Double(tool.eraserWidth)
+                }
+                if tool.lineStyle != .solid {
+                    return settings.drawingPatternWidth
+                }
+                return Double(tool.width)
+            },
             set: { value in
                 if tool.isErasing {
                     tool.eraserWidth = CGFloat(value)
+                } else if tool.lineStyle != .solid {
+                    settings.drawingPatternWidth = value
+                    tool.patternWidth = CGFloat(settings.drawingPatternWidth)
                 } else {
                     tool.width = CGFloat(value)
                 }
@@ -1261,7 +1326,13 @@ private struct MacDrawingToolControls: View {
     }
 
     private var widthRange: ClosedRange<Double> {
-        tool.isErasing ? 8...60 : 1...28
+        if tool.isErasing {
+            return 8...60
+        }
+        if tool.lineStyle != .solid {
+            return DrawingPenConfiguration.patternWidthRange
+        }
+        return 1...28
     }
 
     var body: some View {
@@ -1502,7 +1573,11 @@ private struct MacFreehandPKDrawingView: View {
             mask: nil
         )
 
-        return PKDrawing(strokes: committedDrawing.strokes + [stroke])
+        let renderedStrokes = DrawingStrokeProcessor.applyingLineStyle(
+            to: stroke,
+            configuration: tool.penConfiguration
+        )
+        return PKDrawing(strokes: committedDrawing.strokes + renderedStrokes)
     }
 
     private func drawingByErasingCurrentPath() -> PKDrawing {

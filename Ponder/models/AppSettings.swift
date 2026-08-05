@@ -435,6 +435,10 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
     @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
     @AppStorage("ponder.drawingPenSmoothing") private var drawingPenSmoothingRaw: Double = DrawingPenConfiguration.default.smoothing
+    @AppStorage("ponder.drawingStrokeStyle") private var drawingStrokeStyleRaw: String = DrawingPenConfiguration.default.lineStyle.rawValue
+    @AppStorage("ponder.drawingPatternWidth") private var drawingPatternWidthRaw: Double = DrawingPenConfiguration.default.patternWidth
+    @AppStorage("ponder.drawingDashLength") private var drawingDashLengthRaw: Double = DrawingPenConfiguration.default.dashLength
+    @AppStorage("ponder.drawingPatternGap") private var drawingPatternGapRaw: Double = DrawingPenConfiguration.default.patternGap
     @AppStorage("ponder.handwritingToTextEnabled") private var handwritingToTextEnabledRaw: Bool = true
     @AppStorage("ponder.handwritingToTextStrictness") private var handwritingToTextStrictnessRaw: Double = 0.35
     @AppStorage("ponder.handwritingTextGrouping") private var handwritingTextGroupingRaw: String = HandwritingTextGrouping.automatic.rawValue
@@ -626,8 +630,46 @@ class AppSettings: ObservableObject {
         }
     }
 
+    var drawingStrokeStyle: DrawingStrokeStyle {
+        get { DrawingStrokeStyle(rawValue: drawingStrokeStyleRaw) ?? .solid }
+        set {
+            drawingStrokeStyleRaw = newValue.rawValue
+            objectWillChange.send()
+        }
+    }
+
+    var drawingPatternWidth: Double {
+        get { DrawingPenConfiguration.patternWidthRange.clamped(drawingPatternWidthRaw) }
+        set {
+            drawingPatternWidthRaw = DrawingPenConfiguration.patternWidthRange.clamped(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var drawingDashLength: Double {
+        get { DrawingPenConfiguration.dashLengthRange.clamped(drawingDashLengthRaw) }
+        set {
+            drawingDashLengthRaw = DrawingPenConfiguration.dashLengthRange.clamped(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var drawingPatternGap: Double {
+        get { DrawingPenConfiguration.patternGapRange.clamped(drawingPatternGapRaw) }
+        set {
+            drawingPatternGapRaw = DrawingPenConfiguration.patternGapRange.clamped(newValue)
+            objectWillChange.send()
+        }
+    }
+
     var drawingPenConfiguration: DrawingPenConfiguration {
-        DrawingPenConfiguration(smoothing: drawingPenSmoothing)
+        DrawingPenConfiguration(
+            smoothing: drawingPenSmoothing,
+            lineStyle: drawingStrokeStyle,
+            patternWidth: drawingPatternWidth,
+            dashLength: drawingDashLength,
+            patternGap: drawingPatternGap
+        )
     }
 
     var handwritingToTextEnabled: Bool {

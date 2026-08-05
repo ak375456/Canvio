@@ -519,6 +519,9 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             colorRevision: colorRevision
         )
         context.coordinator.penConfiguration = penConfiguration
+        if penConfiguration.usesPattern {
+            context.coordinator.cancelPendingShapeSnap()
+        }
         context.coordinator.onDrawingCommitted = onDrawingCommitted
         // Restore first-responder status only if lost (e.g. after clear).
         if !canvas.isFirstResponder {
@@ -607,6 +610,10 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             drawing = canvasView.drawing
             scheduleCommit(canvasView.drawing)
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
+            guard !penConfiguration.usesPattern else {
+                shapeSnapController.cancelPendingSnap()
+                return
+            }
             shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
                 self?.rememberCanvasDrawing(snappedDrawing)
                 self?.drawing = snappedDrawing
@@ -623,23 +630,42 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             let baseline = strokeBaseline
             strokeBaseline = nil
+            if penConfiguration.usesPattern {
+                shapeSnapController.cancelPendingSnap()
+            }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvasView] in
                 guard let self, let canvasView else { return }
+                let drawingBeforeProcessing = canvasView.drawing
+                let drawingForProcessing: PKDrawing
+                if self.penConfiguration.usesPattern,
+                   let snappedDrawing = self.shapeSnapController
+                    .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
+                    drawingForProcessing = snappedDrawing
+                } else {
+                    drawingForProcessing = drawingBeforeProcessing
+                }
+
+                var finalDrawing = drawingForProcessing
                 if let baseline,
                    let processed = DrawingStrokeProcessor.processingLatestStroke(
-                       in: canvasView.drawing,
+                       in: drawingForProcessing,
                        since: baseline,
                        configuration: self.penConfiguration
                    ) {
+                    finalDrawing = processed
+                }
+
+                if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
                     self.isApplyingStrokeProcessing = true
-                    canvasView.drawing = processed
-                    self.rememberCanvasDrawing(processed)
-                    self.drawing = processed
+                    canvasView.drawing = finalDrawing
+                    self.rememberCanvasDrawing(finalDrawing)
+                    self.drawing = finalDrawing
                     self.isApplyingStrokeProcessing = false
                 }
 
-                self.commitDrawing(canvasView.drawing)
+                self.commitDrawing(finalDrawing)
+                guard !self.penConfiguration.usesPattern else { return }
                 self.shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
                     self?.rememberCanvasDrawing(snappedDrawing)
                     self?.drawing = snappedDrawing
@@ -651,6 +677,10 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         func cancelPendingCommit() {
             pendingCommit?.cancel()
             pendingCommit = nil
+        }
+
+        func cancelPendingShapeSnap() {
+            shapeSnapController.cancelPendingSnap()
         }
 
         private func scheduleCommit(_ drawing: PKDrawing) {
