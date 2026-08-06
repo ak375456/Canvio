@@ -25,11 +25,26 @@ struct SettingsSheet: View {
     @State private var isImportingFont = false
     @State private var fontImportError: String?
     @State private var resumeFontImportAfterPaywall = false
+    @State private var canvasPatternSpacingDraft: Double
+    @State private var canvasPatternSpacingDraftStyle: GridStyle
+    @State private var canvasDotSizeDraft: Double
+    @State private var isEditingCanvasPatternSpacing = false
+    @State private var isEditingCanvasDotSize = false
     #if os(macOS)
     @State private var showMacShortcuts = true
     #endif
     @ObservedObject private var customFontStore = CustomFontStore.shared
     private let communityURL = URL(string: "https://www.reddit.com/r/Canvio/")!
+
+    init(settings: AppSettings) {
+        self._settings = ObservedObject(wrappedValue: settings)
+        let style = settings.effectiveGridStyle
+        self._canvasPatternSpacingDraft = State(
+            initialValue: settings.canvasPatternSpacing(for: style)
+        )
+        self._canvasPatternSpacingDraftStyle = State(initialValue: style)
+        self._canvasDotSizeDraft = State(initialValue: settings.canvasDotSize)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1429,6 +1444,9 @@ struct SettingsSheet: View {
                         isProFeature: style != .dotted
                     ) {
                         if style == .dotted || pro.isPro {
+                            canvasPatternSpacingDraftStyle = style
+                            canvasPatternSpacingDraft = settings.canvasPatternSpacing(for: style)
+                            canvasDotSizeDraft = settings.canvasDotSize
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 settings.gridStyle = style
                             }
@@ -1444,7 +1462,48 @@ struct SettingsSheet: View {
                 canvasPatternSpacingControl(for: style)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
+
+            if settings.effectiveGridStyle == .dotted {
+                canvasDotSizeControl
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if supportsAlternatingBands {
+                settingsToggleCard(
+                    icon: "rectangle.split.3x1",
+                    title: "Alternating fill",
+                    subtitle: alternatingBandsDescription,
+                    isOn: Binding(
+                        get: { settings.canvasAlternatingBandsEnabled },
+                        set: { settings.canvasAlternatingBandsEnabled = $0 }
+                    )
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
+        .onChange(of: settings.effectiveGridStyle) { _, style in
+            guard !isEditingCanvasPatternSpacing else { return }
+            canvasPatternSpacingDraftStyle = style
+            canvasPatternSpacingDraft = settings.canvasPatternSpacing(for: style)
+            if !isEditingCanvasDotSize {
+                canvasDotSizeDraft = settings.canvasDotSize
+            }
+        }
+    }
+
+    private var supportsAlternatingBands: Bool {
+        switch settings.effectiveGridStyle {
+        case .squares, .horizontal, .vertical:
+            return true
+        case .dotted, .none:
+            return false
+        }
+    }
+
+    private var alternatingBandsDescription: String {
+        settings.effectiveGridStyle == .horizontal
+            ? "Shade every other row. Turn this off for one uniform background color."
+            : "Shade every other column. Turn this off for one uniform background color."
     }
 
     private var adjustableCanvasPatternStyle: GridStyle? {
@@ -1457,7 +1516,9 @@ struct SettingsSheet: View {
     }
 
     private func canvasPatternSpacingControl(for style: GridStyle) -> some View {
-        let spacing = settings.canvasPatternSpacing(for: style)
+        let spacing = canvasPatternSpacingDraftStyle == style
+            ? canvasPatternSpacingDraft
+            : settings.canvasPatternSpacing(for: style)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label(canvasPatternSpacingTitle(for: style), systemImage: canvasPatternSpacingIcon(for: style))
@@ -1474,7 +1535,13 @@ struct SettingsSheet: View {
 
             HStack(spacing: 10) {
                 Button {
-                    settings.setCanvasPatternSpacing(spacing - 2, for: style)
+                    let nextValue = max(
+                        AppSettings.canvasPatternSpacingRange.lowerBound,
+                        spacing - 2
+                    )
+                    canvasPatternSpacingDraftStyle = style
+                    canvasPatternSpacingDraft = nextValue
+                    settings.setCanvasPatternSpacing(nextValue, for: style)
                 } label: {
                     Image(systemName: "minus")
                         .frame(width: 28, height: 28)
@@ -1484,15 +1551,30 @@ struct SettingsSheet: View {
                 .accessibilityLabel("Decrease \(canvasPatternSpacingTitle(for: style).lowercased())")
 
                 Slider(
-                    value: canvasPatternSpacingBinding(for: style),
+                    value: $canvasPatternSpacingDraft,
                     in: AppSettings.canvasPatternSpacingRange,
-                    step: 2
+                    step: 2,
+                    onEditingChanged: { isEditing in
+                        isEditingCanvasPatternSpacing = isEditing
+                        if !isEditing {
+                            settings.setCanvasPatternSpacing(
+                                canvasPatternSpacingDraft,
+                                for: style
+                            )
+                        }
+                    }
                 )
                 .accessibilityLabel(canvasPatternSpacingTitle(for: style))
                 .accessibilityValue("\(Int(spacing.rounded())) canvas units")
 
                 Button {
-                    settings.setCanvasPatternSpacing(spacing + 2, for: style)
+                    let nextValue = min(
+                        AppSettings.canvasPatternSpacingRange.upperBound,
+                        spacing + 2
+                    )
+                    canvasPatternSpacingDraftStyle = style
+                    canvasPatternSpacingDraft = nextValue
+                    settings.setCanvasPatternSpacing(nextValue, for: style)
                 } label: {
                     Image(systemName: "plus")
                         .frame(width: 28, height: 28)
@@ -1510,11 +1592,74 @@ struct SettingsSheet: View {
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func canvasPatternSpacingBinding(for style: GridStyle) -> Binding<Double> {
-        Binding(
-            get: { settings.canvasPatternSpacing(for: style) },
-            set: { settings.setCanvasPatternSpacing($0, for: style) }
-        )
+    private var canvasDotSizeControl: some View {
+        let dotSize = canvasDotSizeDraft
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Dot size", systemImage: "circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(dotSize.formatted(.number.precision(.fractionLength(0...1))))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 30, alignment: .trailing)
+                Text("pt")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    let nextValue = max(
+                        AppSettings.canvasDotSizeRange.lowerBound,
+                        dotSize - 0.5
+                    )
+                    canvasDotSizeDraft = nextValue
+                    settings.canvasDotSize = nextValue
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .disabled(dotSize <= AppSettings.canvasDotSizeRange.lowerBound)
+                .accessibilityLabel("Decrease dot size")
+
+                Slider(
+                    value: $canvasDotSizeDraft,
+                    in: AppSettings.canvasDotSizeRange,
+                    step: 0.5,
+                    onEditingChanged: { isEditing in
+                        isEditingCanvasDotSize = isEditing
+                        if !isEditing {
+                            settings.canvasDotSize = canvasDotSizeDraft
+                        }
+                    }
+                )
+                .accessibilityLabel("Dot size")
+                .accessibilityValue("\(dotSize.formatted(.number.precision(.fractionLength(0...1)))) points")
+
+                Button {
+                    let nextValue = min(
+                        AppSettings.canvasDotSizeRange.upperBound,
+                        dotSize + 0.5
+                    )
+                    canvasDotSizeDraft = nextValue
+                    settings.canvasDotSize = nextValue
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .disabled(dotSize >= AppSettings.canvasDotSizeRange.upperBound)
+                .accessibilityLabel("Increase dot size")
+            }
+
+            Text("Changes the diameter of dots on all canvases.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func canvasPatternSpacingTitle(for style: GridStyle) -> String {

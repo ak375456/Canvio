@@ -499,6 +499,8 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         context.coordinator.markAppliedColorRevision(colorRevision)
         picker.setVisible(true, forFirstResponder: canvas)
         context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.attachPatternGesture(to: canvas)
         let coordinator = context.coordinator
         DispatchQueue.main.async { [weak canvas] in
             guard let canvas else { return }
@@ -518,10 +520,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             selectedColor: selectedColor,
             colorRevision: colorRevision
         )
-        context.coordinator.penConfiguration = penConfiguration
-        if penConfiguration.usesPattern {
-            context.coordinator.cancelPendingShapeSnap()
-        }
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
         context.coordinator.onDrawingCommitted = onDrawingCommitted
         // Restore first-responder status only if lost (e.g. after clear).
         if !canvas.isFirstResponder {
@@ -532,6 +531,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
         coordinator.cancelPendingCommit()
+        coordinator.detachPatternPreview(from: canvas)
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
         coordinator.toolPicker?.removeObserver(coordinator)
         coordinator.toolPicker?.removeObserver(canvas)
@@ -571,6 +571,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         private var lastCommittedDrawingData = Data()
         private var pendingCommit: DispatchWorkItem?
         private let shapeSnapController = PencilShapeSnapController()
+        private let patternPreview = LivePatternStrokePreview()
 
         init(drawing: Binding<PKDrawing>,
              selectedColor: Binding<UIColor>,
@@ -604,6 +605,12 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingExternalDrawing, !isApplyingStrokeProcessing else { return }
+            if penConfiguration.usesPattern, patternPreview.isActive {
+                cancelPendingCommit()
+                shapeSnapController.cancelPendingSnap()
+                patternPreview.update(with: canvasView.drawing, on: canvasView)
+                return
+            }
             let nextData = canvasView.drawing.dataRepresentation()
             guard nextData != currentCanvasDrawingData else { return }
             currentCanvasDrawingData = nextData
@@ -625,6 +632,10 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             strokeBaseline = canvasView.tool is PKInkingTool
                 ? DrawingStrokeBaseline(drawing: canvasView.drawing)
                 : nil
+            patternPreview.beginGestureStroke(
+                at: canvasView.drawingGestureRecognizer.location(in: canvasView),
+                on: canvasView
+            )
         }
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
@@ -651,7 +662,8 @@ private struct FullCanvasDrawView: UIViewRepresentable {
                    let processed = DrawingStrokeProcessor.processingLatestStroke(
                        in: drawingForProcessing,
                        since: baseline,
-                       configuration: self.penConfiguration
+                       configuration: self.penConfiguration,
+                       replacementInk: self.patternPreview.replacementInk
                    ) {
                     finalDrawing = processed
                 }
@@ -664,6 +676,9 @@ private struct FullCanvasDrawView: UIViewRepresentable {
                     self.isApplyingStrokeProcessing = false
                 }
 
+                DispatchQueue.main.async { [weak self] in
+                    self?.patternPreview.clear()
+                }
                 self.commitDrawing(finalDrawing)
                 guard !self.penConfiguration.usesPattern else { return }
                 self.shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
@@ -681,6 +696,51 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         func cancelPendingShapeSnap() {
             shapeSnapController.cancelPendingSnap()
+        }
+
+        func updatePenConfiguration(
+            _ configuration: DrawingPenConfiguration,
+            on canvas: PKCanvasView
+        ) {
+            penConfiguration = configuration
+            patternPreview.synchronize(configuration: configuration, on: canvas)
+            if configuration.usesPattern {
+                cancelPendingShapeSnap()
+            }
+        }
+
+        func attachPatternGesture(to canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.addTarget(
+                self,
+                action: #selector(handlePatternDrawingGesture(_:))
+            )
+        }
+
+        func detachPatternPreview(from canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.removeTarget(
+                self,
+                action: #selector(handlePatternDrawingGesture(_:))
+            )
+            patternPreview.detach()
+        }
+
+        @objc private func handlePatternDrawingGesture(_ recognizer: UIGestureRecognizer) {
+            guard let canvasView else { return }
+            let location = recognizer.location(in: canvasView)
+            switch recognizer.state {
+            case .began:
+                patternPreview.beginGestureStroke(at: location, on: canvasView)
+            case .changed:
+                patternPreview.continueGestureStroke(at: location, on: canvasView)
+            case .ended:
+                patternPreview.endGestureStroke(cancelled: false)
+            case .cancelled, .failed:
+                patternPreview.endGestureStroke(cancelled: true)
+            case .possible:
+                break
+            @unknown default:
+                patternPreview.endGestureStroke(cancelled: true)
+            }
         }
 
         private func scheduleCommit(_ drawing: PKDrawing) {
@@ -760,6 +820,10 @@ private struct FullCanvasDrawView: UIViewRepresentable {
                 if let selectedInkingTool {
                     self.isHighlighterToolSelected = selectedInkingTool.inkType == .marker
                 }
+                self.patternPreview.selectedInkingToolDidChange(
+                    selectedInkingTool,
+                    on: canvas
+                )
             }
         }
 
@@ -772,9 +836,11 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             let nextTool: PKInkingTool
 
             if let inkingTool = canvas.tool as? PKInkingTool {
+                let alpha = patternPreview.visibleInkAlpha
+                    ?? inkingTool.color.cgColor.alpha
                 nextTool = PKInkingTool(
                     inkingTool.inkType,
-                    color: color.withAlphaComponent(inkingTool.color.cgColor.alpha),
+                    color: color.withAlphaComponent(alpha),
                     width: inkingTool.width
                 )
             } else if let pickerTool = pickerInkingTool(from: toolPicker) {
@@ -792,6 +858,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             isApplyingPickedColor = true
             canvas.tool = nextTool
             isApplyingPickedColor = false
+            patternPreview.selectedInkingToolDidChange(nextTool, on: canvas)
             if nextTool.inkType == .marker {
                 isHighlighterToolSelected = true
             }

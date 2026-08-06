@@ -785,6 +785,8 @@ private struct LivePKCanvas: UIViewRepresentable {
         context.coordinator.markAppliedColorRevision(colorRevision)
         toolPicker.setVisible(true, forFirstResponder: canvas)
         context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.attachPatternGesture(to: canvas)
         DispatchQueue.main.async { canvas.becomeFirstResponder() }
 
         return canvas
@@ -802,10 +804,7 @@ private struct LivePKCanvas: UIViewRepresentable {
             selectedColor: selectedColor,
             colorRevision: colorRevision
         )
-        context.coordinator.penConfiguration = penConfiguration
-        if penConfiguration.usesPattern {
-            context.coordinator.cancelPendingShapeSnap()
-        }
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
         context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
         if !canvas.isFirstResponder {
             DispatchQueue.main.async { canvas.becomeFirstResponder() }
@@ -813,6 +812,7 @@ private struct LivePKCanvas: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        coordinator.detachPatternPreview(from: canvas)
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
         coordinator.toolPicker?.removeObserver(coordinator)
         coordinator.toolPicker?.removeObserver(canvas)
@@ -837,6 +837,7 @@ private struct LivePKCanvas: UIViewRepresentable {
         private var isApplyingStrokeProcessing = false
         private var strokeBaseline: DrawingStrokeBaseline?
         private let shapeSnapController = PencilShapeSnapController()
+        private let patternPreview = LivePatternStrokePreview()
 
         init(selectedColor: Binding<UIColor>,
              penConfiguration: DrawingPenConfiguration,
@@ -851,6 +852,11 @@ private struct LivePKCanvas: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvas: PKCanvasView) {
             guard !isApplyingStrokeProcessing else { return }
+            if penConfiguration.usesPattern, patternPreview.isActive {
+                shapeSnapController.cancelPendingSnap()
+                patternPreview.update(with: canvas.drawing, on: canvas)
+                return
+            }
             onDrawingChanged(canvas.drawing)
             guard !shapeSnapController.isApplyingProgrammaticSnap else { return }
             guard !penConfiguration.usesPattern else {
@@ -866,6 +872,10 @@ private struct LivePKCanvas: UIViewRepresentable {
             strokeBaseline = canvas.tool is PKInkingTool
                 ? DrawingStrokeBaseline(drawing: canvas.drawing)
                 : nil
+            patternPreview.beginGestureStroke(
+                at: canvas.drawingGestureRecognizer.location(in: canvas),
+                on: canvas
+            )
         }
 
         func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
@@ -892,7 +902,8 @@ private struct LivePKCanvas: UIViewRepresentable {
                    let processed = DrawingStrokeProcessor.processingLatestStroke(
                        in: drawingForProcessing,
                        since: baseline,
-                       configuration: self.penConfiguration
+                       configuration: self.penConfiguration,
+                       replacementInk: self.patternPreview.replacementInk
                    ) {
                     finalDrawing = processed
                 }
@@ -904,6 +915,9 @@ private struct LivePKCanvas: UIViewRepresentable {
                     self.isApplyingStrokeProcessing = false
                 }
 
+                DispatchQueue.main.async { [weak self] in
+                    self?.patternPreview.clear()
+                }
                 guard !self.penConfiguration.usesPattern else { return }
                 self.shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
                     self?.onDrawingChanged(snappedDrawing)
@@ -913,6 +927,51 @@ private struct LivePKCanvas: UIViewRepresentable {
 
         func cancelPendingShapeSnap() {
             shapeSnapController.cancelPendingSnap()
+        }
+
+        func updatePenConfiguration(
+            _ configuration: DrawingPenConfiguration,
+            on canvas: PKCanvasView
+        ) {
+            penConfiguration = configuration
+            patternPreview.synchronize(configuration: configuration, on: canvas)
+            if configuration.usesPattern {
+                cancelPendingShapeSnap()
+            }
+        }
+
+        func attachPatternGesture(to canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.addTarget(
+                self,
+                action: #selector(handlePatternDrawingGesture(_:))
+            )
+        }
+
+        func detachPatternPreview(from canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.removeTarget(
+                self,
+                action: #selector(handlePatternDrawingGesture(_:))
+            )
+            patternPreview.detach()
+        }
+
+        @objc private func handlePatternDrawingGesture(_ recognizer: UIGestureRecognizer) {
+            guard let canvas else { return }
+            let location = recognizer.location(in: canvas)
+            switch recognizer.state {
+            case .began:
+                patternPreview.beginGestureStroke(at: location, on: canvas)
+            case .changed:
+                patternPreview.continueGestureStroke(at: location, on: canvas)
+            case .ended:
+                patternPreview.endGestureStroke(cancelled: false)
+            case .cancelled, .failed:
+                patternPreview.endGestureStroke(cancelled: true)
+            case .possible:
+                break
+            @unknown default:
+                patternPreview.endGestureStroke(cancelled: true)
+            }
         }
 
         func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
@@ -965,6 +1024,10 @@ private struct LivePKCanvas: UIViewRepresentable {
                 } else {
                     self.syncSelectedColorFromCurrentInkingTool(canvas)
                 }
+                self.patternPreview.selectedInkingToolDidChange(
+                    selectedInkingTool,
+                    on: canvas
+                )
             }
         }
 
@@ -977,9 +1040,11 @@ private struct LivePKCanvas: UIViewRepresentable {
             let nextTool: PKInkingTool
 
             if let inkingTool = canvas.tool as? PKInkingTool {
+                let alpha = patternPreview.visibleInkAlpha
+                    ?? inkingTool.color.cgColor.alpha
                 nextTool = PKInkingTool(
                     inkingTool.inkType,
-                    color: color.withAlphaComponent(inkingTool.color.cgColor.alpha),
+                    color: color.withAlphaComponent(alpha),
                     width: inkingTool.width
                 )
             } else if let pickerTool = pickerInkingTool(from: toolPicker) {
@@ -997,6 +1062,7 @@ private struct LivePKCanvas: UIViewRepresentable {
             isApplyingPickedColor = true
             canvas.tool = nextTool
             isApplyingPickedColor = false
+            patternPreview.selectedInkingToolDidChange(nextTool, on: canvas)
         }
 
         private func currentInkingTool(for canvas: PKCanvasView) -> PKInkingTool? {

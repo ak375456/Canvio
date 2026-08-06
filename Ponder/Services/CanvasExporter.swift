@@ -38,6 +38,8 @@ final class CanvasExporter {
         colorScheme:   ColorScheme = .light,
         gridStyle:     GridStyle = .dotted,
         gridSpacing:   CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
+        dotSize:       CGFloat = CGFloat(AppSettings.defaultCanvasDotSize),
+        showsAlternatingBands: Bool = true,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -84,6 +86,8 @@ final class CanvasExporter {
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
             gridSpacing:   gridSpacing,
+            dotSize:       dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -120,6 +124,8 @@ final class CanvasExporter {
         colorScheme:   ColorScheme = .light,
         gridStyle:     GridStyle = .dotted,
         gridSpacing:   CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
+        dotSize:       CGFloat = CGFloat(AppSettings.defaultCanvasDotSize),
+        showsAlternatingBands: Bool = true,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -166,6 +172,8 @@ final class CanvasExporter {
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
             gridSpacing:   gridSpacing,
+            dotSize:       dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -196,6 +204,8 @@ final class CanvasExporter {
         colorScheme:   ColorScheme,
         gridStyle:     GridStyle,
         gridSpacing:   CGFloat,
+        dotSize:       CGFloat,
+        showsAlternatingBands: Bool,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
         customBackgroundColors: CanvasCustomBackgroundColors,
@@ -216,6 +226,8 @@ final class CanvasExporter {
             colorScheme:   colorScheme,
             gridStyle:     gridStyle,
             gridSpacing:   gridSpacing,
+            dotSize:       dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -529,6 +541,8 @@ struct CanvasExportView: View {
     let colorScheme:   ColorScheme
     let gridStyle:     GridStyle
     let gridSpacing:   CGFloat
+    let dotSize:       CGFloat
+    let showsAlternatingBands: Bool
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
     let customBackgroundColors: CanvasCustomBackgroundColors
@@ -556,6 +570,8 @@ struct CanvasExportView: View {
         colorScheme:   ColorScheme,
         gridStyle:     GridStyle,
         gridSpacing:   CGFloat,
+        dotSize:       CGFloat,
+        showsAlternatingBands: Bool,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
         customBackgroundColors: CanvasCustomBackgroundColors,
@@ -582,6 +598,8 @@ struct CanvasExportView: View {
         self.colorScheme   = colorScheme
         self.gridStyle     = gridStyle
         self.gridSpacing   = gridSpacing
+        self.dotSize       = dotSize
+        self.showsAlternatingBands = showsAlternatingBands
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
         self.customBackgroundColors = customBackgroundColors
@@ -674,6 +692,8 @@ struct CanvasExportView: View {
                 scale: 1,
                 style: gridStyle,
                 spacing: gridSpacing,
+                dotSize: dotSize,
+                showsAlternatingBands: showsAlternatingBands,
                 backgroundMode: backgroundMode,
                 backgroundPalette: backgroundPalette,
                 customBackgroundColors: customBackgroundColors

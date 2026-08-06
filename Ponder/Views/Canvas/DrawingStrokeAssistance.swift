@@ -2,6 +2,10 @@ import Foundation
 import CoreGraphics
 import PencilKit
 import SwiftUI
+#if os(iOS)
+import QuartzCore
+import UIKit
+#endif
 
 enum DrawingStrokeStyle: String, CaseIterable, Identifiable {
     case solid
@@ -128,7 +132,8 @@ enum DrawingStrokeProcessor {
     static func processingLatestStroke(
         in drawing: PKDrawing,
         since baseline: DrawingStrokeBaseline,
-        configuration: DrawingPenConfiguration
+        configuration: DrawingPenConfiguration,
+        replacementInk: PKInk? = nil
     ) -> PKDrawing? {
         guard !drawing.strokes.isEmpty else { return nil }
 
@@ -148,14 +153,16 @@ enum DrawingStrokeProcessor {
         return processingNewStrokes(
             in: drawing,
             startingAt: startIndex,
-            configuration: configuration
+            configuration: configuration,
+            replacementInk: replacementInk
         )
     }
 
     static func processingNewStrokes(
         in drawing: PKDrawing,
         startingAt startIndex: Int,
-        configuration: DrawingPenConfiguration
+        configuration: DrawingPenConfiguration,
+        replacementInk: PKInk? = nil
     ) -> PKDrawing? {
         let config = configuration.normalized
         guard startIndex >= 0,
@@ -170,7 +177,11 @@ enum DrawingStrokeProcessor {
         for index in startIndex..<sourceStrokes.count {
             let original = sourceStrokes[index]
             guard original.mask == nil,
-                  let processed = processedStrokes(original, configuration: config)
+                  let processed = processedStrokes(
+                    original,
+                    configuration: config,
+                    replacementInk: replacementInk
+                  )
             else {
                 strokes.append(original)
                 continue
@@ -184,10 +195,20 @@ enum DrawingStrokeProcessor {
 
     private static func processedStrokes(
         _ stroke: PKStroke,
-        configuration: DrawingPenConfiguration
+        configuration: DrawingPenConfiguration,
+        replacementInk: PKInk?
     ) -> [PKStroke]? {
         let source = Array(stroke.path)
-        guard source.count >= 2 else { return nil }
+        guard source.count >= 2 else {
+            guard configuration.usesPattern else { return nil }
+            return [
+                strokeWithUniformWidth(
+                    stroke,
+                    width: configuration.patternWidth,
+                    replacementInk: replacementInk
+                )
+            ]
+        }
 
         let locations = smoothedLocations(
             source.map(\.location),
@@ -213,7 +234,7 @@ enum DrawingStrokeProcessor {
             creationDate: stroke.path.creationDate
         )
         let smoothedStroke = PKStroke(
-            ink: stroke.ink,
+            ink: replacementInk ?? stroke.ink,
             path: path,
             transform: stroke.transform,
             mask: stroke.mask,
@@ -321,7 +342,8 @@ enum DrawingStrokeProcessor {
 
     private static func strokeWithUniformWidth(
         _ stroke: PKStroke,
-        width: Double
+        width: Double,
+        replacementInk: PKInk? = nil
     ) -> PKStroke {
         let points = stroke.path.map { point in
             PKStrokePoint(
@@ -336,7 +358,7 @@ enum DrawingStrokeProcessor {
             )
         }
         return PKStroke(
-            ink: stroke.ink,
+            ink: replacementInk ?? stroke.ink,
             path: PKStrokePath(
                 controlPoints: points,
                 creationDate: stroke.path.creationDate
@@ -435,6 +457,236 @@ enum DrawingStrokeProcessor {
     }
 }
 
+#if os(iOS)
+@MainActor
+final class LivePatternStrokePreview {
+    private let previewLayer = CAShapeLayer()
+    private var configuration = DrawingPenConfiguration.default
+    private var visibleTool: PKInkingTool?
+    private var gesturePoints: [CGPoint] = []
+    private var isTrackingGesture = false
+
+    private(set) var replacementInk: PKInk?
+    private(set) var isActive = false
+
+    var visibleInkAlpha: CGFloat? {
+        visibleTool?.color.cgColor.alpha
+    }
+
+    func synchronize(
+        configuration: DrawingPenConfiguration,
+        on canvas: PKCanvasView
+    ) {
+        self.configuration = configuration.normalized
+
+        guard self.configuration.usesPattern else {
+            restoreVisibleToolIfNeeded(on: canvas)
+            reset()
+            return
+        }
+
+        guard let currentTool = canvas.tool as? PKInkingTool else {
+            reset()
+            return
+        }
+
+        if isActive, currentTool.color.cgColor.alpha <= 0.01 {
+            return
+        }
+
+        activate(using: currentTool, on: canvas)
+    }
+
+    func selectedInkingToolDidChange(
+        _ tool: PKInkingTool?,
+        on canvas: PKCanvasView
+    ) {
+        guard let tool else {
+            reset()
+            return
+        }
+
+        guard configuration.usesPattern else {
+            reset()
+            return
+        }
+
+        activate(using: tool, on: canvas)
+    }
+
+    func update(with drawing: PKDrawing, on canvas: PKCanvasView) {
+        guard !isTrackingGesture,
+              isActive,
+              configuration.usesPattern,
+              let stroke = drawing.strokes.last,
+              visibleTool != nil
+        else {
+            return
+        }
+
+        var points = stroke.path.map(\.location)
+        guard !points.isEmpty else {
+            clear()
+            return
+        }
+
+        let zoom = max(canvas.zoomScale, 0.0001)
+        points = points.map { point -> CGPoint in
+            let drawingPoint = point.applying(stroke.transform)
+            return CGPoint(
+                x: drawingPoint.x * zoom - canvas.contentOffset.x,
+                y: drawingPoint.y * zoom - canvas.contentOffset.y
+            )
+        }
+        render(points: points, zoom: zoom, on: canvas)
+    }
+
+    func beginGestureStroke(at location: CGPoint, on canvas: PKCanvasView) {
+        guard isActive, configuration.usesPattern, visibleTool != nil else {
+            return
+        }
+        clear()
+        isTrackingGesture = true
+        gesturePoints = [viewportPoint(from: location, on: canvas)]
+        renderGesturePoints(on: canvas)
+    }
+
+    func continueGestureStroke(at location: CGPoint, on canvas: PKCanvasView) {
+        guard isTrackingGesture else { return }
+        let point = viewportPoint(from: location, on: canvas)
+        if let previous = gesturePoints.last,
+           hypot(point.x - previous.x, point.y - previous.y) < 0.25 {
+            return
+        }
+        gesturePoints.append(point)
+        renderGesturePoints(on: canvas)
+    }
+
+    func endGestureStroke(cancelled: Bool) {
+        isTrackingGesture = false
+        if cancelled {
+            clear()
+        }
+    }
+
+    private func renderGesturePoints(on canvas: PKCanvasView) {
+        render(
+            points: gesturePoints,
+            zoom: max(canvas.zoomScale, 0.0001),
+            on: canvas
+        )
+    }
+
+    private func render(
+        points: [CGPoint],
+        zoom: CGFloat,
+        on canvas: PKCanvasView
+    ) {
+        guard let visibleTool, !points.isEmpty else {
+            clear()
+            return
+        }
+
+        let renderedPoints = DrawingStrokeProcessor.smoothedLocations(
+            points,
+            amount: CGFloat(configuration.smoothing)
+        )
+
+        let path = CGMutablePath()
+        if let first = renderedPoints.first {
+            path.move(to: first)
+            if renderedPoints.count == 1 {
+                path.addLine(to: CGPoint(x: first.x + 0.01, y: first.y))
+            } else {
+                for point in renderedPoints.dropFirst() {
+                    path.addLine(to: point)
+                }
+            }
+        }
+
+        installLayerIfNeeded(on: canvas)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // PKCanvasView is a UIScrollView. Matching its full bounds (including
+        // the content offset) keeps this viewport-space path aligned while the
+        // user is zoomed or panned.
+        previewLayer.frame = canvas.bounds
+        previewLayer.path = path
+        previewLayer.strokeColor = visibleTool.color.cgColor
+        previewLayer.lineWidth = CGFloat(configuration.patternWidth) * zoom
+        previewLayer.lineDashPattern = [
+            NSNumber(value: Double(configuration.visiblePatternLength * zoom)),
+            NSNumber(value: Double(configuration.hiddenPatternLength * zoom))
+        ]
+        previewLayer.isHidden = false
+        CATransaction.commit()
+    }
+
+    private func viewportPoint(from location: CGPoint, on canvas: PKCanvasView) -> CGPoint {
+        CGPoint(
+            x: location.x - canvas.bounds.minX,
+            y: location.y - canvas.bounds.minY
+        )
+    }
+
+    func clear() {
+        gesturePoints.removeAll(keepingCapacity: true)
+        isTrackingGesture = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        previewLayer.path = nil
+        previewLayer.isHidden = true
+        CATransaction.commit()
+    }
+
+    func detach() {
+        clear()
+        previewLayer.removeFromSuperlayer()
+        reset()
+    }
+
+    private func activate(using tool: PKInkingTool, on canvas: PKCanvasView) {
+        visibleTool = tool
+        replacementInk = PKInk(tool.inkType, color: tool.color)
+        isActive = true
+
+        let hiddenColor = tool.color.withAlphaComponent(0.001)
+        canvas.tool = PKInkingTool(
+            tool.inkType,
+            color: hiddenColor,
+            width: tool.width
+        )
+    }
+
+    private func restoreVisibleToolIfNeeded(on canvas: PKCanvasView) {
+        guard isActive,
+              let visibleTool,
+              let currentTool = canvas.tool as? PKInkingTool,
+              currentTool.color.cgColor.alpha <= 0.01
+        else { return }
+        canvas.tool = visibleTool
+    }
+
+    private func installLayerIfNeeded(on canvas: PKCanvasView) {
+        guard previewLayer.superlayer == nil else { return }
+        previewLayer.fillColor = UIColor.clear.cgColor
+        previewLayer.lineCap = .round
+        previewLayer.lineJoin = .round
+        previewLayer.contentsScale = UIScreen.main.scale
+        previewLayer.zPosition = 10_000
+        previewLayer.isHidden = true
+        canvas.layer.addSublayer(previewLayer)
+    }
+
+    private func reset() {
+        clear()
+        visibleTool = nil
+        replacementInk = nil
+        isActive = false
+    }
+}
+#endif
+
 struct DrawingAssistanceButton: View {
     var compact = true
     var arrowEdge: Edge = .top
@@ -475,6 +727,10 @@ struct DrawingAssistanceButton: View {
 private struct DrawingAssistancePanel: View {
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
+    @State private var draftPatternWidth = DrawingPenConfiguration.default.patternWidth
+    @State private var draftDashLength = DrawingPenConfiguration.default.dashLength
+    @State private var draftPatternGap = DrawingPenConfiguration.default.patternGap
+    @State private var draftSmoothing = DrawingPenConfiguration.default.smoothing
 
     var body: some View {
         ScrollView {
@@ -488,7 +744,10 @@ private struct DrawingAssistancePanel: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        commitDrafts()
+                        dismiss()
+                    }
                         .font(.subheadline.weight(.semibold))
                 }
 
@@ -509,7 +768,7 @@ private struct DrawingAssistancePanel: View {
                     }
                     .pickerStyle(.segmented)
 
-                    DrawingLineStylePreview(configuration: settings.drawingPenConfiguration)
+                    DrawingLineStylePreview(configuration: draftConfiguration)
 
                     Text(lineStyleExplanation)
                         .font(.caption)
@@ -522,39 +781,33 @@ private struct DrawingAssistancePanel: View {
                     configurationSlider(
                         title: "Pattern width",
                         icon: "lineweight",
-                        value: Binding(
-                            get: { settings.drawingPatternWidth },
-                            set: { settings.drawingPatternWidth = $0 }
-                        ),
+                        value: $draftPatternWidth,
                         range: DrawingPenConfiguration.patternWidthRange,
                         step: 0.5,
-                        displayValue: "\(settings.drawingPatternWidth.formatted(.number.precision(.fractionLength(0...1)))) pt"
+                        displayValue: "\(draftPatternWidth.formatted(.number.precision(.fractionLength(0...1)))) pt",
+                        onEditingChanged: commitWhenEditingEnds
                     )
 
                     if settings.drawingStrokeStyle == .dashed {
                         configurationSlider(
                             title: "Dash length",
                             icon: "arrow.left.and.right",
-                            value: Binding(
-                                get: { settings.drawingDashLength },
-                                set: { settings.drawingDashLength = $0 }
-                            ),
+                            value: $draftDashLength,
                             range: DrawingPenConfiguration.dashLengthRange,
                             step: 1,
-                            displayValue: "\(Int(settings.drawingDashLength.rounded())) pt"
+                            displayValue: "\(Int(draftDashLength.rounded())) pt",
+                            onEditingChanged: commitWhenEditingEnds
                         )
                     }
 
                     configurationSlider(
                         title: "Gap",
                         icon: "arrow.left.and.right",
-                        value: Binding(
-                            get: { settings.drawingPatternGap },
-                            set: { settings.drawingPatternGap = $0 }
-                        ),
+                        value: $draftPatternGap,
                         range: DrawingPenConfiguration.patternGapRange,
                         step: 1,
-                        displayValue: "\(Int(settings.drawingPatternGap.rounded())) pt"
+                        displayValue: "\(Int(draftPatternGap.rounded())) pt",
+                        onEditingChanged: commitWhenEditingEnds
                     )
                 }
 
@@ -571,12 +824,10 @@ private struct DrawingAssistancePanel: View {
                     }
 
                     Slider(
-                        value: Binding(
-                            get: { settings.drawingPenSmoothing },
-                            set: { settings.drawingPenSmoothing = $0 }
-                        ),
+                        value: $draftSmoothing,
                         in: DrawingPenConfiguration.smoothingRange,
-                        step: 0.05
+                        step: 0.05,
+                        onEditingChanged: commitWhenEditingEnds
                     )
                     .accessibilityLabel("Stroke smoothing")
                     .accessibilityValue(smoothingLabel)
@@ -598,6 +849,8 @@ private struct DrawingAssistancePanel: View {
             .padding(20)
         }
         .frame(minWidth: 300)
+        .onAppear(perform: syncDraftsFromSettings)
+        .onDisappear(perform: commitDrafts)
     }
 
     private func configurationSlider(
@@ -606,7 +859,8 @@ private struct DrawingAssistancePanel: View {
         value: Binding<Double>,
         range: ClosedRange<Double>,
         step: Double,
-        displayValue: String
+        displayValue: String,
+        onEditingChanged: @escaping (Bool) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -617,7 +871,12 @@ private struct DrawingAssistancePanel: View {
                     .font(.caption.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            Slider(value: value, in: range, step: step)
+            Slider(
+                value: value,
+                in: range,
+                step: step,
+                onEditingChanged: onEditingChanged
+            )
                 .accessibilityLabel(title)
                 .accessibilityValue(displayValue)
         }
@@ -635,12 +894,40 @@ private struct DrawingAssistancePanel: View {
     }
 
     private var smoothingLabel: String {
-        switch settings.drawingPenSmoothing {
+        switch draftSmoothing {
         case ..<0.05: return "Off"
         case ..<0.3:  return "Light"
         case ..<0.65: return "Medium"
         default:      return "Strong"
         }
+    }
+
+    private var draftConfiguration: DrawingPenConfiguration {
+        DrawingPenConfiguration(
+            smoothing: draftSmoothing,
+            lineStyle: settings.drawingStrokeStyle,
+            patternWidth: draftPatternWidth,
+            dashLength: draftDashLength,
+            patternGap: draftPatternGap
+        )
+    }
+
+    private func syncDraftsFromSettings() {
+        let configuration = settings.drawingPenConfiguration
+        draftPatternWidth = configuration.patternWidth
+        draftDashLength = configuration.dashLength
+        draftPatternGap = configuration.patternGap
+        draftSmoothing = configuration.smoothing
+    }
+
+    private func commitWhenEditingEnds(_ isEditing: Bool) {
+        if !isEditing {
+            commitDrafts()
+        }
+    }
+
+    private func commitDrafts() {
+        settings.drawingPenConfiguration = draftConfiguration
     }
 }
 

@@ -10,6 +10,8 @@ struct CanvasGridView: View {
     let scale: CGFloat
     let style: GridStyle
     let spacing: CGFloat
+    let dotSize: CGFloat
+    let showsAlternatingBands: Bool
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
     let customBackgroundColors: CanvasCustomBackgroundColors
@@ -21,6 +23,8 @@ struct CanvasGridView: View {
         scale: CGFloat,
         style: GridStyle,
         spacing: CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
+        dotSize: CGFloat = CGFloat(AppSettings.defaultCanvasDotSize),
+        showsAlternatingBands: Bool = true,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults
@@ -29,6 +33,8 @@ struct CanvasGridView: View {
         self.scale = scale
         self.style = style
         self.spacing = spacing
+        self.dotSize = dotSize
+        self.showsAlternatingBands = showsAlternatingBands
         self.backgroundMode = backgroundMode
         self.backgroundPalette = backgroundPalette
         self.customBackgroundColors = customBackgroundColors
@@ -57,7 +63,9 @@ struct CanvasGridView: View {
         let stepX = max(1, resolvedSpacing * scale)
         let stepY = max(1, resolvedSpacing * scale)
 
-        drawAlternatingBands(context: context, size: size, stepX: stepX, stepY: stepY)
+        if showsAlternatingBands {
+            drawAlternatingBands(context: context, size: size, stepX: stepX, stepY: stepY)
+        }
         drawGrid(context: context, size: size, stepX: stepX, stepY: stepY)
     }
 
@@ -72,6 +80,7 @@ struct CanvasGridView: View {
             drawDots(context: context, size: size,
                      stepX: stepX, stepY: stepY,
                      offsetX: offsetX, offsetY: offsetY,
+                     dotSize: max(0.5, dotSize),
                      color: appearance.dot)
         case .squares:
             drawLines(context: context, size: size,
@@ -154,8 +163,8 @@ struct CanvasGridView: View {
     private func drawDots(context: GraphicsContext, size: CGSize,
                           stepX: CGFloat, stepY: CGFloat,
                           offsetX: CGFloat, offsetY: CGFloat,
+                          dotSize: CGFloat,
                           color: Color) {
-        let dotSize: CGFloat = 1.5
         var x = offsetX
         while x < size.width {
             var y = offsetY

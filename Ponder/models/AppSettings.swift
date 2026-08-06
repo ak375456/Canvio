@@ -413,8 +413,10 @@ enum CanvasBackgroundPalette: String, CaseIterable, Identifiable {
 
 @MainActor
 class AppSettings: ObservableObject {
-    static let canvasPatternSpacingRange: ClosedRange<Double> = 16...96
-    static let defaultCanvasPatternSpacing: Double = 30
+    nonisolated static let canvasPatternSpacingRange: ClosedRange<Double> = 16...96
+    nonisolated static let defaultCanvasPatternSpacing: Double = 30
+    nonisolated static let canvasDotSizeRange: ClosedRange<Double> = 1...8
+    nonisolated static let defaultCanvasDotSize: Double = 1.5
 
     @AppStorage("ponder.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("ponder.toolbarPosition") private var toolbarPositionRaw: String = ToolbarPosition.bottom.rawValue
@@ -427,6 +429,8 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.gridSquareSize") private var gridSquareSizeRaw: Double = AppSettings.defaultCanvasPatternSpacing
     @AppStorage("ponder.horizontalLineHeight") private var horizontalLineHeightRaw: Double = AppSettings.defaultCanvasPatternSpacing
     @AppStorage("ponder.verticalColumnWidth") private var verticalColumnWidthRaw: Double = AppSettings.defaultCanvasPatternSpacing
+    @AppStorage("ponder.canvasDotSize") private var canvasDotSizeRaw: Double = AppSettings.defaultCanvasDotSize
+    @AppStorage("ponder.canvasAlternatingBandsEnabled") private var canvasAlternatingBandsEnabledRaw: Bool = true
     @AppStorage("ponder.canvasBackgroundMode") private var canvasBackgroundModeRaw: String = CanvasBackgroundMode.adaptive.rawValue
     @AppStorage("ponder.canvasBackgroundPalette") private var canvasBackgroundPaletteRaw: String = CanvasBackgroundPalette.neutral.rawValue
     @AppStorage("ponder.customCanvasBackgroundLightHex") private var customCanvasBackgroundLightHexRaw: String = CanvasCustomBackgroundColors.defaults.lightHex
@@ -530,6 +534,30 @@ class AppSettings: ObservableObject {
         get { clampedCanvasPatternSpacing(verticalColumnWidthRaw) }
         set {
             verticalColumnWidthRaw = clampedCanvasPatternSpacing(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var canvasDotSize: Double {
+        get {
+            min(
+                Self.canvasDotSizeRange.upperBound,
+                max(Self.canvasDotSizeRange.lowerBound, canvasDotSizeRaw)
+            )
+        }
+        set {
+            canvasDotSizeRaw = min(
+                Self.canvasDotSizeRange.upperBound,
+                max(Self.canvasDotSizeRange.lowerBound, newValue)
+            )
+            objectWillChange.send()
+        }
+    }
+
+    var canvasAlternatingBandsEnabled: Bool {
+        get { canvasAlternatingBandsEnabledRaw }
+        set {
+            canvasAlternatingBandsEnabledRaw = newValue
             objectWillChange.send()
         }
     }
@@ -663,13 +691,25 @@ class AppSettings: ObservableObject {
     }
 
     var drawingPenConfiguration: DrawingPenConfiguration {
-        DrawingPenConfiguration(
-            smoothing: drawingPenSmoothing,
-            lineStyle: drawingStrokeStyle,
-            patternWidth: drawingPatternWidth,
-            dashLength: drawingDashLength,
-            patternGap: drawingPatternGap
-        )
+        get {
+            DrawingPenConfiguration(
+                smoothing: drawingPenSmoothing,
+                lineStyle: drawingStrokeStyle,
+                patternWidth: drawingPatternWidth,
+                dashLength: drawingDashLength,
+                patternGap: drawingPatternGap
+            )
+        }
+        set {
+            let configuration = newValue.normalized
+            guard configuration != drawingPenConfiguration else { return }
+            drawingPenSmoothingRaw = configuration.smoothing
+            drawingStrokeStyleRaw = configuration.lineStyle.rawValue
+            drawingPatternWidthRaw = configuration.patternWidth
+            drawingDashLengthRaw = configuration.dashLength
+            drawingPatternGapRaw = configuration.patternGap
+            objectWillChange.send()
+        }
     }
 
     var handwritingToTextEnabled: Bool {

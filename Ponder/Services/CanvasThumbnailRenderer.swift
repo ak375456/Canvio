@@ -26,6 +26,8 @@ enum CanvasThumbnailRenderer {
         drawings:      [DrawingElementModel],
         gridStyle:     GridStyle = .dotted,
         gridSpacing:   CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
+        dotSize:       CGFloat = CGFloat(AppSettings.defaultCanvasDotSize),
+        showsAlternatingBands: Bool = true,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -41,6 +43,8 @@ enum CanvasThumbnailRenderer {
             drawings: drawings,
             gridStyle: gridStyle,
             gridSpacing: gridSpacing,
+            dotSize: dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors
@@ -61,6 +65,8 @@ enum CanvasThumbnailRenderer {
         drawings: [DrawingElementModel],
         gridStyle: GridStyle = .dotted,
         gridSpacing: CGFloat = CGFloat(AppSettings.defaultCanvasPatternSpacing),
+        dotSize: CGFloat = CGFloat(AppSettings.defaultCanvasDotSize),
+        showsAlternatingBands: Bool = true,
         backgroundMode: CanvasBackgroundMode = .adaptive,
         backgroundPalette: CanvasBackgroundPalette = .neutral,
         customBackgroundColors: CanvasCustomBackgroundColors = .defaults,
@@ -76,6 +82,8 @@ enum CanvasThumbnailRenderer {
             drawings: drawings,
             gridStyle: gridStyle,
             gridSpacing: gridSpacing,
+            dotSize: dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors
@@ -96,6 +104,8 @@ enum CanvasThumbnailRenderer {
         drawings: [DrawingElementModel],
         gridStyle: GridStyle,
         gridSpacing: CGFloat,
+        dotSize: CGFloat,
+        showsAlternatingBands: Bool,
         backgroundMode: CanvasBackgroundMode,
         backgroundPalette: CanvasBackgroundPalette,
         customBackgroundColors: CanvasCustomBackgroundColors
@@ -110,6 +120,8 @@ enum CanvasThumbnailRenderer {
             drawings:     drawings,
             gridStyle:    gridStyle,
             gridSpacing:  gridSpacing,
+            dotSize:      dotSize,
+            showsAlternatingBands: showsAlternatingBands,
             backgroundMode: backgroundMode,
             backgroundPalette: backgroundPalette,
             customBackgroundColors: customBackgroundColors,
@@ -189,6 +201,8 @@ private struct CanvasThumbnailSnapshot: View {
     let drawings:     [DrawingElementModel]
     let gridStyle:     GridStyle
     let gridSpacing:   CGFloat
+    let dotSize:       CGFloat
+    let showsAlternatingBands: Bool
     let backgroundMode: CanvasBackgroundMode
     let backgroundPalette: CanvasBackgroundPalette
     let customBackgroundColors: CanvasCustomBackgroundColors
@@ -230,6 +244,8 @@ private struct CanvasThumbnailSnapshot: View {
                 scale: t.scale,
                 style: gridStyle,
                 spacing: gridSpacing,
+                dotSize: dotSize,
+                showsAlternatingBands: showsAlternatingBands,
                 backgroundMode: backgroundMode,
                 backgroundPalette: backgroundPalette,
                 customBackgroundColors: customBackgroundColors
