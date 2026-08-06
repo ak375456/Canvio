@@ -812,6 +812,7 @@ private struct LivePKCanvas: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        coordinator.flushPendingWork(on: canvas)
         coordinator.detachPatternPreview(from: canvas)
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
         coordinator.toolPicker?.removeObserver(coordinator)
@@ -835,7 +836,14 @@ private struct LivePKCanvas: UIViewRepresentable {
         private var lastPickerInkType: PKInkingTool.InkType?
         private var isApplyingPickedColor = false
         private var isApplyingStrokeProcessing = false
-        private var strokeBaseline: DrawingStrokeBaseline?
+        private var isUsingDrawingTool = false
+        private var hasUnpublishedDrawingChanges = false
+        private var pendingStrokeBaseline: DrawingStrokeBaseline?
+        private var pendingStrokeConfiguration: DrawingPenConfiguration?
+        private var pendingReplacementInk: PKInk?
+        private var pendingStrokeProcessing: DispatchWorkItem?
+        private var pendingDrawingPublication: DispatchWorkItem?
+        private var drawingAwaitingPublication: PKDrawing?
         private let shapeSnapController = PencilShapeSnapController()
         private let patternPreview = LivePatternStrokePreview()
 
@@ -852,9 +860,11 @@ private struct LivePKCanvas: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvas: PKCanvasView) {
             guard !isApplyingStrokeProcessing else { return }
-            if penConfiguration.usesPattern, patternPreview.isActive {
+            if hasUnpublishedDrawingChanges {
                 shapeSnapController.cancelPendingSnap()
-                patternPreview.update(with: canvas.drawing, on: canvas)
+                if penConfiguration.usesPattern, patternPreview.isActive {
+                    patternPreview.update(with: canvas.drawing, on: canvas)
+                }
                 return
             }
             onDrawingChanged(canvas.drawing)
@@ -869,9 +879,18 @@ private struct LivePKCanvas: UIViewRepresentable {
         }
 
         func canvasViewDidBeginUsingTool(_ canvas: PKCanvasView) {
-            strokeBaseline = canvas.tool is PKInkingTool
-                ? DrawingStrokeBaseline(drawing: canvas.drawing)
-                : nil
+            cancelScheduledStrokeProcessing()
+            cancelScheduledDrawingPublication()
+            shapeSnapController.cancelPendingSnap()
+            isUsingDrawingTool = true
+            if !hasUnpublishedDrawingChanges {
+                pendingStrokeBaseline = canvas.tool is PKInkingTool
+                    ? DrawingStrokeBaseline(drawing: canvas.drawing)
+                    : nil
+                pendingStrokeConfiguration = penConfiguration
+                pendingReplacementInk = patternPreview.replacementInk
+            }
+            hasUnpublishedDrawingChanges = true
             patternPreview.beginGestureStroke(
                 at: canvas.drawingGestureRecognizer.location(in: canvas),
                 on: canvas
@@ -879,50 +898,121 @@ private struct LivePKCanvas: UIViewRepresentable {
         }
 
         func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
-            let baseline = strokeBaseline
-            strokeBaseline = nil
+            isUsingDrawingTool = false
+            patternPreview.endGestureStroke(cancelled: false, on: canvas)
             if penConfiguration.usesPattern {
                 shapeSnapController.cancelPendingSnap()
             }
+            schedulePendingStrokeProcessing(on: canvas)
+        }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvas] in
-                guard let self, let canvas else { return }
-                let drawingBeforeProcessing = canvas.drawing
-                let drawingForProcessing: PKDrawing
-                if self.penConfiguration.usesPattern,
-                   let snappedDrawing = self.shapeSnapController
-                    .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
-                    drawingForProcessing = snappedDrawing
-                } else {
-                    drawingForProcessing = drawingBeforeProcessing
-                }
-
-                var finalDrawing = drawingForProcessing
-                if let baseline,
-                   let processed = DrawingStrokeProcessor.processingLatestStroke(
-                       in: drawingForProcessing,
-                       since: baseline,
-                       configuration: self.penConfiguration,
-                       replacementInk: self.patternPreview.replacementInk
-                   ) {
-                    finalDrawing = processed
-                }
-
-                if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
-                    self.isApplyingStrokeProcessing = true
-                    canvas.drawing = finalDrawing
-                    self.onDrawingChanged(finalDrawing)
-                    self.isApplyingStrokeProcessing = false
-                }
-
-                DispatchQueue.main.async { [weak self] in
-                    self?.patternPreview.clear()
-                }
-                guard !self.penConfiguration.usesPattern else { return }
-                self.shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
-                    self?.onDrawingChanged(snappedDrawing)
-                }
+        private func schedulePendingStrokeProcessing(on canvas: PKCanvasView) {
+            cancelScheduledStrokeProcessing()
+            let work = DispatchWorkItem { [weak self, weak canvas] in
+                guard let self, let canvas, !self.isUsingDrawingTool else { return }
+                self.pendingStrokeProcessing = nil
+                self.finishPendingStrokes(on: canvas)
             }
+            pendingStrokeProcessing = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + DrawingInputDebounce.strokeProcessing,
+                execute: work
+            )
+        }
+
+        private func finishPendingStrokes(on canvas: PKCanvasView) {
+            let baseline = pendingStrokeBaseline
+            let configuration = pendingStrokeConfiguration ?? penConfiguration
+            let replacementInk = pendingReplacementInk
+            pendingStrokeBaseline = nil
+            pendingStrokeConfiguration = nil
+            pendingReplacementInk = nil
+            hasUnpublishedDrawingChanges = false
+
+            let drawingBeforeProcessing = canvas.drawing
+            let drawingForProcessing: PKDrawing
+            if configuration.usesPattern,
+               let snappedDrawing = shapeSnapController
+                .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
+                drawingForProcessing = snappedDrawing
+            } else {
+                drawingForProcessing = drawingBeforeProcessing
+            }
+
+            var finalDrawing = drawingForProcessing
+            if let baseline,
+               let processed = DrawingStrokeProcessor.processingLatestStroke(
+                   in: drawingForProcessing,
+                   since: baseline,
+                   configuration: configuration,
+                   replacementInk: replacementInk
+               ) {
+                finalDrawing = processed
+            }
+
+            if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
+                isApplyingStrokeProcessing = true
+                canvas.drawing = finalDrawing
+                isApplyingStrokeProcessing = false
+            }
+
+            patternPreview.clear()
+            scheduleDrawingPublication(finalDrawing)
+            guard !configuration.usesPattern else { return }
+            shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
+                self?.scheduleDrawingPublication(snappedDrawing)
+            }
+        }
+
+        private func cancelScheduledStrokeProcessing() {
+            pendingStrokeProcessing?.cancel()
+            pendingStrokeProcessing = nil
+        }
+
+        private func cancelPendingStrokeProcessing() {
+            cancelScheduledStrokeProcessing()
+            pendingStrokeBaseline = nil
+            pendingStrokeConfiguration = nil
+            pendingReplacementInk = nil
+            hasUnpublishedDrawingChanges = false
+            isUsingDrawingTool = false
+        }
+
+        private func scheduleDrawingPublication(_ drawing: PKDrawing) {
+            cancelScheduledDrawingPublication()
+            drawingAwaitingPublication = drawing
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingDrawingPublication = nil
+                self.publishPendingDrawing()
+            }
+            pendingDrawingPublication = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + DrawingInputDebounce.drawingPublication,
+                execute: work
+            )
+        }
+
+        private func cancelScheduledDrawingPublication() {
+            pendingDrawingPublication?.cancel()
+            pendingDrawingPublication = nil
+        }
+
+        private func publishPendingDrawing() {
+            guard let drawing = drawingAwaitingPublication else { return }
+            drawingAwaitingPublication = nil
+            onDrawingChanged(drawing)
+        }
+
+        func flushPendingWork(on canvas: PKCanvasView) {
+            cancelScheduledStrokeProcessing()
+            if hasUnpublishedDrawingChanges, !isUsingDrawingTool {
+                finishPendingStrokes(on: canvas)
+            }
+            cancelPendingStrokeProcessing()
+            shapeSnapController.cancelPendingSnap()
+            cancelScheduledDrawingPublication()
+            publishPendingDrawing()
         }
 
         func cancelPendingShapeSnap() {
@@ -964,13 +1054,13 @@ private struct LivePKCanvas: UIViewRepresentable {
             case .changed:
                 patternPreview.continueGestureStroke(at: location, on: canvas)
             case .ended:
-                patternPreview.endGestureStroke(cancelled: false)
+                patternPreview.endGestureStroke(cancelled: false, on: canvas)
             case .cancelled, .failed:
-                patternPreview.endGestureStroke(cancelled: true)
+                patternPreview.endGestureStroke(cancelled: true, on: canvas)
             case .possible:
                 break
             @unknown default:
-                patternPreview.endGestureStroke(cancelled: true)
+                patternPreview.endGestureStroke(cancelled: true, on: canvas)
             }
         }
 

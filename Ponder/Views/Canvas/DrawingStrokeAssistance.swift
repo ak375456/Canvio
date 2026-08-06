@@ -96,6 +96,16 @@ struct DrawingPenConfiguration: Equatable {
     }
 }
 
+enum DrawingInputDebounce {
+    /// Keep all expensive PencilKit rewriting out of the gap between letters.
+    /// A new touch cancels this work and extends the same batch.
+    static let strokeProcessing: TimeInterval = 0.18
+
+    /// SwiftData persistence, undo snapshots, and sync are substantially more
+    /// expensive than rendering. Publish them only after the user has paused.
+    static let drawingPublication: TimeInterval = 0.8
+}
+
 extension ClosedRange where Bound == Double {
     func clamped(_ value: Double) -> Double {
         Swift.min(Swift.max(value, lowerBound), upperBound)
@@ -139,7 +149,20 @@ enum DrawingStrokeProcessor {
 
         let startIndex: Int
         if drawing.strokes.count > baseline.strokeCount {
-            startIndex = baseline.strokeCount
+            // If PencilKit had already inserted the first control point when
+            // the baseline was captured, that in-progress stroke sits at
+            // strokeCount - 1. Include it along with any later rapid strokes.
+            let possibleInProgressIndex = baseline.strokeCount - 1
+            if possibleInProgressIndex >= 0,
+               possibleInProgressIndex < drawing.strokes.count,
+               let baselineLastStroke = baseline.lastStroke,
+               DrawingStrokeSignature(
+                   drawing.strokes[possibleInProgressIndex]
+               ) != baselineLastStroke {
+                startIndex = possibleInProgressIndex
+            } else {
+                startIndex = baseline.strokeCount
+            }
         } else if let lastStroke = drawing.strokes.last,
                   DrawingStrokeSignature(lastStroke) != baseline.lastStroke {
             // PencilKit can publish an initial control point before it calls
@@ -463,6 +486,7 @@ final class LivePatternStrokePreview {
     private let previewLayer = CAShapeLayer()
     private var configuration = DrawingPenConfiguration.default
     private var visibleTool: PKInkingTool?
+    private var completedGesturePoints: [[CGPoint]] = []
     private var gesturePoints: [CGPoint] = []
     private var isTrackingGesture = false
 
@@ -516,6 +540,7 @@ final class LivePatternStrokePreview {
 
     func update(with drawing: PKDrawing, on canvas: PKCanvasView) {
         guard !isTrackingGesture,
+              completedGesturePoints.isEmpty,
               isActive,
               configuration.usesPattern,
               let stroke = drawing.strokes.last,
@@ -538,14 +563,16 @@ final class LivePatternStrokePreview {
                 y: drawingPoint.y * zoom - canvas.contentOffset.y
             )
         }
-        render(points: points, zoom: zoom, on: canvas)
+        render(strokes: [points], zoom: zoom, on: canvas)
     }
 
     func beginGestureStroke(at location: CGPoint, on canvas: PKCanvasView) {
         guard isActive, configuration.usesPattern, visibleTool != nil else {
             return
         }
-        clear()
+        // Both PKCanvasViewDelegate and the gesture recognizer can report the
+        // same beginning. Treat the second notification as a no-op.
+        guard !isTrackingGesture else { return }
         isTrackingGesture = true
         gesturePoints = [viewportPoint(from: location, on: canvas)]
         renderGesturePoints(on: canvas)
@@ -562,38 +589,47 @@ final class LivePatternStrokePreview {
         renderGesturePoints(on: canvas)
     }
 
-    func endGestureStroke(cancelled: Bool) {
+    func endGestureStroke(cancelled: Bool, on canvas: PKCanvasView) {
+        guard isTrackingGesture else { return }
         isTrackingGesture = false
         if cancelled {
-            clear()
+            gesturePoints.removeAll(keepingCapacity: true)
+        } else if !gesturePoints.isEmpty {
+            completedGesturePoints.append(gesturePoints)
+            gesturePoints.removeAll(keepingCapacity: true)
         }
+        renderGesturePoints(on: canvas)
     }
 
     private func renderGesturePoints(on canvas: PKCanvasView) {
+        var strokes = completedGesturePoints
+        if !gesturePoints.isEmpty {
+            strokes.append(gesturePoints)
+        }
         render(
-            points: gesturePoints,
+            strokes: strokes,
             zoom: max(canvas.zoomScale, 0.0001),
             on: canvas
         )
     }
 
     private func render(
-        points: [CGPoint],
+        strokes: [[CGPoint]],
         zoom: CGFloat,
         on canvas: PKCanvasView
     ) {
-        guard let visibleTool, !points.isEmpty else {
-            clear()
+        guard let visibleTool, !strokes.isEmpty else {
+            hidePreviewLayer()
             return
         }
 
-        let renderedPoints = DrawingStrokeProcessor.smoothedLocations(
-            points,
-            amount: CGFloat(configuration.smoothing)
-        )
-
         let path = CGMutablePath()
-        if let first = renderedPoints.first {
+        for points in strokes {
+            let renderedPoints = DrawingStrokeProcessor.smoothedLocations(
+                points,
+                amount: CGFloat(configuration.smoothing)
+            )
+            guard let first = renderedPoints.first else { continue }
             path.move(to: first)
             if renderedPoints.count == 1 {
                 path.addLine(to: CGPoint(x: first.x + 0.01, y: first.y))
@@ -630,8 +666,13 @@ final class LivePatternStrokePreview {
     }
 
     func clear() {
+        completedGesturePoints.removeAll(keepingCapacity: true)
         gesturePoints.removeAll(keepingCapacity: true)
         isTrackingGesture = false
+        hidePreviewLayer()
+    }
+
+    private func hidePreviewLayer() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         previewLayer.path = nil

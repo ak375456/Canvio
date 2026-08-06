@@ -530,7 +530,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
-        coordinator.cancelPendingCommit()
+        coordinator.flushPendingWork(on: canvas)
         coordinator.detachPatternPreview(from: canvas)
         coordinator.toolPicker?.setVisible(false, forFirstResponder: canvas)
         coordinator.toolPicker?.removeObserver(coordinator)
@@ -566,7 +566,12 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         private var isApplyingPickedColor = false
         private var isApplyingExternalDrawing = false
         private var isApplyingStrokeProcessing = false
-        private var strokeBaseline: DrawingStrokeBaseline?
+        private var isUsingDrawingTool = false
+        private var hasUnpublishedDrawingChanges = false
+        private var pendingStrokeBaseline: DrawingStrokeBaseline?
+        private var pendingStrokeConfiguration: DrawingPenConfiguration?
+        private var pendingReplacementInk: PKInk?
+        private var pendingStrokeProcessing: DispatchWorkItem?
         private var currentCanvasDrawingData = Data()
         private var lastCommittedDrawingData = Data()
         private var pendingCommit: DispatchWorkItem?
@@ -595,6 +600,7 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         }
 
         func applyExternalDrawingIfNeeded(_ drawing: PKDrawing, to canvas: PKCanvasView) {
+            guard !hasUnpublishedDrawingChanges else { return }
             let nextData = drawing.dataRepresentation()
             guard nextData != currentCanvasDrawingData else { return }
             isApplyingExternalDrawing = true
@@ -605,10 +611,12 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingExternalDrawing, !isApplyingStrokeProcessing else { return }
-            if penConfiguration.usesPattern, patternPreview.isActive {
+            if hasUnpublishedDrawingChanges {
                 cancelPendingCommit()
                 shapeSnapController.cancelPendingSnap()
-                patternPreview.update(with: canvasView.drawing, on: canvasView)
+                if penConfiguration.usesPattern, patternPreview.isActive {
+                    patternPreview.update(with: canvasView.drawing, on: canvasView)
+                }
                 return
             }
             let nextData = canvasView.drawing.dataRepresentation()
@@ -629,9 +637,17 @@ private struct FullCanvasDrawView: UIViewRepresentable {
 
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
             cancelPendingCommit()
-            strokeBaseline = canvasView.tool is PKInkingTool
-                ? DrawingStrokeBaseline(drawing: canvasView.drawing)
-                : nil
+            cancelScheduledStrokeProcessing()
+            shapeSnapController.cancelPendingSnap()
+            isUsingDrawingTool = true
+            if !hasUnpublishedDrawingChanges {
+                pendingStrokeBaseline = canvasView.tool is PKInkingTool
+                    ? DrawingStrokeBaseline(drawing: canvasView.drawing)
+                    : nil
+                pendingStrokeConfiguration = penConfiguration
+                pendingReplacementInk = patternPreview.replacementInk
+            }
+            hasUnpublishedDrawingChanges = true
             patternPreview.beginGestureStroke(
                 at: canvasView.drawingGestureRecognizer.location(in: canvasView),
                 on: canvasView
@@ -639,54 +655,99 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         }
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-            let baseline = strokeBaseline
-            strokeBaseline = nil
+            isUsingDrawingTool = false
+            patternPreview.endGestureStroke(cancelled: false, on: canvasView)
             if penConfiguration.usesPattern {
                 shapeSnapController.cancelPendingSnap()
             }
+            schedulePendingStrokeProcessing(on: canvasView)
+        }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvasView] in
-                guard let self, let canvasView else { return }
-                let drawingBeforeProcessing = canvasView.drawing
-                let drawingForProcessing: PKDrawing
-                if self.penConfiguration.usesPattern,
-                   let snappedDrawing = self.shapeSnapController
-                    .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
-                    drawingForProcessing = snappedDrawing
-                } else {
-                    drawingForProcessing = drawingBeforeProcessing
-                }
-
-                var finalDrawing = drawingForProcessing
-                if let baseline,
-                   let processed = DrawingStrokeProcessor.processingLatestStroke(
-                       in: drawingForProcessing,
-                       since: baseline,
-                       configuration: self.penConfiguration,
-                       replacementInk: self.patternPreview.replacementInk
-                   ) {
-                    finalDrawing = processed
-                }
-
-                if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
-                    self.isApplyingStrokeProcessing = true
-                    canvasView.drawing = finalDrawing
-                    self.rememberCanvasDrawing(finalDrawing)
-                    self.drawing = finalDrawing
-                    self.isApplyingStrokeProcessing = false
-                }
-
-                DispatchQueue.main.async { [weak self] in
-                    self?.patternPreview.clear()
-                }
-                self.commitDrawing(finalDrawing)
-                guard !self.penConfiguration.usesPattern else { return }
-                self.shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
-                    self?.rememberCanvasDrawing(snappedDrawing)
-                    self?.drawing = snappedDrawing
-                    self?.commitDrawing(snappedDrawing)
-                }
+        private func schedulePendingStrokeProcessing(on canvasView: PKCanvasView) {
+            cancelScheduledStrokeProcessing()
+            let work = DispatchWorkItem { [weak self, weak canvasView] in
+                guard let self, let canvasView, !self.isUsingDrawingTool else { return }
+                self.pendingStrokeProcessing = nil
+                self.finishPendingStrokes(on: canvasView)
             }
+            pendingStrokeProcessing = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + DrawingInputDebounce.strokeProcessing,
+                execute: work
+            )
+        }
+
+        private func finishPendingStrokes(on canvasView: PKCanvasView) {
+            let baseline = pendingStrokeBaseline
+            let configuration = pendingStrokeConfiguration ?? penConfiguration
+            let replacementInk = pendingReplacementInk
+            pendingStrokeBaseline = nil
+            pendingStrokeConfiguration = nil
+            pendingReplacementInk = nil
+            hasUnpublishedDrawingChanges = false
+
+            let drawingBeforeProcessing = canvasView.drawing
+            let drawingForProcessing: PKDrawing
+            if configuration.usesPattern,
+               let snappedDrawing = shapeSnapController
+                .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
+                drawingForProcessing = snappedDrawing
+            } else {
+                drawingForProcessing = drawingBeforeProcessing
+            }
+
+            var finalDrawing = drawingForProcessing
+            if let baseline,
+               let processed = DrawingStrokeProcessor.processingLatestStroke(
+                   in: drawingForProcessing,
+                   since: baseline,
+                   configuration: configuration,
+                   replacementInk: replacementInk
+               ) {
+                finalDrawing = processed
+            }
+
+            if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
+                isApplyingStrokeProcessing = true
+                canvasView.drawing = finalDrawing
+                isApplyingStrokeProcessing = false
+            }
+
+            rememberCanvasDrawing(finalDrawing)
+            drawing = finalDrawing
+            patternPreview.clear()
+            scheduleCommit(finalDrawing)
+            guard !configuration.usesPattern else { return }
+            shapeSnapController.scheduleSnap(on: canvasView) { [weak self] snappedDrawing in
+                self?.rememberCanvasDrawing(snappedDrawing)
+                self?.drawing = snappedDrawing
+                self?.scheduleCommit(snappedDrawing)
+            }
+        }
+
+        private func cancelScheduledStrokeProcessing() {
+            pendingStrokeProcessing?.cancel()
+            pendingStrokeProcessing = nil
+        }
+
+        func cancelPendingStrokeProcessing() {
+            cancelScheduledStrokeProcessing()
+            pendingStrokeBaseline = nil
+            pendingStrokeConfiguration = nil
+            pendingReplacementInk = nil
+            hasUnpublishedDrawingChanges = false
+            isUsingDrawingTool = false
+        }
+
+        func flushPendingWork(on canvasView: PKCanvasView) {
+            cancelScheduledStrokeProcessing()
+            if hasUnpublishedDrawingChanges, !isUsingDrawingTool {
+                finishPendingStrokes(on: canvasView)
+            }
+            cancelPendingStrokeProcessing()
+            shapeSnapController.cancelPendingSnap()
+            cancelPendingCommit()
+            commitDrawing(canvasView.drawing)
         }
 
         func cancelPendingCommit() {
@@ -733,13 +794,13 @@ private struct FullCanvasDrawView: UIViewRepresentable {
             case .changed:
                 patternPreview.continueGestureStroke(at: location, on: canvasView)
             case .ended:
-                patternPreview.endGestureStroke(cancelled: false)
+                patternPreview.endGestureStroke(cancelled: false, on: canvasView)
             case .cancelled, .failed:
-                patternPreview.endGestureStroke(cancelled: true)
+                patternPreview.endGestureStroke(cancelled: true, on: canvasView)
             case .possible:
                 break
             @unknown default:
-                patternPreview.endGestureStroke(cancelled: true)
+                patternPreview.endGestureStroke(cancelled: true, on: canvasView)
             }
         }
 
@@ -749,7 +810,10 @@ private struct FullCanvasDrawView: UIViewRepresentable {
                 self?.commitDrawing(drawing)
             }
             pendingCommit = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + DrawingInputDebounce.drawingPublication,
+                execute: work
+            )
         }
 
         private func commitDrawing(_ drawing: PKDrawing) {
