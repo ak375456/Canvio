@@ -6,14 +6,19 @@
 import SwiftUI
 
 struct ShapePickerSheet: View {
-    let onPick: (ShapeKind) -> Void
+    let onPick: (ShapePreset) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Choose a Shape")
-                    .font(.title3.weight(.bold))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Choose a Shape")
+                        .font(.title3.weight(.bold))
+                    Text("Basic shapes, lines, flowcharts, and callouts")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -29,33 +34,57 @@ struct ShapePickerSheet: View {
 
             Divider()
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 12)], spacing: 12) {
-                ForEach(ShapeKind.allCases) { kind in
-                    Button {
-                        onPick(kind)
-                        dismiss()
-                    } label: {
-                        VStack(spacing: 10) {
-                            Image(systemName: kind.icon)
-                                .font(.system(size: 32, weight: .light))
-                                .foregroundStyle(.primary)
-                            Text(kind.title)
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.primary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 20)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14)
-                                .fill(Color.secondary.opacity(0.12))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(24)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(ShapeCategory.allCases) { category in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(category.rawValue.uppercased())
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
 
-            Spacer()
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 96), spacing: 10)],
+                                spacing: 10
+                            ) {
+                                ForEach(ShapePreset.presets(in: category)) { preset in
+                                    shapeButton(preset)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(24)
+            }
         }
+    }
+
+    private func shapeButton(_ preset: ShapePreset) -> some View {
+        Button {
+            onPick(preset)
+            dismiss()
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: preset.icon)
+                    .font(.system(size: 27, weight: .light))
+                    .foregroundStyle(.primary)
+                    .frame(height: 30)
+                Text(preset.title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(height: 32, alignment: .top)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(Color.secondary.opacity(0.11))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 13))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(preset.title)")
     }
 }

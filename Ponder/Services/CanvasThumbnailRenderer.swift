@@ -295,52 +295,57 @@ private struct ThumbnailShapeView: View {
     var body: some View {
         Group {
             switch shape.shapeKind {
-            case .rectangle:
-                ZStack {
-                    if shape.hasFill { RoundedRectangle(cornerRadius: 3).fill(fill) }
-                    if shape.hasVisibleStroke {
-                        RoundedRectangle(cornerRadius: 3)
-                            .strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    }
-                }
-                    .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
             case .line:
                 if shape.hasVisibleStroke {
-                    Rectangle()
-                        .fill(stroke)
-                        .frame(width: CGFloat(shape.width), height: CGFloat(max(1, shape.strokeWidth)))
+                    LineShapeView(width: CGFloat(shape.width), strokeColor: stroke,
+                                  strokeWidth: shape.strokeWidth, ending: shape.lineEnding,
+                                  lineStyle: shape.lineStyle)
                 } else {
                     Color.clear
                 }
+            case .rectangle:
+                thumbnailStyledShape(RoundedRectangle(cornerRadius: 3))
+            case .roundedRectangle:
+                thumbnailStyledShape(RoundedRectangle(cornerRadius: 22))
             case .triangle:
-                ZStack {
-                    if shape.hasFill { TriangleShape(variant: shape.triangleVariant).fill(fill) }
-                    if shape.hasVisibleStroke {
-                        TriangleShape(variant: shape.triangleVariant)
-                            .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    }
-                }
-                    .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
+                thumbnailStyledShape(TriangleShape(variant: shape.triangleVariant))
             case .polygon:
-                ZStack {
-                    if shape.hasFill { PolygonShape(sides: shape.polygonSides).fill(fill) }
-                    if shape.hasVisibleStroke {
-                        PolygonShape(sides: shape.polygonSides)
-                            .stroke(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    }
-                }
-                    .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
+                thumbnailStyledShape(PolygonShape(sides: shape.polygonSides))
             case .circle:
-                ZStack {
-                    if shape.hasFill { Circle().fill(fill) }
-                    if shape.hasVisibleStroke {
-                        Circle().strokeBorder(stroke, lineWidth: CGFloat(shape.strokeWidth))
-                    }
-                }
-                    .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
+                thumbnailStyledShape(Circle())
+            case .ellipse:
+                thumbnailStyledShape(Ellipse())
+            case .diamond:
+                thumbnailStyledShape(DiamondShape())
+            case .star:
+                thumbnailStyledShape(StarShape())
+            case .speechBubble:
+                thumbnailStyledShape(SpeechBubbleShape())
+            case .cloud:
+                thumbnailStyledShape(CloudShape())
+            case .parallelogram:
+                thumbnailStyledShape(ParallelogramShape())
+            case .cylinder:
+                thumbnailStyledShape(CylinderShape())
+            case .document:
+                thumbnailStyledShape(DocumentShape())
+            case .terminator:
+                thumbnailStyledShape(Capsule())
             }
         }
+        .frame(width: CGFloat(shape.width), height: CGFloat(shape.height))
         .rotationEffect(.degrees(shape.rotation))
+    }
+
+    private func thumbnailStyledShape<S: Shape>(_ canvasShape: S) -> some View {
+        StyledCanvasShape(
+            shape: canvasShape,
+            fillColor: fill,
+            strokeColor: stroke,
+            hasFill: shape.hasFill,
+            hasStroke: shape.hasVisibleStroke,
+            strokeWidth: shape.strokeWidth
+        )
     }
 }
 

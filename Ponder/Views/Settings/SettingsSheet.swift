@@ -409,8 +409,8 @@ struct SettingsSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 settingsToggleContent(
                     icon: "pencil.and.outline",
-                    title: "Smart shapes",
-                    subtitle: "Straighten lines and clean up simple shapes while drawing.",
+                    title: "Shape recognition",
+                    subtitle: "Perfect lines, circles, and polygons while drawing.",
                     isOn: Binding(
                         get: { settings.smartShapeSnappingEnabled },
                         set: { settings.smartShapeSnappingEnabled = $0 }

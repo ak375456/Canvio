@@ -131,7 +131,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .stickyNote: return "Add a colored note"
         case .todoList:   return "Add a task list"
         case .templates:  return "Add a ready-made layout"
-        case .shape:      return "Lines, rectangles, polygons"
+        case .shape:      return "Shapes, arrows, flowcharts, callouts"
         case .image:      return "Add a photo from your library"
         case .scanner:    return "Scan to text or PDF"
         case .pdf:        return "Add a PDF document"

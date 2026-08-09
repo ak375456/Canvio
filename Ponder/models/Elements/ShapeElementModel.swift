@@ -160,6 +160,42 @@ class ShapeElementModel: LayerableElement {
         set { triangleVariantRaw = newValue.rawValue }
     }
 
+    var lineEnding: ShapeLineEnding {
+        get {
+            guard shapeKind == .line else { return .none }
+            if let decoration = decodedLineDecoration {
+                return decoration.ending
+            }
+            return hasArrowHead ? .end : .none
+        }
+        set { setLineAppearance(ending: newValue, style: lineStyle) }
+    }
+
+    var lineStyle: ShapeLineStyle {
+        get {
+            guard shapeKind == .line else { return .solid }
+            return decodedLineDecoration?.style ?? .solid
+        }
+        set { setLineAppearance(ending: lineEnding, style: newValue) }
+    }
+
+    func setLineAppearance(ending: ShapeLineEnding, style: ShapeLineStyle) {
+        guard shapeKind == .line else { return }
+        triangleVariantRaw = "line:\(ending.rawValue):\(style.rawValue)"
+        // Keep the legacy flag meaningful for older clients while richer line
+        // appearance data travels in the existing variant field.
+        hasArrowHead = ending.includesEnd
+    }
+
+    private var decodedLineDecoration: (ending: ShapeLineEnding, style: ShapeLineStyle)? {
+        let parts = triangleVariantRaw.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              parts[0] == "line",
+              let ending = ShapeLineEnding(rawValue: String(parts[1])),
+              let style = ShapeLineStyle(rawValue: String(parts[2])) else { return nil }
+        return (ending, style)
+    }
+
     var hasVisibleStroke: Bool {
         strokeColorName != "none" && strokeWidth > 0
     }
@@ -175,11 +211,21 @@ class ShapeElementModel: LayerableElement {
         self.x = x
         self.y = y
         switch kind {
-        case .line:      self.width = 180; self.height = 4
-        case .rectangle: self.width = 160; self.height = 110
-        case .triangle:  self.width = 140; self.height = 130
-        case .polygon:   self.width = 140; self.height = 140
-        case .circle:    self.width = 140; self.height = 140
+        case .line:             self.width = 180; self.height = 4
+        case .rectangle:        self.width = 160; self.height = 110
+        case .roundedRectangle: self.width = 170; self.height = 110
+        case .triangle:         self.width = 140; self.height = 130
+        case .polygon:          self.width = 140; self.height = 140
+        case .circle:           self.width = 140; self.height = 140
+        case .ellipse:          self.width = 175; self.height = 110
+        case .diamond:          self.width = 155; self.height = 125
+        case .star:             self.width = 145; self.height = 145
+        case .speechBubble:     self.width = 180; self.height = 125
+        case .cloud:            self.width = 180; self.height = 120
+        case .parallelogram:    self.width = 180; self.height = 110
+        case .cylinder:         self.width = 150; self.height = 150
+        case .document:         self.width = 160; self.height = 130
+        case .terminator:       self.width = 180; self.height = 80
         }
         self.rotation = 0
         self.strokeColorName = "primary"
@@ -187,7 +233,9 @@ class ShapeElementModel: LayerableElement {
         self.hasFill = false
         self.strokeWidth = 2.5
         self.hasArrowHead = false
-        self.triangleVariantRaw = TriangleVariant.equilateral.rawValue
+        self.triangleVariantRaw = kind == .line
+            ? "line:\(ShapeLineEnding.none.rawValue):\(ShapeLineStyle.solid.rawValue)"
+            : TriangleVariant.equilateral.rawValue
         self.polygonSides = 6
         self.createdAt = Date()
         self.updatedAt = Date()

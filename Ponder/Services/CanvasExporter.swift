@@ -933,38 +933,39 @@ struct CanvasExportView: View {
             switch el.shapeKind {
             case .line:
                 if el.hasVisibleStroke {
-                    exportLine(stroke: sc, strokeWidth: el.strokeWidth, hasArrow: el.hasArrowHead)
+                    exportLine(stroke: sc, strokeWidth: el.strokeWidth,
+                               ending: el.lineEnding, lineStyle: el.lineStyle)
                 } else {
                     Color.clear
                 }
             case .rectangle:
-                ZStack {
-                    if el.hasFill { RoundedRectangle(cornerRadius: 4).fill(fc) }
-                    if el.hasVisibleStroke {
-                        RoundedRectangle(cornerRadius: 4).strokeBorder(sc, lineWidth: el.strokeWidth)
-                    }
-                }
+                exportStyledShape(RoundedRectangle(cornerRadius: 4), element: el, stroke: sc, fill: fc)
+            case .roundedRectangle:
+                exportStyledShape(RoundedRectangle(cornerRadius: 22), element: el, stroke: sc, fill: fc)
             case .triangle:
-                ZStack {
-                    if el.hasFill { TriangleShape(variant: el.triangleVariant).fill(fc) }
-                    if el.hasVisibleStroke {
-                        TriangleShape(variant: el.triangleVariant).stroke(sc, lineWidth: el.strokeWidth)
-                    }
-                }
+                exportStyledShape(TriangleShape(variant: el.triangleVariant), element: el, stroke: sc, fill: fc)
             case .polygon:
-                ZStack {
-                    if el.hasFill { PolygonShape(sides: el.polygonSides).fill(fc) }
-                    if el.hasVisibleStroke {
-                        PolygonShape(sides: el.polygonSides).stroke(sc, lineWidth: el.strokeWidth)
-                    }
-                }
+                exportStyledShape(PolygonShape(sides: el.polygonSides), element: el, stroke: sc, fill: fc)
             case .circle:
-                ZStack {
-                    if el.hasFill { Circle().fill(fc) }
-                    if el.hasVisibleStroke {
-                        Circle().strokeBorder(sc, lineWidth: el.strokeWidth)
-                    }
-                }
+                exportStyledShape(Circle(), element: el, stroke: sc, fill: fc)
+            case .ellipse:
+                exportStyledShape(Ellipse(), element: el, stroke: sc, fill: fc)
+            case .diamond:
+                exportStyledShape(DiamondShape(), element: el, stroke: sc, fill: fc)
+            case .star:
+                exportStyledShape(StarShape(), element: el, stroke: sc, fill: fc)
+            case .speechBubble:
+                exportStyledShape(SpeechBubbleShape(), element: el, stroke: sc, fill: fc)
+            case .cloud:
+                exportStyledShape(CloudShape(), element: el, stroke: sc, fill: fc)
+            case .parallelogram:
+                exportStyledShape(ParallelogramShape(), element: el, stroke: sc, fill: fc)
+            case .cylinder:
+                exportStyledShape(CylinderShape(), element: el, stroke: sc, fill: fc)
+            case .document:
+                exportStyledShape(DocumentShape(), element: el, stroke: sc, fill: fc)
+            case .terminator:
+                exportStyledShape(Capsule(), element: el, stroke: sc, fill: fc)
             }
         }
         .frame(width: el.width, height: el.height)
@@ -973,26 +974,56 @@ struct CanvasExportView: View {
     }
 
     @ViewBuilder
-    private func exportLine(stroke: Color, strokeWidth: Double, hasArrow: Bool) -> some View {
+    private func exportStyledShape<S: Shape>(_ shape: S,
+                                             element: ShapeElementModel,
+                                             stroke: Color,
+                                             fill: Color) -> some View {
+        StyledCanvasShape(
+            shape: shape,
+            fillColor: fill,
+            strokeColor: stroke,
+            hasFill: element.hasFill,
+            hasStroke: element.hasVisibleStroke,
+            strokeWidth: element.strokeWidth
+        )
+    }
+
+    private func exportLine(stroke: Color, strokeWidth: Double,
+                            ending: ShapeLineEnding, lineStyle: ShapeLineStyle) -> some View {
         GeometryReader { geo in
             let midY = geo.size.height / 2
+            let arrowSize = max(9, CGFloat(strokeWidth) * 4)
+            let startX = ending.includesStart ? arrowSize * 0.8 : 0
+            let endX = geo.size.width - (ending.includesEnd ? arrowSize * 0.8 : 0)
             ZStack {
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: midY))
-                    path.addLine(to: CGPoint(
-                        x: geo.size.width - (hasArrow ? CGFloat(strokeWidth * 3) : 0), y: midY))
-                }.stroke(stroke, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
-                if hasArrow {
-                    Path { path in
-                        let h = CGFloat(strokeWidth * 3), ex = geo.size.width
-                        path.move(to: CGPoint(x: ex, y: midY))
-                        path.addLine(to: CGPoint(x: ex - h, y: midY - h * 0.7))
-                        path.addLine(to: CGPoint(x: ex - h, y: midY + h * 0.7))
-                        path.closeSubpath()
-                    }.fill(stroke)
+                    path.move(to: CGPoint(x: startX, y: midY))
+                    path.addLine(to: CGPoint(x: endX, y: midY))
+                }.stroke(stroke, style: StrokeStyle(
+                    lineWidth: strokeWidth,
+                    lineCap: .round,
+                    dash: lineStyle.dashPattern(for: CGFloat(strokeWidth))
+                ))
+                if ending.includesStart {
+                    exportArrowHead(at: 0, midY: midY, size: arrowSize, pointsRight: false, color: stroke)
+                }
+                if ending.includesEnd {
+                    exportArrowHead(at: geo.size.width, midY: midY, size: arrowSize, pointsRight: true, color: stroke)
                 }
             }
         }
+    }
+
+    private func exportArrowHead(at x: CGFloat, midY: CGFloat, size: CGFloat,
+                                 pointsRight: Bool, color: Color) -> some View {
+        Path { path in
+            let baseX = pointsRight ? x - size : x + size
+            path.move(to: CGPoint(x: x, y: midY))
+            path.addLine(to: CGPoint(x: baseX, y: midY - size * 0.62))
+            path.addLine(to: CGPoint(x: baseX, y: midY + size * 0.62))
+            path.closeSubpath()
+        }
+        .fill(color)
     }
 
     // MARK: - Image

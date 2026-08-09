@@ -78,12 +78,24 @@ private struct PencilShapeSnapper {
         let score: CGFloat
     }
 
+    private struct StraightStrokeCandidate {
+        let index: Int
+        let stroke: PKStroke
+        let start: CGPoint
+        let end: CGPoint
+        let length: CGFloat
+    }
+
     static func snappedDrawing(from drawing: PKDrawing) -> PKDrawing? {
         guard let lastIndex = drawing.strokes.indices.last else { return nil }
 
         var strokes = drawing.strokes
         let originalStroke = strokes[lastIndex]
         guard originalStroke.mask == nil else { return nil }
+
+        if let multiStrokeArrow = snappedMultiStrokeArrow(from: strokes) {
+            return multiStrokeArrow
+        }
 
         let rawPoints = renderedPoints(from: originalStroke)
         guard let cleanPoints = cleanShapePoints(from: rawPoints),
@@ -98,12 +110,196 @@ private struct PencilShapeSnapper {
         stroke.path.map { $0.location.applying(stroke.transform) }
     }
 
+    private static func snappedMultiStrokeArrow(from strokes: [PKStroke]) -> PKDrawing? {
+        if let twoStroke = snappedTwoStrokeArrow(from: strokes) { return twoStroke }
+        if let threeStroke = snappedThreeStrokeArrow(from: strokes) { return threeStroke }
+        return nil
+    }
+
+    // Supports a straight shaft plus a single V-shaped head stroke.
+    private static func snappedTwoStrokeArrow(from strokes: [PKStroke]) -> PKDrawing? {
+        guard strokes.count >= 2 else { return nil }
+        let indices = Array(strokes.indices.suffix(2))
+
+        for shaftIndex in indices {
+            let headIndex = indices.first { $0 != shaftIndex }!
+            guard let shaft = straightStrokeCandidate(strokes[shaftIndex], index: shaftIndex),
+                  strokes[headIndex].mask == nil else { continue }
+
+            let headPoints = removingNearDuplicates(
+                renderedPoints(from: strokes[headIndex]),
+                minimumDistance: 2
+            )
+            guard headPoints.count >= 3,
+                  let headStart = headPoints.first,
+                  let headEnd = headPoints.last else { continue }
+
+            let internalIndices = headPoints.indices.dropFirst().dropLast()
+            guard let tipIndex = internalIndices.max(by: {
+                distanceFromPoint(headPoints[$0], toSegmentStart: headStart, end: headEnd)
+                    < distanceFromPoint(headPoints[$1], toSegmentStart: headStart, end: headEnd)
+            }) else { continue }
+
+            let rawTip = headPoints[tipIndex]
+            let firstArmPoints = Array(headPoints[...tipIndex])
+            let secondArmPoints = Array(headPoints[tipIndex...])
+            guard isStraightEnough(firstArmPoints), isStraightEnough(secondArmPoints) else { continue }
+
+            for orientation in [(tail: shaft.start, tip: shaft.end),
+                                (tail: shaft.end, tip: shaft.start)] {
+                let attachmentDistance = distance(orientation.tip, rawTip)
+                let allowedAttachmentDistance = max(16, shaft.length * 0.14)
+                guard attachmentDistance <= allowedAttachmentDistance else { continue }
+
+                let tip = average([orientation.tip, rawTip])
+                guard validArrowWings(
+                    tail: orientation.tail,
+                    tip: tip,
+                    firstWing: headStart,
+                    secondWing: headEnd,
+                    shaftLength: shaft.length
+                ) else { continue }
+
+                var snapped = strokes
+                guard let snappedShaft = stroke(
+                    from: sampledPolyline([orientation.tail, tip]),
+                    matching: shaft.stroke
+                ),
+                let snappedHead = stroke(
+                    from: sampledPolyline([headStart, tip, headEnd]),
+                    matching: strokes[headIndex]
+                ) else { continue }
+                snapped[shaftIndex] = snappedShaft
+                snapped[headIndex] = snappedHead
+                return PKDrawing(strokes: snapped)
+            }
+        }
+
+        return nil
+    }
+
+    // Supports a shaft and two separately drawn arrowhead wings.
+    private static func snappedThreeStrokeArrow(from strokes: [PKStroke]) -> PKDrawing? {
+        guard strokes.count >= 3 else { return nil }
+        let indices = Array(strokes.indices.suffix(3))
+        let lineCandidates = indices.compactMap {
+            straightStrokeCandidate(strokes[$0], index: $0)
+        }
+        guard lineCandidates.count == 3,
+              let shaft = lineCandidates.max(by: { $0.length < $1.length }) else { return nil }
+        let wings = lineCandidates.filter { $0.index != shaft.index }
+
+        for orientation in [(tail: shaft.start, tip: shaft.end),
+                            (tail: shaft.end, tip: shaft.start)] {
+            let resolvedWings = wings.map { wing -> (candidate: StraightStrokeCandidate, attached: CGPoint, outer: CGPoint) in
+                if distance(wing.start, orientation.tip) <= distance(wing.end, orientation.tip) {
+                    return (wing, wing.start, wing.end)
+                }
+                return (wing, wing.end, wing.start)
+            }
+            let allowedAttachmentDistance = max(16, shaft.length * 0.14)
+            guard resolvedWings.allSatisfy({
+                distance($0.attached, orientation.tip) <= allowedAttachmentDistance
+            }) else { continue }
+
+            let tip = average([orientation.tip] + resolvedWings.map(\.attached))
+            guard validArrowWings(
+                tail: orientation.tail,
+                tip: tip,
+                firstWing: resolvedWings[0].outer,
+                secondWing: resolvedWings[1].outer,
+                shaftLength: shaft.length
+            ) else { continue }
+
+            var snapped = strokes
+            guard let snappedShaft = stroke(
+                from: sampledPolyline([orientation.tail, tip]),
+                matching: shaft.stroke
+            ) else { continue }
+            snapped[shaft.index] = snappedShaft
+
+            var successfullySnappedWings = true
+            for wing in resolvedWings {
+                guard let snappedWing = stroke(
+                    from: sampledPolyline([tip, wing.outer]),
+                    matching: wing.candidate.stroke
+                ) else {
+                    successfullySnappedWings = false
+                    break
+                }
+                snapped[wing.candidate.index] = snappedWing
+            }
+            if successfullySnappedWings { return PKDrawing(strokes: snapped) }
+        }
+
+        return nil
+    }
+
+    private static func straightStrokeCandidate(_ stroke: PKStroke,
+                                                index: Int) -> StraightStrokeCandidate? {
+        guard stroke.mask == nil else { return nil }
+        let points = removingNearDuplicates(renderedPoints(from: stroke), minimumDistance: 2)
+        guard let start = points.first, let end = points.last,
+              points.count >= 2 else { return nil }
+        let length = distance(start, end)
+        guard length >= 10, isStraightEnough(points) else { return nil }
+        return StraightStrokeCandidate(index: index, stroke: stroke,
+                                       start: start, end: end, length: length)
+    }
+
+    private static func isStraightEnough(_ points: [CGPoint]) -> Bool {
+        guard let start = points.first, let end = points.last else { return false }
+        let directLength = distance(start, end)
+        guard directLength >= 8 else { return false }
+        let pathRatio = polylineLength(points) / max(directLength, 1)
+        let deviation = points
+            .map { distanceFromPoint($0, toSegmentStart: start, end: end) }
+            .max() ?? 0
+        return pathRatio <= 1.38 && deviation <= max(9, directLength * 0.12)
+    }
+
+    private static func validArrowWings(tail: CGPoint, tip: CGPoint,
+                                        firstWing: CGPoint, secondWing: CGPoint,
+                                        shaftLength: CGFloat) -> Bool {
+        let shaftDirection = normalized(vector(from: tail, to: tip))
+        let firstVector = vector(from: tip, to: firstWing)
+        let secondVector = vector(from: tip, to: secondWing)
+        let firstLength = hypot(firstVector.dx, firstVector.dy)
+        let secondLength = hypot(secondVector.dx, secondVector.dy)
+        let minimumLength = max(10, shaftLength * 0.07)
+        let maximumLength = max(22, shaftLength * 0.55)
+
+        guard firstLength >= minimumLength, secondLength >= minimumLength,
+              firstLength <= maximumLength, secondLength <= maximumLength,
+              dot(normalized(firstVector), shaftDirection) <= 0.15,
+              dot(normalized(secondVector), shaftDirection) <= 0.15 else { return false }
+
+        let firstCross = shaftDirection.dx * firstVector.dy - shaftDirection.dy * firstVector.dx
+        let secondCross = shaftDirection.dx * secondVector.dy - shaftDirection.dy * secondVector.dx
+        return firstCross * secondCross < 0
+            && abs(firstCross) >= firstLength * 0.22
+            && abs(secondCross) >= secondLength * 0.22
+    }
+
+    private static func average(_ points: [CGPoint]) -> CGPoint {
+        guard !points.isEmpty else { return .zero }
+        let total = points.reduce(CGPoint.zero) {
+            CGPoint(x: $0.x + $1.x, y: $0.y + $1.y)
+        }
+        return CGPoint(x: total.x / CGFloat(points.count),
+                       y: total.y / CGFloat(points.count))
+    }
+
     private static func cleanShapePoints(from rawPoints: [CGPoint]) -> [CGPoint]? {
         let points = removingNearDuplicates(rawPoints, minimumDistance: 2)
         guard points.count >= 2 else { return nil }
 
         let bounds = bounds(for: points)
         let diagonal = hypot(bounds.width, bounds.height)
+
+        if let arrow = arrowCandidate(from: points, diagonal: diagonal) {
+            return arrow.points
+        }
 
         if let line = lineCandidate(from: points, diagonal: diagonal) {
             return line.points
@@ -152,6 +348,132 @@ private struct PencilShapeSnapper {
         )
     }
 
+    private static func arrowCandidate(from points: [CGPoint], diagonal: CGFloat) -> Candidate? {
+        guard points.count >= 5, diagonal >= 36 else { return nil }
+
+        // A natural one-stroke arrow visits its tip twice:
+        // tail → tip → first wing → tip → second wing. Detect that repeated
+        // tip directly instead of requiring RDP to produce exactly 5 points,
+        // which was too brittle for real Pencil sampling and hand jitter.
+        let forward = directionalArrowCandidate(from: points, diagonal: diagonal)
+        let backward = directionalArrowCandidate(from: points.reversed(), diagonal: diagonal)
+
+        switch (forward, backward) {
+        case let (forward?, backward?):
+            return forward.score <= backward.score ? forward : backward
+        case let (forward?, nil):
+            return forward
+        case let (nil, backward?):
+            return backward
+        default:
+            return nil
+        }
+    }
+
+    private static func directionalArrowCandidate<C: Collection>(
+        from source: C,
+        diagonal: CGFloat
+    ) -> Candidate? where C.Element == CGPoint {
+        let points = Array(source)
+        guard points.count >= 5 else { return nil }
+
+        let recurrenceDistance = max(14, diagonal * 0.14)
+        let minimumIndexSeparation = max(2, points.count / 18)
+        var candidates: [Candidate] = []
+
+        for firstTipIndex in 1..<(points.count - 3) {
+            let tail = points[0]
+            let firstTip = points[firstTipIndex]
+            let initialShaftLength = distance(tail, firstTip)
+            guard initialShaftLength >= 32 else { continue }
+
+            let shaftPoints = Array(points[0...firstTipIndex])
+            let shaftPathRatio = polylineLength(shaftPoints) / max(initialShaftLength, 1)
+            let shaftDeviation = shaftPoints
+                .map { distanceFromPoint($0, toSegmentStart: tail, end: firstTip) }
+                .max() ?? 0
+            guard shaftPathRatio <= 1.38,
+                  shaftDeviation <= max(11, initialShaftLength * 0.11)
+            else { continue }
+
+            let firstPossibleReturn = firstTipIndex + minimumIndexSeparation
+            guard firstPossibleReturn < points.count - 1 else { continue }
+
+            for secondTipIndex in firstPossibleReturn..<(points.count - 1) {
+                let secondTip = points[secondTipIndex]
+                let tipSeparation = distance(firstTip, secondTip)
+                guard tipSeparation <= recurrenceDistance else { continue }
+
+                let firstWingRange = (firstTipIndex + 1)..<secondTipIndex
+                let secondWingRange = (secondTipIndex + 1)..<points.count
+                guard !firstWingRange.isEmpty, !secondWingRange.isEmpty,
+                      let firstWingIndex = firstWingRange.max(by: {
+                          distance(points[$0], firstTip) < distance(points[$1], firstTip)
+                      }),
+                      let secondWingIndex = secondWingRange.max(by: {
+                          distance(points[$0], secondTip) < distance(points[$1], secondTip)
+                      })
+                else { continue }
+
+                let tip = CGPoint(x: (firstTip.x + secondTip.x) / 2,
+                                  y: (firstTip.y + secondTip.y) / 2)
+                let shaftLength = distance(tail, tip)
+                let shaftDirection = normalized(vector(from: tail, to: tip))
+                let firstWing = points[firstWingIndex]
+                let secondWing = points[secondWingIndex]
+                let firstWingVector = vector(from: tip, to: firstWing)
+                let secondWingVector = vector(from: tip, to: secondWing)
+                let firstWingLength = hypot(firstWingVector.dx, firstWingVector.dy)
+                let secondWingLength = hypot(secondWingVector.dx, secondWingVector.dy)
+
+                let minimumWingLength = max(10, shaftLength * 0.07)
+                let maximumWingLength = max(22, shaftLength * 0.52)
+                guard shaftLength >= 32,
+                      firstWingLength >= minimumWingLength,
+                      secondWingLength >= minimumWingLength,
+                      firstWingLength <= maximumWingLength,
+                      secondWingLength <= maximumWingLength,
+                      dot(normalized(firstWingVector), shaftDirection) <= 0.12,
+                      dot(normalized(secondWingVector), shaftDirection) <= 0.12
+                else { continue }
+
+                let firstCross = shaftDirection.dx * firstWingVector.dy
+                    - shaftDirection.dy * firstWingVector.dx
+                let secondCross = shaftDirection.dx * secondWingVector.dy
+                    - shaftDirection.dy * secondWingVector.dx
+                guard firstCross * secondCross < 0,
+                      abs(firstCross) >= firstWingLength * 0.24,
+                      abs(secondCross) >= secondWingLength * 0.24
+                else { continue }
+
+                let firstWingSource = Array(points[firstTipIndex...secondTipIndex])
+                let secondWingSource = Array(points[secondTipIndex...secondWingIndex])
+                let firstWingError = meanDistance(
+                    from: firstWingSource,
+                    toOpenPolyline: [tip, firstWing, tip]
+                )
+                let secondWingError = meanDistance(
+                    from: secondWingSource,
+                    toOpenPolyline: [tip, secondWing]
+                )
+                let allowedWingError = max(10, diagonal * 0.08)
+                guard firstWingError <= allowedWingError,
+                      secondWingError <= allowedWingError else { continue }
+
+                let cleaned = [tail, tip, firstWing, tip, secondWing]
+                let score = tipSeparation / max(diagonal, 1)
+                    + shaftDeviation / max(shaftLength, 1)
+                    + (firstWingError + secondWingError) / max(diagonal * 2, 1)
+                candidates.append(Candidate(
+                    points: sampledPolyline(cleaned),
+                    score: score
+                ))
+            }
+        }
+
+        return candidates.min { $0.score < $1.score }
+    }
+
     private static func polygonCandidate(from points: [CGPoint],
                                          bounds: CGRect,
                                          diagonal: CGFloat) -> Candidate? {
@@ -174,6 +496,15 @@ private struct PencilShapeSnapper {
             if vertices.count == 4,
                let rectangle = rectangleCandidate(vertices: vertices, sourcePoints: points, diagonal: diagonal) {
                 candidates.append(rectangle)
+            }
+
+            if (5...8).contains(vertices.count),
+               let polygon = multiSidedPolygonCandidate(
+                    vertices: vertices,
+                    sourcePoints: points,
+                    diagonal: diagonal
+               ) {
+                candidates.append(polygon)
             }
         }
 
@@ -218,6 +549,27 @@ private struct PencilShapeSnapper {
         return Candidate(
             points: sampledPolyline(rotate(closed, toStartNear: sourcePoints[0])),
             score: (meanError / max(diagonal, 1)) + worstCorner * 0.015
+        )
+    }
+
+    private static func multiSidedPolygonCandidate(vertices: [CGPoint],
+                                                   sourcePoints: [CGPoint],
+                                                   diagonal: CGFloat) -> Candidate? {
+        guard (5...8).contains(vertices.count),
+              polygonArea(vertices) >= diagonal * diagonal * 0.06 else { return nil }
+
+        let edgeLengths = vertices.indices.map {
+            distance(vertices[$0], vertices[($0 + 1) % vertices.count])
+        }
+        guard edgeLengths.allSatisfy({ $0 >= diagonal * 0.075 }) else { return nil }
+
+        let closed = vertices + [vertices[0]]
+        let meanError = meanDistance(from: sourcePoints, toClosedPolyline: closed)
+        guard meanError <= max(10, diagonal * 0.07) else { return nil }
+
+        return Candidate(
+            points: sampledPolyline(rotate(closed, toStartNear: sourcePoints[0])),
+            score: meanError / max(diagonal, 1) + CGFloat(vertices.count) * 0.002
         )
     }
 
@@ -490,6 +842,21 @@ private struct PencilShapeSnapper {
 
     private static func meanDistance(from points: [CGPoint],
                                      toClosedPolyline polyline: [CGPoint]) -> CGFloat {
+        guard polyline.count > 1 else { return .greatestFiniteMagnitude }
+        let total = points.reduce(CGFloat(0)) { partial, point in
+            var best = CGFloat.greatestFiniteMagnitude
+            for index in 1..<polyline.count {
+                best = min(best, distanceFromPoint(point,
+                                                   toSegmentStart: polyline[index - 1],
+                                                   end: polyline[index]))
+            }
+            return partial + best
+        }
+        return total / max(CGFloat(points.count), 1)
+    }
+
+    private static func meanDistance(from points: [CGPoint],
+                                     toOpenPolyline polyline: [CGPoint]) -> CGFloat {
         guard polyline.count > 1 else { return .greatestFiniteMagnitude }
         let total = points.reduce(CGFloat(0)) { partial, point in
             var best = CGFloat.greatestFiniteMagnitude

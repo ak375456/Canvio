@@ -38,15 +38,26 @@ class HomeViewModel: ObservableObject {
 
     // MARK: - Create
 
+    func prepareToCreateCanvas(existingCanvases: [CanvasModel]) {
+        resetForm()
+        newCanvasName = nextDefaultCanvasName(
+            existingNames: existingCanvases.map(\.name)
+        )
+        showCreateSheet = true
+    }
+
     func createCanvas(context: ModelContext) {
-        let trimmed = newCanvasName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        let trimmed = newCanvasName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingCanvases = (try? context.fetch(FetchDescriptor<CanvasModel>())) ?? []
+        let resolvedName = trimmed.isEmpty
+            ? nextDefaultCanvasName(existingNames: existingCanvases.map(\.name))
+            : trimmed
 
         let w = Double(customWidth)  ?? 800
         let h = Double(customHeight) ?? 600
 
         let canvas = CanvasModel(
-            name:         trimmed,
+            name:         resolvedName,
             iconName:     newCanvasIconName,
             iconColor:    newCanvasIconColor,
             canvasSize:   selectedCanvasSize,
@@ -108,6 +119,24 @@ class HomeViewModel: ObservableObject {
         selectedCanvasSize = .infinite
         customWidth        = "800"
         customHeight       = "600"
+    }
+
+    private func nextDefaultCanvasName(existingNames: [String]) -> String {
+        let expression = try? NSRegularExpression(
+            pattern: #"^canvas\s+(\d+)$"#,
+            options: [.caseInsensitive]
+        )
+        let highestNumber = existingNames.compactMap { name -> Int? in
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+            guard let match = expression?.firstMatch(in: trimmed, range: range),
+                  let numberRange = Range(match.range(at: 1), in: trimmed)
+            else { return nil }
+            return Int(trimmed[numberRange])
+        }
+        .max() ?? 0
+
+        return "Canvas \(highestNumber + 1)"
     }
 
     func colorFromString(_ string: String) -> Color {

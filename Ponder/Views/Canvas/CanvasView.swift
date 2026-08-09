@@ -1965,15 +1965,15 @@ private struct CanvasPageContentView: View {
                 .presentationDetents([.height(480)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $vm.showShapePicker) {
-                ShapePickerSheet { kind in
+                ShapePickerSheet { preset in
                     let point = vm.pendingShapeLocation ?? CGPoint(x: geo.size.width/2, y: geo.size.height/2)
-                    vm.shapeVM.addShape(canvasID: activeContentCanvasID, kind: kind, center: point,
+                    vm.shapeVM.addShape(canvasID: activeContentCanvasID, preset: preset, center: point,
                                        offset: vm.offset, scale: vm.scale,
                                        zIndex: LayersViewModel.nextZ(among: allLayerableElements),
                                        context: context, undoManager: vm.undoManager)
                     vm.pendingShapeLocation = nil
                 }
-                .presentationDetents([.height(380)]).presentationDragIndicator(.visible).presentationCornerRadius(24)
+                .presentationDetents([.medium, .large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             // ── Symbol picker ────────────────────────────────────────────────── NEW
             .sheet(isPresented: $vm.showSymbolPicker) {

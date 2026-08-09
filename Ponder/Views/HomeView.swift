@@ -13,19 +13,20 @@ struct HomeView: View {
     @State private var isSyncing = false
     @State private var showPaywall = false
     @State private var showAuth = false
+    @State private var searchText = ""
+    @State private var sortOrder: CanvasLibrarySort = .newest
 
-    let columns = [
-        GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
+    private let columns = [
+        GridItem(.adaptive(minimum: 180, maximum: 280), spacing: 18)
     ]
 
     var body: some View {
         NavigationStack {
             ZStack {
-                if canvases.isEmpty {
-                    emptyState
-                } else {
-                    canvasGrid
-                }
+                Color.secondary.opacity(0.035)
+                    .ignoresSafeArea()
+
+                homeContent
             }
             .navigationTitle("Canvio")
             .toolbar {
@@ -110,7 +111,7 @@ struct HomeView: View {
 
     private func handleCreateCanvasTap() {
         if canCreateCanvas {
-            viewModel.showCreateSheet = true
+            viewModel.prepareToCreateCanvas(existingCanvases: canvases)
         } else {
             showPaywall = true
         }
@@ -214,68 +215,356 @@ struct HomeView: View {
         return colors[seed % colors.count]
     }
 
-    // MARK: - Canvas Grid
+    // MARK: - Canvas Library
 
-    private var canvasGrid: some View {
+    private var homeContent: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(canvases) { canvas in
-                    NavigationLink(destination: CanvasView(
-                        canvas: canvas,
-                        onDelete: { viewModel.deleteCanvas(canvas: canvas, context: context) },
-                        onRename: { newName in viewModel.renameCanvas(canvas: canvas, newName: newName, context: context) }
-                    )) {
-                        CanvasCard(canvas: canvas, viewModel: viewModel)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button {
-                            viewModel.renameText = canvas.name
-                            viewModel.selectedCanvasForRename = canvas
-                        } label: { Label("Rename", systemImage: "pencil") }
-                        Button(role: .destructive) {
-                            viewModel.deleteCanvas(canvas: canvas, context: context)
-                        } label: { Label("Delete", systemImage: "trash") }
+            LazyVStack(alignment: .leading, spacing: 24) {
+                libraryHero
+
+                if canvases.isEmpty {
+                    emptyState
+                } else {
+                    libraryControls
+
+                    if filteredCanvases.isEmpty {
+                        noSearchResults
+                    } else {
+                        LazyVGrid(columns: columns, spacing: 18) {
+                            ForEach(filteredCanvases) { canvas in
+                                canvasTile(canvas)
+                            }
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
+            .padding(.horizontal, 22)
+            .padding(.top, 12)
+            .padding(.bottom, 40)
         }
+    }
+
+    private var filteredCanvases: [CanvasModel] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = query.isEmpty
+            ? canvases
+            : canvases.filter { $0.name.localizedCaseInsensitiveContains(query) }
+
+        switch sortOrder {
+        case .newest:
+            return matches.sorted { $0.createdAt > $1.createdAt }
+        case .oldest:
+            return matches.sorted { $0.createdAt < $1.createdAt }
+        case .name:
+            return matches.sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+        }
+    }
+
+    private var libraryHero: some View {
+        ZStack(alignment: .topTrailing) {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.accentColor.opacity(0.18),
+                            Color.purple.opacity(0.09),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Circle()
+                .stroke(Color.accentColor.opacity(0.10), lineWidth: 28)
+                .frame(width: 180, height: 180)
+                .offset(x: 58, y: -82)
+
+            Circle()
+                .fill(Color.purple.opacity(0.08))
+                .frame(width: 82, height: 82)
+                .offset(x: -42, y: 76)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 24) {
+                    heroCopy
+                    Spacer(minLength: 20)
+                    newCanvasButton
+                }
+
+                VStack(alignment: .leading, spacing: 18) {
+                    heroCopy
+                    newCanvasButton
+                }
+            }
+            .padding(24)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.14), lineWidth: 1)
+        }
+    }
+
+    private var heroCopy: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("YOUR WORKSPACE", systemImage: "sparkles")
+                .font(.caption2.weight(.bold))
+                .tracking(1.2)
+                .foregroundStyle(Color.accentColor)
+
+            Text("Make room for your next idea.")
+                .font(.title2.weight(.bold))
+                .foregroundStyle(.primary)
+
+            Text(heroSubtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: 520, alignment: .leading)
+    }
+
+    private var heroSubtitle: String {
+        if canvases.isEmpty {
+            return "Start with a blank canvas and shape it as you think."
+        }
+        let noun = canvases.count == 1 ? "canvas" : "canvases"
+        return "You have \(canvases.count) \(noun) ready to continue."
+    }
+
+    private var newCanvasButton: some View {
+        Button(action: handleCreateCanvasTap) {
+            Label("New Canvas", systemImage: "plus")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .foregroundStyle(.white)
+                .background(Color.accentColor.gradient)
+                .clipShape(Capsule())
+                .shadow(color: Color.accentColor.opacity(0.22), radius: 10, y: 5)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var libraryControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(searchText.isEmpty ? "Recent canvases" : "Search results")
+                        .font(.title3.weight(.bold))
+                    Text("\(filteredCanvases.count) \(filteredCanvases.count == 1 ? "canvas" : "canvases")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+
+                    TextField("Search canvases", text: $searchText)
+                        .textFieldStyle(.plain)
+
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 44)
+                .background(.background.opacity(0.92), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+                }
+
+                Menu {
+                    Picker("Sort canvases", selection: $sortOrder) {
+                        ForEach(CanvasLibrarySort.allCases) { option in
+                            Label(option.title, systemImage: option.icon)
+                                .tag(option)
+                        }
+                    }
+                } label: {
+                    Label(sortOrder.title, systemImage: "arrow.up.arrow.down")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 15)
+                        .frame(height: 44)
+                        .background(.background.opacity(0.92), in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func canvasTile(_ canvas: CanvasModel) -> some View {
+        ZStack(alignment: .topTrailing) {
+            NavigationLink(destination: CanvasView(
+                canvas: canvas,
+                onDelete: { viewModel.deleteCanvas(canvas: canvas, context: context) },
+                onRename: { newName in
+                    viewModel.renameCanvas(canvas: canvas, newName: newName, context: context)
+                }
+            )) {
+                CanvasCard(canvas: canvas, viewModel: viewModel)
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button {
+                    beginRenaming(canvas)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+
+                Button(role: .destructive) {
+                    viewModel.deleteCanvas(canvas: canvas, context: context)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 32, height: 32)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+            .accessibilityLabel("More options for \(canvas.name)")
+        }
+        .contextMenu {
+            Button {
+                beginRenaming(canvas)
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+
+            Button(role: .destructive) {
+                viewModel.deleteCanvas(canvas: canvas, context: context)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func beginRenaming(_ canvas: CanvasModel) {
+        viewModel.renameText = canvas.name
+        viewModel.selectedCanvasForRename = canvas
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "square.on.square.dashed")
-                .font(.system(size: 52, weight: .ultraLight))
-                .foregroundStyle(.tertiary)
-                .padding(.bottom, 4)
+        VStack(spacing: 20) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.08))
+                    .frame(width: 132, height: 92)
+                    .rotationEffect(.degrees(-7))
+                    .offset(x: -16, y: 3)
 
-            Text("No Canvases")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.purple.opacity(0.09))
+                    .frame(width: 132, height: 92)
+                    .rotationEffect(.degrees(6))
+                    .offset(x: 16, y: 3)
 
-            Text("Create your first canvas to get started")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.background)
+                    .frame(width: 132, height: 92)
+                    .shadow(color: .black.opacity(0.08), radius: 14, y: 6)
 
-            Button {
-                handleCreateCanvasTap()
-            } label: {
-                Text("New Canvas")
+                Image(systemName: "scribble.variable")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            VStack(spacing: 7) {
+                Text("Your first idea starts here")
+                    .font(.title3.weight(.bold))
+
+                Text("Create a canvas for notes, diagrams, planning, or anything that needs more room.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            }
+
+            Button(action: handleCreateCanvasTap) {
+                Label("Create Canvas 1", systemImage: "plus")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(.tint)
-                    .foregroundStyle(.white)
+                    .padding(.vertical, 11)
+                    .background(Color.accentColor.opacity(0.12))
+                    .foregroundStyle(Color.accentColor)
                     .clipShape(Capsule())
             }
-            .padding(.top, 4)
+            .buttonStyle(.plain)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 40)
+        .padding(.vertical, 46)
+        .background(.background.opacity(0.78), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.10), lineWidth: 1)
+        }
+    }
+
+    private var noSearchResults: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("No matching canvases")
+                .font(.headline)
+            Text("Try a different canvas name.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 54)
+    }
+}
+
+private enum CanvasLibrarySort: String, CaseIterable, Identifiable {
+    case newest
+    case oldest
+    case name
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .newest: return "Newest"
+        case .oldest: return "Oldest"
+        case .name: return "Name"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .newest: return "clock.arrow.circlepath"
+        case .oldest: return "clock"
+        case .name: return "textformat"
+        }
     }
 }
 
@@ -286,7 +575,10 @@ struct CanvasCard: View {
     let viewModel: HomeViewModel
 
     private var formattedDate: String {
-        canvas.createdAt.formatted(date: .abbreviated, time: .omitted)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(canvas.createdAt) { return "Today" }
+        if calendar.isDateInYesterday(canvas.createdAt) { return "Yesterday" }
+        return canvas.createdAt.formatted(.dateTime.month(.abbreviated).day())
     }
 
     private var accentColor: Color {
@@ -301,46 +593,70 @@ struct CanvasCard: View {
                         .resizable()
                         .scaledToFill()
                         .frame(maxWidth: .infinity)
-                        .frame(height: 100)
+                        .frame(height: 132)
                         .clipped()
                         .overlay(
                             LinearGradient(
-                                colors: [Color.clear, Color.black.opacity(0.04)],
+                                colors: [Color.clear, Color.black.opacity(0.08)],
                                 startPoint: .top, endPoint: .bottom
                             )
                         )
                 } else {
                     Rectangle()
-                        .fill(accentColor.opacity(0.1))
+                        .fill(
+                            LinearGradient(
+                                colors: [accentColor.opacity(0.16), accentColor.opacity(0.05)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
                         .frame(maxWidth: .infinity)
-                        .frame(height: 100)
-                    Image(systemName: canvas.iconName)
-                        .font(.system(size: 28, weight: .light))
+                        .frame(height: 132)
+
+                    Circle()
+                        .stroke(accentColor.opacity(0.10), lineWidth: 18)
+                        .frame(width: 112, height: 112)
+                        .offset(x: 100, y: -46)
+
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(.background.opacity(0.82))
+                            .frame(width: 54, height: 54)
+                        Image(systemName: canvas.iconName)
+                            .font(.system(size: 24, weight: .medium))
+                    }
                         .foregroundStyle(accentColor)
-                        .padding(14)
+                        .padding(16)
                 }
             }
-            .frame(height: 100)
+            .frame(height: 132)
             .clipped()
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text(canvas.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(formattedDate)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+
+                HStack(spacing: 6) {
+                    Label(canvas.canvasSize.displayName, systemImage: canvas.canvasSize.icon)
+                        .lineLimit(1)
+                    Text("•")
+                    Text(formattedDate)
+                        .lineLimit(1)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
         }
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .shadow(color: .black.opacity(0.07), radius: 10, x: 0, y: 2)
+        .background(.background.opacity(0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.07), radius: 14, x: 0, y: 6)
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 1)
         )
     }
 

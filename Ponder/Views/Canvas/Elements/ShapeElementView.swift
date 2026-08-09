@@ -41,6 +41,21 @@ private struct ShapeStyleHistoryState: Equatable {
     }
 }
 
+private struct ShapeLineAppearanceHistoryState: Equatable {
+    let encodedAppearance: String
+    let legacyArrowHead: Bool
+
+    init(_ shape: ShapeElementModel) {
+        encodedAppearance = shape.triangleVariantRaw
+        legacyArrowHead = shape.hasArrowHead
+    }
+
+    func apply(to shape: ShapeElementModel) {
+        shape.triangleVariantRaw = encodedAppearance
+        shape.hasArrowHead = legacyArrowHead
+    }
+}
+
 struct ShapeElementView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var canvasHistory: CanvasUndoManager
@@ -141,7 +156,7 @@ struct ShapeElementView: View {
             polygonSides: shape.polygonSides,
             capturesInterior: (shape.shapeKind.supportsFill && shape.hasFill)
                 || (isSelected && !isMultiSelectMode),
-            hasArrow: shape.hasArrowHead,
+            lineEnding: shape.lineEnding,
             strokeWidth: max(CGFloat(shape.strokeWidth), 28 / max(canvasScale, 0.1))
         )
     }
@@ -162,41 +177,67 @@ struct ShapeElementView: View {
         case .line:
             if hasVisibleStroke {
                 LineShapeView(width: currentSize.width, strokeColor: strokeColor,
-                              strokeWidth: shape.strokeWidth, hasArrow: shape.hasArrowHead)
+                              strokeWidth: shape.strokeWidth, ending: shape.lineEnding,
+                              lineStyle: shape.lineStyle)
             } else {
                 Color.clear
             }
         case .rectangle:
-            ZStack {
-                if shape.hasFill { RoundedRectangle(cornerRadius: 4).fill(fillColor) }
-                if hasVisibleStroke {
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
-                }
-            }
+            StyledCanvasShape(shape: RoundedRectangle(cornerRadius: 4), fillColor: fillColor,
+                              strokeColor: strokeColor, hasFill: shape.hasFill,
+                              hasStroke: hasVisibleStroke, strokeWidth: shape.strokeWidth)
+        case .roundedRectangle:
+            StyledCanvasShape(shape: RoundedRectangle(cornerRadius: 22), fillColor: fillColor,
+                              strokeColor: strokeColor, hasFill: shape.hasFill,
+                              hasStroke: hasVisibleStroke, strokeWidth: shape.strokeWidth)
         case .triangle:
-            ZStack {
-                if shape.hasFill { TriangleShape(variant: shape.triangleVariant).fill(fillColor) }
-                if hasVisibleStroke {
-                    TriangleShape(variant: shape.triangleVariant)
-                        .stroke(strokeColor, lineWidth: shape.strokeWidth)
-                }
-            }
+            StyledCanvasShape(shape: TriangleShape(variant: shape.triangleVariant), fillColor: fillColor,
+                              strokeColor: strokeColor, hasFill: shape.hasFill,
+                              hasStroke: hasVisibleStroke, strokeWidth: shape.strokeWidth)
         case .polygon:
-            ZStack {
-                if shape.hasFill { PolygonShape(sides: shape.polygonSides).fill(fillColor) }
-                if hasVisibleStroke {
-                    PolygonShape(sides: shape.polygonSides)
-                        .stroke(strokeColor, lineWidth: shape.strokeWidth)
-                }
-            }
+            StyledCanvasShape(shape: PolygonShape(sides: shape.polygonSides), fillColor: fillColor,
+                              strokeColor: strokeColor, hasFill: shape.hasFill,
+                              hasStroke: hasVisibleStroke, strokeWidth: shape.strokeWidth)
         case .circle:
-            ZStack {
-                if shape.hasFill { Circle().fill(fillColor) }
-                if hasVisibleStroke {
-                    Circle().strokeBorder(strokeColor, lineWidth: shape.strokeWidth)
-                }
-            }
+            StyledCanvasShape(shape: Circle(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .ellipse:
+            StyledCanvasShape(shape: Ellipse(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .diamond:
+            StyledCanvasShape(shape: DiamondShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .star:
+            StyledCanvasShape(shape: StarShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .speechBubble:
+            StyledCanvasShape(shape: SpeechBubbleShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .cloud:
+            StyledCanvasShape(shape: CloudShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .parallelogram:
+            StyledCanvasShape(shape: ParallelogramShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .cylinder:
+            StyledCanvasShape(shape: CylinderShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .document:
+            StyledCanvasShape(shape: DocumentShape(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
+        case .terminator:
+            StyledCanvasShape(shape: Capsule(), fillColor: fillColor, strokeColor: strokeColor,
+                              hasFill: shape.hasFill, hasStroke: hasVisibleStroke,
+                              strokeWidth: shape.strokeWidth)
         }
     }
 
@@ -210,20 +251,35 @@ struct ShapeElementView: View {
             strokeWidthMenu
             if shape.shapeKind == .line {
                 Divider().frame(height: 18)
-                Button {
-                    let oldValue = shape.hasArrowHead
-                    shape.hasArrowHead.toggle(); shape.updatedAt = Date(); try? context.save()
-                    Task { await ShapeSyncService.shared.upsert(shape) }
-                    canvasHistory.recordElementChange(
-                        name: "Toggle arrowhead", element: shape,
-                        from: oldValue, to: shape.hasArrowHead, context: context
-                    ) { $0.hasArrowHead = $1 }
+                Menu {
+                    ForEach(ShapeLineEnding.allCases) { ending in
+                        Button {
+                            setLineEnding(ending)
+                        } label: {
+                            Label(ending.title, systemImage: ending.icon)
+                        }
+                    }
                 } label: {
-                    Image(systemName: shape.hasArrowHead ? "arrow.right" : "minus")
+                    Image(systemName: shape.lineEnding.icon)
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(shape.hasArrowHead ? Color.accentColor : Color.primary.opacity(0.6))
+                        .foregroundStyle(shape.lineEnding == .none ? Color.primary.opacity(0.6) : Color.accentColor)
                         .frame(width: 26, height: 26)
-                }.buttonStyle(.plain)
+                }
+
+                Menu {
+                    ForEach(ShapeLineStyle.allCases) { style in
+                        Button {
+                            setLineStyle(style)
+                        } label: {
+                            Label(style.title, systemImage: style.icon)
+                        }
+                    }
+                } label: {
+                    Image(systemName: shape.lineStyle.icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(shape.lineStyle == .solid ? Color.primary.opacity(0.6) : Color.accentColor)
+                        .frame(width: 26, height: 26)
+                }
             }
             if shape.shapeKind == .triangle {
                 Divider().frame(height: 18)
@@ -490,6 +546,35 @@ struct ShapeElementView: View {
         persistShapeStyle(from: oldState)
     }
 
+    private func setLineEnding(_ ending: ShapeLineEnding) {
+        guard shape.shapeKind == .line, ending != shape.lineEnding else { return }
+        let oldState = ShapeLineAppearanceHistoryState(shape)
+        shape.lineEnding = ending
+        persistLineAppearance(from: oldState)
+    }
+
+    private func setLineStyle(_ style: ShapeLineStyle) {
+        guard shape.shapeKind == .line, style != shape.lineStyle else { return }
+        let oldState = ShapeLineAppearanceHistoryState(shape)
+        shape.lineStyle = style
+        persistLineAppearance(from: oldState)
+    }
+
+    private func persistLineAppearance(from oldState: ShapeLineAppearanceHistoryState) {
+        shape.updatedAt = Date()
+        try? context.save()
+        Task { await ShapeSyncService.shared.upsert(shape) }
+        canvasHistory.recordElementChange(
+            name: "Change line appearance",
+            element: shape,
+            from: oldState,
+            to: ShapeLineAppearanceHistoryState(shape),
+            context: context
+        ) { target, state in
+            state.apply(to: target)
+        }
+    }
+
     private func ensureVisibleStyle() {
         if shape.hasVisibleStyle { return }
         shape.strokeColorName = "primary"
@@ -626,7 +711,7 @@ private struct ShapeInteractionRegion: Shape {
     let triangleVariant: TriangleVariant
     let polygonSides: Int
     let capturesInterior: Bool
-    let hasArrow: Bool
+    let lineEnding: ShapeLineEnding
     let strokeWidth: CGFloat
 
     func path(in rect: CGRect) -> Path {
@@ -636,8 +721,11 @@ private struct ShapeInteractionRegion: Shape {
         var hitPath = basePath.strokedPath(
             StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
         )
-        if kind == .line, hasArrow {
-            hitPath.addPath(arrowPath(in: rect))
+        if kind == .line, lineEnding.includesStart {
+            hitPath.addPath(arrowPath(in: rect, atStart: true))
+        }
+        if kind == .line, lineEnding.includesEnd {
+            hitPath.addPath(arrowPath(in: rect, atStart: false))
         }
         return hitPath
     }
@@ -651,45 +739,107 @@ private struct ShapeInteractionRegion: Shape {
             }
         case .rectangle:
             return RoundedRectangle(cornerRadius: 4).path(in: rect)
+        case .roundedRectangle:
+            return RoundedRectangle(cornerRadius: 22).path(in: rect)
         case .triangle:
             return TriangleShape(variant: triangleVariant).path(in: rect)
         case .polygon:
             return PolygonShape(sides: polygonSides).path(in: rect)
         case .circle:
             return Circle().path(in: rect)
+        case .ellipse:
+            return Ellipse().path(in: rect)
+        case .diamond:
+            return DiamondShape().path(in: rect)
+        case .star:
+            return StarShape().path(in: rect)
+        case .speechBubble:
+            return SpeechBubbleShape().path(in: rect)
+        case .cloud:
+            return CloudShape().path(in: rect)
+        case .parallelogram:
+            return ParallelogramShape().path(in: rect)
+        case .cylinder:
+            return CylinderShape().path(in: rect)
+        case .document:
+            return DocumentShape().path(in: rect)
+        case .terminator:
+            return Capsule().path(in: rect)
         }
     }
 
-    private func arrowPath(in rect: CGRect) -> Path {
+    private func arrowPath(in rect: CGRect, atStart: Bool) -> Path {
         Path { path in
             let arrowLength = max(8, strokeWidth * 0.8)
-            path.move(to: CGPoint(x: rect.maxX, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.maxX - arrowLength, y: rect.midY - arrowLength * 0.7))
-            path.addLine(to: CGPoint(x: rect.maxX - arrowLength, y: rect.midY + arrowLength * 0.7))
+            let tipX = atStart ? rect.minX : rect.maxX
+            let baseX = atStart ? tipX + arrowLength : tipX - arrowLength
+            path.move(to: CGPoint(x: tipX, y: rect.midY))
+            path.addLine(to: CGPoint(x: baseX, y: rect.midY - arrowLength * 0.7))
+            path.addLine(to: CGPoint(x: baseX, y: rect.midY + arrowLength * 0.7))
             path.closeSubpath()
         }
     }
 }
 
-private struct LineShapeView: View {
-    let width: CGFloat; let strokeColor: Color; let strokeWidth: Double; let hasArrow: Bool
+struct LineShapeView: View {
+    let width: CGFloat
+    let strokeColor: Color
+    let strokeWidth: Double
+    let ending: ShapeLineEnding
+    let lineStyle: ShapeLineStyle
+
     var body: some View {
         GeometryReader { geo in
             let midY = geo.size.height / 2
+            let arrowSize = max(9, CGFloat(strokeWidth) * 4)
+            let startX = ending.includesStart ? arrowSize * 0.8 : 0
+            let endX = geo.size.width - (ending.includesEnd ? arrowSize * 0.8 : 0)
             ZStack {
                 Path { p in
-                    p.move(to: CGPoint(x: 0, y: midY))
-                    p.addLine(to: CGPoint(x: geo.size.width - (hasArrow ? CGFloat(strokeWidth * 3) : 0), y: midY))
-                }.stroke(strokeColor, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
-                if hasArrow {
-                    Path { p in
-                        let h = CGFloat(strokeWidth * 3); let endX = geo.size.width
-                        p.move(to: CGPoint(x: endX, y: midY))
-                        p.addLine(to: CGPoint(x: endX - h, y: midY - h * 0.7))
-                        p.addLine(to: CGPoint(x: endX - h, y: midY + h * 0.7))
-                        p.closeSubpath()
-                    }.fill(strokeColor)
-                }
+                    p.move(to: CGPoint(x: startX, y: midY))
+                    p.addLine(to: CGPoint(x: endX, y: midY))
+                }.stroke(
+                    strokeColor,
+                    style: StrokeStyle(
+                        lineWidth: strokeWidth,
+                        lineCap: .round,
+                        dash: lineStyle.dashPattern(for: CGFloat(strokeWidth))
+                    )
+                )
+                if ending.includesStart { arrowHead(at: 0, midY: midY, size: arrowSize, pointsRight: false) }
+                if ending.includesEnd { arrowHead(at: geo.size.width, midY: midY, size: arrowSize, pointsRight: true) }
+            }
+        }
+    }
+
+    private func arrowHead(at x: CGFloat, midY: CGFloat, size: CGFloat, pointsRight: Bool) -> some View {
+        Path { path in
+            let baseX = pointsRight ? x - size : x + size
+            path.move(to: CGPoint(x: x, y: midY))
+            path.addLine(to: CGPoint(x: baseX, y: midY - size * 0.62))
+            path.addLine(to: CGPoint(x: baseX, y: midY + size * 0.62))
+            path.closeSubpath()
+        }
+        .fill(strokeColor)
+    }
+}
+
+struct StyledCanvasShape<S: Shape>: View {
+    let shape: S
+    let fillColor: Color
+    let strokeColor: Color
+    let hasFill: Bool
+    let hasStroke: Bool
+    let strokeWidth: Double
+
+    var body: some View {
+        ZStack {
+            if hasFill { shape.fill(fillColor) }
+            if hasStroke {
+                shape.stroke(
+                    strokeColor,
+                    style: StrokeStyle(lineWidth: strokeWidth, lineJoin: .round)
+                )
             }
         }
     }
@@ -730,5 +880,173 @@ struct PolygonShape: Shape {
             i == 0 ? p.move(to: pt) : p.addLine(to: pt)
         }
         p.closeSubpath(); return p
+    }
+}
+
+struct DiamondShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+            path.closeSubpath()
+        }
+    }
+}
+
+struct StarShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let outerRadius = min(rect.width, rect.height) / 2
+        let innerRadius = outerRadius * 0.44
+
+        for index in 0..<10 {
+            let radius = index.isMultiple(of: 2) ? outerRadius : innerRadius
+            let angle = -CGFloat.pi / 2 + CGFloat(index) * CGFloat.pi / 5
+            let point = CGPoint(
+                x: center.x + cos(angle) * radius,
+                y: center.y + sin(angle) * radius
+            )
+            index == 0 ? path.move(to: point) : path.addLine(to: point)
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct SpeechBubbleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let radius = min(18, min(rect.width, rect.height) * 0.16)
+        let bubbleBottom = rect.maxY - rect.height * 0.18
+        let tailStart = rect.minX + rect.width * 0.28
+        let tailEnd = rect.minX + rect.width * 0.14
+
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                              control: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: bubbleBottom - radius))
+            path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: bubbleBottom),
+                              control: CGPoint(x: rect.maxX, y: bubbleBottom))
+            path.addLine(to: CGPoint(x: tailStart, y: bubbleBottom))
+            path.addLine(to: CGPoint(x: tailEnd, y: rect.maxY))
+            path.addLine(to: CGPoint(x: tailEnd + rect.width * 0.02, y: bubbleBottom))
+            path.addLine(to: CGPoint(x: rect.minX + radius, y: bubbleBottom))
+            path.addQuadCurve(to: CGPoint(x: rect.minX, y: bubbleBottom - radius),
+                              control: CGPoint(x: rect.minX, y: bubbleBottom))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                              control: CGPoint(x: rect.minX, y: rect.minY))
+            path.closeSubpath()
+        }
+    }
+}
+
+struct CloudShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX + rect.width * 0.20, y: rect.maxY * 0.78 + rect.minY * 0.22))
+            path.addCurve(
+                to: CGPoint(x: rect.minX + rect.width * 0.25, y: rect.minY + rect.height * 0.43),
+                control1: CGPoint(x: rect.minX + rect.width * 0.02, y: rect.minY + rect.height * 0.78),
+                control2: CGPoint(x: rect.minX + rect.width * 0.05, y: rect.minY + rect.height * 0.44)
+            )
+            path.addCurve(
+                to: CGPoint(x: rect.minX + rect.width * 0.51, y: rect.minY + rect.height * 0.24),
+                control1: CGPoint(x: rect.minX + rect.width * 0.28, y: rect.minY + rect.height * 0.16),
+                control2: CGPoint(x: rect.minX + rect.width * 0.45, y: rect.minY + rect.height * 0.12)
+            )
+            path.addCurve(
+                to: CGPoint(x: rect.minX + rect.width * 0.72, y: rect.minY + rect.height * 0.42),
+                control1: CGPoint(x: rect.minX + rect.width * 0.63, y: rect.minY + rect.height * 0.16),
+                control2: CGPoint(x: rect.minX + rect.width * 0.72, y: rect.minY + rect.height * 0.25)
+            )
+            path.addCurve(
+                to: CGPoint(x: rect.minX + rect.width * 0.80, y: rect.minY + rect.height * 0.80),
+                control1: CGPoint(x: rect.minX + rect.width * 0.98, y: rect.minY + rect.height * 0.35),
+                control2: CGPoint(x: rect.minX + rect.width * 1.00, y: rect.minY + rect.height * 0.74)
+            )
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.20, y: rect.minY + rect.height * 0.80))
+            path.closeSubpath()
+        }
+    }
+}
+
+struct ParallelogramShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let inset = min(rect.width * 0.16, rect.height * 0.34)
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX + inset, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.closeSubpath()
+        }
+    }
+}
+
+struct CylinderShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let capHeight = min(max(rect.height * 0.16, 14), 30)
+        let radiusX = rect.width / 2
+        let radiusY = capHeight / 2
+        let topCenterY = rect.minY + radiusY
+        let bottomCenterY = rect.maxY - radiusY
+        let kappa: CGFloat = 0.552_284_75
+        var path = Path()
+
+        // One continuous outer silhouette: straight sides, one clean bottom
+        // ellipse, and an upper arc that exactly matches the top ellipse.
+        path.move(to: CGPoint(x: rect.minX, y: topCenterY))
+        path.addLine(to: CGPoint(x: rect.minX, y: bottomCenterY))
+        path.addCurve(
+            to: CGPoint(x: rect.midX, y: rect.maxY),
+            control1: CGPoint(x: rect.minX, y: bottomCenterY + radiusY * kappa),
+            control2: CGPoint(x: rect.midX - radiusX * kappa, y: rect.maxY)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.maxX, y: bottomCenterY),
+            control1: CGPoint(x: rect.midX + radiusX * kappa, y: rect.maxY),
+            control2: CGPoint(x: rect.maxX, y: bottomCenterY + radiusY * kappa)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: topCenterY))
+        path.addCurve(
+            to: CGPoint(x: rect.midX, y: rect.minY),
+            control1: CGPoint(x: rect.maxX, y: topCenterY - radiusY * kappa),
+            control2: CGPoint(x: rect.midX + radiusX * kappa, y: rect.minY)
+        )
+        path.addCurve(
+            to: CGPoint(x: rect.minX, y: topCenterY),
+            control1: CGPoint(x: rect.midX - radiusX * kappa, y: rect.minY),
+            control2: CGPoint(x: rect.minX, y: topCenterY - radiusY * kappa)
+        )
+        path.closeSubpath()
+
+        // The top ellipse adds only the visible front seam; its upper half
+        // sits exactly on the silhouette instead of floating above it.
+        path.addEllipse(in: CGRect(x: rect.minX, y: rect.minY,
+                                   width: rect.width, height: capHeight))
+        return path
+    }
+}
+
+struct DocumentShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let wave = min(rect.height * 0.12, 22)
+        let baseline = rect.maxY - wave
+        return Path { path in
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: baseline))
+            path.addCurve(
+                to: CGPoint(x: rect.minX, y: baseline),
+                control1: CGPoint(x: rect.maxX - rect.width * 0.27, y: baseline - wave),
+                control2: CGPoint(x: rect.minX + rect.width * 0.27, y: baseline + wave)
+            )
+            path.closeSubpath()
+        }
     }
 }

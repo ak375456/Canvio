@@ -11,12 +11,13 @@ import Combine
 class ShapeElementViewModel: ObservableObject {
     @Published var editingID: UUID? = nil
 
-    func addShape(canvasID: UUID, kind: ShapeKind, center: CGPoint,
+    func addShape(canvasID: UUID, preset: ShapePreset, center: CGPoint,
                   offset: CGSize, scale: CGFloat, zIndex: Int,
                   context: ModelContext, undoManager: CanvasUndoManager? = nil) {
         let x = (center.x - offset.width) / scale
         let y = (center.y - offset.height) / scale
-        let shape = ShapeElementModel(canvasID: canvasID, kind: kind, x: x, y: y)
+        let shape = ShapeElementModel(canvasID: canvasID, kind: preset.kind, x: x, y: y)
+        Self.apply(preset, to: shape)
         shape.zIndex = zIndex
         context.insert(shape); try? context.save()
         editingID = shape.id
@@ -32,12 +33,28 @@ class ShapeElementViewModel: ObservableObject {
                 }
             },
             redo: {
-                let el = ShapeElementModel(canvasID: canvasID, kind: kind, x: x, y: y)
+                let el = ShapeElementModel(canvasID: canvasID, kind: preset.kind, x: x, y: y)
+                Self.apply(preset, to: el)
                 el.id = id; el.zIndex = zIndex
                 context.insert(el); try? context.save()
                 Task { await ShapeSyncService.shared.upsert(el) }
             }
         ))
+    }
+
+    private static func apply(_ preset: ShapePreset, to shape: ShapeElementModel) {
+        if let triangleVariant = preset.triangleVariant {
+            shape.triangleVariant = triangleVariant
+        }
+        if let polygonSides = preset.polygonSides {
+            shape.polygonSides = polygonSides
+        }
+        if shape.shapeKind == .line {
+            shape.setLineAppearance(
+                ending: preset.lineEnding ?? .none,
+                style: preset.lineStyle ?? .solid
+            )
+        }
     }
 
     func updatePosition(shape: ShapeElementModel, translation: CGSize,
