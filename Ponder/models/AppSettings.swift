@@ -443,6 +443,12 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.drawingPatternWidth") private var drawingPatternWidthRaw: Double = DrawingPenConfiguration.default.patternWidth
     @AppStorage("ponder.drawingDashLength") private var drawingDashLengthRaw: Double = DrawingPenConfiguration.default.dashLength
     @AppStorage("ponder.drawingPatternGap") private var drawingPatternGapRaw: Double = DrawingPenConfiguration.default.patternGap
+    @AppStorage("ponder.drawingColorCycleEnabled") private var drawingColorCycleEnabledRaw: Bool = DrawingColorCycleConfiguration.default.isEnabled
+    @AppStorage("ponder.drawingColorCycleColors") private var drawingColorCycleColorsRaw: String = DrawingColorCycleConfiguration.default.colorHexes.joined(separator: ",")
+    @AppStorage("ponder.drawingColorCycleStrokesPerColor") private var drawingColorCycleStrokesPerColorRaw: Int = DrawingColorCycleConfiguration.default.strokesPerColor
+    @AppStorage("ponder.drawingColorCycleMode") private var drawingColorCycleModeRaw: String = DrawingColorCycleConfiguration.default.mode.rawValue
+    @AppStorage("ponder.drawingContinuousColorSpeed") private var drawingContinuousColorSpeedRaw: String = DrawingColorCycleConfiguration.default.continuousSpeed.rawValue
+    @AppStorage("ponder.drawingColorCycleUpdatedAt") private var drawingColorCycleUpdatedAtRaw: String = ""
     @AppStorage("ponder.handwritingToTextEnabled") private var handwritingToTextEnabledRaw: Bool = true
     @AppStorage("ponder.handwritingToTextStrictness") private var handwritingToTextStrictnessRaw: Double = 0.35
     @AppStorage("ponder.handwritingTextGrouping") private var handwritingTextGroupingRaw: String = HandwritingTextGrouping.automatic.rawValue
@@ -712,6 +718,71 @@ class AppSettings: ObservableObject {
         }
     }
 
+    var drawingColorCycleConfiguration: DrawingColorCycleConfiguration {
+        get {
+            DrawingColorCycleConfiguration(
+                isEnabled: drawingColorCycleEnabledRaw,
+                colorHexes: drawingColorCycleColorsRaw
+                    .split(separator: ",")
+                    .map(String.init),
+                strokesPerColor: drawingColorCycleStrokesPerColorRaw,
+                mode: DrawingColorCycleMode(rawValue: drawingColorCycleModeRaw) ?? .byStroke,
+                continuousSpeed: DrawingContinuousColorSpeed(
+                    rawValue: drawingContinuousColorSpeedRaw
+                ) ?? .medium
+            ).normalized
+        }
+        set {
+            let configuration = newValue.normalized
+            guard configuration != drawingColorCycleConfiguration else { return }
+            writeDrawingColorCycleConfiguration(configuration)
+            let updatedAt = Date()
+            drawingColorCycleUpdatedAtRaw = Self.drawingSettingsTimestamp(from: updatedAt)
+            objectWillChange.send()
+            DrawingSettingsSyncService.shared.scheduleUpsert(
+                configuration: configuration,
+                updatedAt: updatedAt
+            )
+        }
+    }
+
+    var drawingColorCycleUpdatedAt: Date? {
+        Self.drawingSettingsDate(from: drawingColorCycleUpdatedAtRaw)
+    }
+
+    func applySyncedDrawingColorCycleConfiguration(
+        _ configuration: DrawingColorCycleConfiguration,
+        updatedAt: Date
+    ) {
+        writeDrawingColorCycleConfiguration(configuration.normalized)
+        drawingColorCycleUpdatedAtRaw = Self.drawingSettingsTimestamp(from: updatedAt)
+        objectWillChange.send()
+    }
+
+    private func writeDrawingColorCycleConfiguration(
+        _ configuration: DrawingColorCycleConfiguration
+    ) {
+        drawingColorCycleEnabledRaw = configuration.isEnabled
+        drawingColorCycleColorsRaw = configuration.colorHexes.joined(separator: ",")
+        drawingColorCycleStrokesPerColorRaw = configuration.strokesPerColor
+        drawingColorCycleModeRaw = configuration.mode.rawValue
+        drawingContinuousColorSpeedRaw = configuration.continuousSpeed.rawValue
+    }
+
+    private static func drawingSettingsTimestamp(from date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    private static func drawingSettingsDate(from value: String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        return ISO8601DateFormatter().date(from: value)
+    }
+
     var handwritingToTextEnabled: Bool {
         get { handwritingToTextEnabledRaw }
         set { handwritingToTextEnabledRaw = newValue; objectWillChange.send() }
@@ -830,6 +901,14 @@ class AppSettings: ObservableObject {
     var isPro: Bool {
         get { isProRaw }
         set { isProRaw = newValue; objectWillChange.send() }
+    }
+
+    var effectiveDrawingColorCycleConfiguration: DrawingColorCycleConfiguration {
+        var configuration = drawingColorCycleConfiguration
+        if configuration.mode == .continuous && !isPro {
+            configuration.mode = .byStroke
+        }
+        return configuration
     }
 
     var hasSeenOnboarding: Bool {

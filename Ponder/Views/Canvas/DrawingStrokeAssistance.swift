@@ -5,6 +5,8 @@ import SwiftUI
 #if os(iOS)
 import QuartzCore
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 enum DrawingStrokeStyle: String, CaseIterable, Identifiable {
@@ -96,7 +98,132 @@ struct DrawingPenConfiguration: Equatable {
     }
 }
 
+enum DrawingColorCycleMode: String, CaseIterable, Codable, Identifiable {
+    case byStroke
+    case continuous
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .byStroke:   return "By stroke"
+        case .continuous: return "Continuous"
+        }
+    }
+}
+
+enum DrawingContinuousColorSpeed: String, CaseIterable, Codable, Identifiable {
+    case slow
+    case medium
+    case fast
+
+    var id: String { rawValue }
+
+    var title: String { rawValue.capitalized }
+
+    /// Drawing-space distance used to blend from one palette color to the next.
+    var transitionLength: CGFloat {
+        switch self {
+        case .slow:   return 180
+        case .medium: return 105
+        case .fast:   return 55
+        }
+    }
+}
+
+struct DrawingColorCycleConfiguration: Equatable, Codable {
+    static let maximumColorCount = 5
+    static let strokeIntervalRange = 1...50
+    static let `default` = DrawingColorCycleConfiguration(
+        isEnabled: false,
+        colorHexes: ["#FF9500", "#007AFF", "#AF52DE"],
+        strokesPerColor: 3,
+        mode: .byStroke,
+        continuousSpeed: .medium
+    )
+
+    var isEnabled: Bool
+    var colorHexes: [String]
+    var strokesPerColor: Int
+    var mode: DrawingColorCycleMode = .byStroke
+    var continuousSpeed: DrawingContinuousColorSpeed = .medium
+
+    var normalized: DrawingColorCycleConfiguration {
+        var colors = colorHexes
+            .prefix(Self.maximumColorCount)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if colors.isEmpty {
+            colors = Self.default.colorHexes
+        }
+
+        return DrawingColorCycleConfiguration(
+            isEnabled: isEnabled,
+            colorHexes: colors,
+            strokesPerColor: min(
+                Self.strokeIntervalRange.upperBound,
+                max(Self.strokeIntervalRange.lowerBound, strokesPerColor)
+            ),
+            mode: mode,
+            continuousSpeed: continuousSpeed
+        )
+    }
+
+    var isActive: Bool {
+        let configuration = normalized
+        return configuration.isEnabled && configuration.colorHexes.count >= 2
+    }
+
+    var isContinuousActive: Bool {
+        isActive && mode == .continuous
+    }
+}
+
+struct DrawingColorCycleState {
+    private(set) var configuration = DrawingColorCycleConfiguration.default
+    private(set) var activeColorIndex = 0
+    private var completedStrokesForActiveColor = 0
+
+    var activeColorHex: String? {
+        guard configuration.isActive,
+              configuration.colorHexes.indices.contains(activeColorIndex) else { return nil }
+        return configuration.colorHexes[activeColorIndex]
+    }
+
+    /// Returns true when callers should apply the first color immediately.
+    mutating func updateConfiguration(
+        _ newValue: DrawingColorCycleConfiguration,
+        force: Bool = false
+    ) -> Bool {
+        let normalized = newValue.normalized
+        guard force || normalized != configuration else { return false }
+        configuration = normalized
+        activeColorIndex = 0
+        completedStrokesForActiveColor = 0
+        return normalized.isActive
+    }
+
+    /// Returns true when a completed gesture advances to another palette color.
+    mutating func recordCompletedStroke() -> Bool {
+        guard configuration.isActive, configuration.mode == .byStroke else { return false }
+        completedStrokesForActiveColor += 1
+        guard completedStrokesForActiveColor >= configuration.strokesPerColor else {
+            return false
+        }
+
+        completedStrokesForActiveColor = 0
+        activeColorIndex = (activeColorIndex + 1) % configuration.colorHexes.count
+        return true
+    }
+}
+
 enum DrawingInputDebounce {
+    /// PencilKit can publish one final path update just after it reports that
+    /// the Pencil lifted. Give the hidden live-preview ink time to settle
+    /// before replacing it with the visible patterned/gradient drawing.
+    static let livePreviewFinalization: TimeInterval = 0.045
+
     /// Keep all expensive PencilKit rewriting out of the gap between letters.
     /// A new touch cancels this work and extends the same batch.
     static let strokeProcessing: TimeInterval = 0.18
@@ -143,7 +270,8 @@ enum DrawingStrokeProcessor {
         in drawing: PKDrawing,
         since baseline: DrawingStrokeBaseline,
         configuration: DrawingPenConfiguration,
-        replacementInk: PKInk? = nil
+        replacementInk: PKInk? = nil,
+        colorCycleConfiguration: DrawingColorCycleConfiguration? = nil
     ) -> PKDrawing? {
         guard !drawing.strokes.isEmpty else { return nil }
 
@@ -177,7 +305,8 @@ enum DrawingStrokeProcessor {
             in: drawing,
             startingAt: startIndex,
             configuration: configuration,
-            replacementInk: replacementInk
+            replacementInk: replacementInk,
+            colorCycleConfiguration: colorCycleConfiguration
         )
     }
 
@@ -185,12 +314,16 @@ enum DrawingStrokeProcessor {
         in drawing: PKDrawing,
         startingAt startIndex: Int,
         configuration: DrawingPenConfiguration,
-        replacementInk: PKInk? = nil
+        replacementInk: PKInk? = nil,
+        colorCycleConfiguration: DrawingColorCycleConfiguration? = nil
     ) -> PKDrawing? {
         let config = configuration.normalized
+        let colorConfig = colorCycleConfiguration?.normalized
         guard startIndex >= 0,
               startIndex < drawing.strokes.count,
-              config.smoothing > 0.001 || config.usesPattern
+              config.smoothing > 0.001
+                || config.usesPattern
+                || colorConfig?.isContinuousActive == true
         else { return nil }
 
         let sourceStrokes = drawing.strokes
@@ -203,7 +336,8 @@ enum DrawingStrokeProcessor {
                   let processed = processedStrokes(
                     original,
                     configuration: config,
-                    replacementInk: replacementInk
+                    replacementInk: replacementInk,
+                    colorCycleConfiguration: colorConfig
                   )
             else {
                 strokes.append(original)
@@ -216,13 +350,89 @@ enum DrawingStrokeProcessor {
         return changed ? PKDrawing(strokes: strokes) : nil
     }
 
+    /// A PencilKit live preview uses almost-transparent ink underneath its
+    /// visible overlay. Recover any such strokes before persistence without
+    /// touching already-visible marks.
+    static func recoveringInvisiblePreviewStrokes(
+        in drawing: PKDrawing,
+        configuration: DrawingPenConfiguration,
+        replacementInk: PKInk,
+        colorCycleConfiguration: DrawingColorCycleConfiguration? = nil
+    ) -> PKDrawing? {
+        let source = drawing.strokes
+        guard source.contains(where: {
+            $0.ink.color.cgColor.alpha <= 0.01
+        }) else { return nil }
+
+        let config = configuration.normalized
+        let colorConfig = colorCycleConfiguration?.normalized
+        var visibleStrokes: [PKStroke] = []
+
+        for stroke in source {
+            guard stroke.ink.color.cgColor.alpha <= 0.01 else {
+                visibleStrokes.append(stroke)
+                continue
+            }
+
+            if stroke.mask == nil,
+               let processed = processedStrokes(
+                    stroke,
+                    configuration: config,
+                    replacementInk: replacementInk,
+                    colorCycleConfiguration: colorConfig
+               ), processed.contains(where: {
+                    $0.ink.color.cgColor.alpha > 0.01
+               }) {
+                visibleStrokes.append(contentsOf: processed)
+            } else {
+                // Final safety net: preserving the original path in visible
+                // ink is preferable to persisting an empty drawing box.
+                visibleStrokes.append(
+                    PKStroke(
+                        ink: replacementInk,
+                        path: stroke.path,
+                        transform: stroke.transform,
+                        mask: stroke.mask,
+                        randomSeed: stroke.randomSeed
+                    )
+                )
+            }
+        }
+
+        return PKDrawing(strokes: visibleStrokes)
+    }
+
     private static func processedStrokes(
         _ stroke: PKStroke,
         configuration: DrawingPenConfiguration,
-        replacementInk: PKInk?
+        replacementInk: PKInk?,
+        colorCycleConfiguration: DrawingColorCycleConfiguration?
     ) -> [PKStroke]? {
         let source = Array(stroke.path)
         guard source.count >= 2 else {
+            if let colorCycleConfiguration,
+               colorCycleConfiguration.isContinuousActive,
+               let firstHex = colorCycleConfiguration.colorHexes.first {
+                let sourceInk = replacementInk ?? stroke.ink
+                #if os(iOS)
+                let color = UIColor(
+                    ShapeColorPalette.color(named: firstHex, fallback: .orange)
+                ).withAlphaComponent(sourceInk.color.cgColor.alpha)
+                #elseif os(macOS)
+                let color = NSColor(
+                    ShapeColorPalette.color(named: firstHex, fallback: .orange)
+                ).withAlphaComponent(sourceInk.color.cgColor.alpha)
+                #endif
+                return [
+                    PKStroke(
+                        ink: PKInk(sourceInk.inkType, color: color),
+                        path: stroke.path,
+                        transform: stroke.transform,
+                        mask: stroke.mask,
+                        randomSeed: stroke.randomSeed
+                    )
+                ]
+            }
             guard configuration.usesPattern else { return nil }
             return [
                 strokeWithUniformWidth(
@@ -264,11 +474,322 @@ enum DrawingStrokeProcessor {
             randomSeed: stroke.randomSeed
         )
 
-        return applyingLineStyle(
+        let styledStrokes = applyingLineStyle(
             to: smoothedStroke,
             configuration: configuration
         )
+        guard let colorCycleConfiguration,
+              colorCycleConfiguration.isContinuousActive else {
+            return styledStrokes
+        }
+        return applyingContinuousColors(
+            to: styledStrokes,
+            configuration: colorCycleConfiguration,
+            matchSourceThickness: !configuration.usesPattern
+        )
     }
+
+    static func applyingContinuousColors(
+        to strokes: [PKStroke],
+        configuration: DrawingColorCycleConfiguration,
+        matchSourceThickness: Bool = true
+    ) -> [PKStroke] {
+        let config = configuration.normalized
+        guard config.isContinuousActive else { return strokes }
+
+        #if os(iOS)
+        let palette = config.colorHexes.map {
+            UIColor(ShapeColorPalette.color(named: $0, fallback: .orange))
+                .withAlphaComponent(1)
+        }
+        #elseif os(macOS)
+        let palette = config.colorHexes.map {
+            NSColor(ShapeColorPalette.color(named: $0, fallback: .orange))
+                .usingColorSpace(.deviceRGB) ?? .systemOrange
+        }
+        #endif
+
+        guard palette.count >= 2 else { return strokes }
+        let transitionLength = max(config.continuousSpeed.transitionLength, 1)
+        // Eight color samples per transition remains visually smooth while
+        // keeping the finalized PKDrawing light enough to pan and zoom. More
+        // importantly, samples now span multiple PencilKit control points
+        // instead of turning every raw input point into its own PKStroke.
+        let sampleLength = max(8, transitionLength / 8)
+        let epsilon: CGFloat = 0.0001
+        var distanceOffset: CGFloat = 0
+        var output: [PKStroke] = []
+
+        for stroke in strokes {
+            let points = Array(stroke.path)
+            guard points.count >= 2 else {
+                output.append(stroke)
+                continue
+            }
+            var coloredSegments: [PKStroke] = []
+            var segmentPoints = [points[0]]
+            var segmentLength: CGFloat = 0
+
+            func appendColoredSegment() {
+                guard segmentPoints.count >= 2,
+                      segmentLength > epsilon else { return }
+
+                let colorProgress = (
+                    distanceOffset - segmentLength * 0.5
+                ) / transitionLength
+                let baseIndex = Int(floor(colorProgress)) % palette.count
+                let nextIndex = (baseIndex + 1) % palette.count
+                let blend = colorProgress - floor(colorProgress)
+                let alpha = stroke.ink.color.cgColor.alpha
+
+                #if os(iOS)
+                let segmentColor = interpolatedColor(
+                    from: palette[baseIndex],
+                    to: palette[nextIndex],
+                    fraction: blend
+                ).withAlphaComponent(alpha)
+                #elseif os(macOS)
+                let segmentColor = interpolatedColor(
+                    from: palette[baseIndex],
+                    to: palette[nextIndex],
+                    fraction: blend
+                ).withAlphaComponent(alpha)
+                #endif
+
+                coloredSegments.append(
+                    PKStroke(
+                        ink: PKInk(stroke.ink.inkType, color: segmentColor),
+                        path: PKStrokePath(
+                            controlPoints: segmentPoints,
+                            creationDate: stroke.path.creationDate
+                        ),
+                        transform: stroke.transform,
+                        mask: stroke.mask,
+                        randomSeed: stroke.randomSeed
+                            &+ UInt32(output.count + coloredSegments.count)
+                    )
+                )
+            }
+
+            for index in 1..<points.count {
+                var cursor = points[index - 1]
+                let end = points[index]
+                var remaining = pointDistance(cursor.location, end.location)
+                guard remaining > epsilon else { continue }
+
+                while remaining > epsilon {
+                    let remainingInColorSegment = sampleLength - segmentLength
+                    let step = min(remainingInColorSegment, remaining)
+                    let fraction = step / remaining
+                    let boundary = interpolatedPoint(
+                        from: cursor,
+                        to: end,
+                        fraction: fraction
+                    )
+                    appendIfDistinct(boundary, to: &segmentPoints)
+                    cursor = boundary
+                    remaining -= step
+                    segmentLength += step
+                    distanceOffset += step
+
+                    if segmentLength >= sampleLength - epsilon {
+                        appendColoredSegment()
+                        segmentPoints = [boundary]
+                        segmentLength = 0
+                    }
+                }
+            }
+
+            appendColoredSegment()
+
+            if matchSourceThickness {
+                coloredSegments = strokesByMatchingRenderedThickness(
+                    coloredSegments,
+                    to: stroke
+                )
+            }
+            output.append(contentsOf: coloredSegments)
+        }
+
+        return output.isEmpty ? strokes : output
+    }
+
+    /// PencilKit gives very short strokes a different rendered footprint than
+    /// one continuous stroke. Continuous color is represented by many short
+    /// strokes, so adjust their control-point sizes until their measured ink
+    /// bounds match the single source stroke that was visible while drawing.
+    private static func strokesByMatchingRenderedThickness(
+        _ strokes: [PKStroke],
+        to source: PKStroke
+    ) -> [PKStroke] {
+        guard !strokes.isEmpty,
+              let centerlineBounds = centerlineBounds(of: source),
+              let targetThickness = renderedThickness(
+                of: [source],
+                around: centerlineBounds
+              ),
+              targetThickness > 0.01 else {
+            return strokes
+        }
+
+        var adjusted = strokes
+        for _ in 0..<2 {
+            guard let currentThickness = renderedThickness(
+                of: adjusted,
+                around: centerlineBounds
+            ), currentThickness > 0.01 else { break }
+
+            let scale = min(max(targetThickness / currentThickness, 0.25), 4)
+            guard abs(scale - 1) > 0.015 else { break }
+            adjusted = adjusted.map {
+                strokeByScalingPointSizes($0, by: scale)
+            }
+        }
+        return adjusted
+    }
+
+    /// Converts a PKStrokePoint width into PencilKit's actual rendered ink
+    /// width. The ratio depends on ink type and is therefore measured instead
+    /// of being hard-coded.
+    static func renderedInkWidthScale(for stroke: PKStroke) -> CGFloat {
+        let points = Array(stroke.path)
+        guard !points.isEmpty,
+              let centerlineBounds = centerlineBounds(of: stroke),
+              let renderedWidth = renderedThickness(
+                of: [stroke],
+                around: centerlineBounds
+              ) else { return 1 }
+
+        let transformScale = max(
+            hypot(stroke.transform.a, stroke.transform.c),
+            0.0001
+        )
+        let sampledWidth = points.reduce(CGFloat.zero) { current, point in
+            max(
+                current,
+                (point.size.width + point.size.height) * 0.5 * transformScale
+            )
+        }
+        guard sampledWidth > 0.01 else { return 1 }
+        return min(max(renderedWidth / sampledWidth, 0.5), 4)
+    }
+
+    private static func centerlineBounds(of stroke: PKStroke) -> CGRect? {
+        let points = Array(stroke.path)
+        guard let first = points.first else { return nil }
+        let firstLocation = first.location.applying(stroke.transform)
+        var minX = firstLocation.x
+        var minY = firstLocation.y
+        var maxX = firstLocation.x
+        var maxY = firstLocation.y
+
+        for point in points.dropFirst() {
+            let location = point.location.applying(stroke.transform)
+            minX = min(minX, location.x)
+            minY = min(minY, location.y)
+            maxX = max(maxX, location.x)
+            maxY = max(maxY, location.y)
+        }
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        )
+    }
+
+    private static func renderedThickness(
+        of strokes: [PKStroke],
+        around centerlineBounds: CGRect
+    ) -> CGFloat? {
+        guard let first = strokes.first else { return nil }
+        let renderedBounds = strokes.dropFirst().reduce(first.renderBounds) {
+            $0.union($1.renderBounds)
+        }
+        guard !renderedBounds.isNull,
+              !renderedBounds.isInfinite else { return nil }
+
+        let horizontalExpansion = max(
+            renderedBounds.width - centerlineBounds.width,
+            0
+        )
+        let verticalExpansion = max(
+            renderedBounds.height - centerlineBounds.height,
+            0
+        )
+        let expansions = [horizontalExpansion, verticalExpansion].filter {
+            $0 > 0.001 && $0.isFinite
+        }
+        guard !expansions.isEmpty else { return nil }
+        return expansions.reduce(0, +) / CGFloat(expansions.count)
+    }
+
+    private static func strokeByScalingPointSizes(
+        _ stroke: PKStroke,
+        by scale: CGFloat
+    ) -> PKStroke {
+        let controls = stroke.path.map { point in
+            PKStrokePoint(
+                location: point.location,
+                timeOffset: point.timeOffset,
+                size: CGSize(
+                    width: max(point.size.width * scale, 0.01),
+                    height: max(point.size.height * scale, 0.01)
+                ),
+                opacity: point.opacity,
+                force: point.force,
+                azimuth: point.azimuth,
+                altitude: point.altitude,
+                secondaryScale: point.secondaryScale
+            )
+        }
+        return PKStroke(
+            ink: stroke.ink,
+            path: PKStrokePath(
+                controlPoints: controls,
+                creationDate: stroke.path.creationDate
+            ),
+            transform: stroke.transform,
+            mask: stroke.mask,
+            randomSeed: stroke.randomSeed
+        )
+    }
+
+    #if os(iOS)
+    private static func interpolatedColor(
+        from start: UIColor,
+        to end: UIColor,
+        fraction: CGFloat
+    ) -> UIColor {
+        var sr: CGFloat = 0, sg: CGFloat = 0, sb: CGFloat = 0, sa: CGFloat = 0
+        var er: CGFloat = 0, eg: CGFloat = 0, eb: CGFloat = 0, ea: CGFloat = 0
+        guard start.getRed(&sr, green: &sg, blue: &sb, alpha: &sa),
+              end.getRed(&er, green: &eg, blue: &eb, alpha: &ea) else { return start }
+        let amount = min(max(fraction, 0), 1)
+        return UIColor(
+            red: interpolate(sr, er, amount),
+            green: interpolate(sg, eg, amount),
+            blue: interpolate(sb, eb, amount),
+            alpha: interpolate(sa, ea, amount)
+        )
+    }
+    #elseif os(macOS)
+    private static func interpolatedColor(
+        from start: NSColor,
+        to end: NSColor,
+        fraction: CGFloat
+    ) -> NSColor {
+        let startRGB = start.usingColorSpace(.deviceRGB) ?? start
+        let endRGB = end.usingColorSpace(.deviceRGB) ?? end
+        let amount = min(max(fraction, 0), 1)
+        return NSColor(
+            red: interpolate(startRGB.redComponent, endRGB.redComponent, amount),
+            green: interpolate(startRGB.greenComponent, endRGB.greenComponent, amount),
+            blue: interpolate(startRGB.blueComponent, endRGB.blueComponent, amount),
+            alpha: interpolate(startRGB.alphaComponent, endRGB.alphaComponent, amount)
+        )
+    }
+    #endif
 
     static func applyingLineStyle(
         to stroke: PKStroke,
@@ -482,12 +1003,95 @@ enum DrawingStrokeProcessor {
 
 #if os(iOS)
 @MainActor
+private final class ContinuousColorPreviewLayer: CALayer {
+    var strokes: [[CGPoint]] = []
+    var strokeWidths: [[CGFloat]] = []
+    var palette: [UIColor] = []
+    var transitionLength: CGFloat = 105
+    var strokeWidth: CGFloat = 4
+    var dashPattern: [CGFloat] = []
+
+    override func draw(in context: CGContext) {
+        guard palette.count >= 2 else { return }
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+
+        var distanceOffset: CGFloat = 0
+        for (strokeIndex, points) in strokes.enumerated() where points.count >= 2 {
+            let widths = strokeWidths.indices.contains(strokeIndex)
+                ? strokeWidths[strokeIndex]
+                : []
+            for index in 1..<points.count {
+                let start = points[index - 1]
+                let end = points[index]
+                let length = hypot(end.x - start.x, end.y - start.y)
+                guard length > 0.0001 else { continue }
+                let colorProgress = (distanceOffset + length * 0.5) / max(transitionLength, 1)
+                let baseIndex = Int(floor(colorProgress)) % palette.count
+                let nextIndex = (baseIndex + 1) % palette.count
+                let blend = colorProgress - floor(colorProgress)
+                let color = Self.interpolatedColor(
+                    from: palette[baseIndex],
+                    to: palette[nextIndex],
+                    fraction: blend
+                )
+
+                context.setStrokeColor(color.cgColor)
+                if widths.count == points.count {
+                    context.setLineWidth(
+                        max((widths[index - 1] + widths[index]) * 0.5, 0.5)
+                    )
+                } else {
+                    context.setLineWidth(strokeWidth)
+                }
+                if dashPattern.isEmpty {
+                    context.setLineDash(phase: 0, lengths: [])
+                } else {
+                    let patternLength = dashPattern.reduce(0, +)
+                    let phase = patternLength > 0
+                        ? -(distanceOffset.truncatingRemainder(dividingBy: patternLength))
+                        : 0
+                    context.setLineDash(phase: phase, lengths: dashPattern)
+                }
+                context.beginPath()
+                context.move(to: start)
+                context.addLine(to: end)
+                context.strokePath()
+                distanceOffset += length
+            }
+        }
+    }
+
+    private static func interpolatedColor(
+        from start: UIColor,
+        to end: UIColor,
+        fraction: CGFloat
+    ) -> UIColor {
+        var sr: CGFloat = 0, sg: CGFloat = 0, sb: CGFloat = 0, sa: CGFloat = 0
+        var er: CGFloat = 0, eg: CGFloat = 0, eb: CGFloat = 0, ea: CGFloat = 0
+        guard start.getRed(&sr, green: &sg, blue: &sb, alpha: &sa),
+              end.getRed(&er, green: &eg, blue: &eb, alpha: &ea) else { return start }
+        let amount = min(max(fraction, 0), 1)
+        return UIColor(
+            red: sr + (er - sr) * amount,
+            green: sg + (eg - sg) * amount,
+            blue: sb + (eb - sb) * amount,
+            alpha: sa + (ea - sa) * amount
+        )
+    }
+}
+
+@MainActor
 final class LivePatternStrokePreview {
     private let previewLayer = CAShapeLayer()
+    private let continuousPreviewLayer = ContinuousColorPreviewLayer()
     private var configuration = DrawingPenConfiguration.default
+    private var colorConfiguration = DrawingColorCycleConfiguration.default
     private var visibleTool: PKInkingTool?
     private var completedGesturePoints: [[CGPoint]] = []
+    private var completedGestureWidths: [[CGFloat]] = []
     private var gesturePoints: [CGPoint] = []
+    private var gestureWidths: [CGFloat] = []
     private var isTrackingGesture = false
 
     private(set) var replacementInk: PKInk?
@@ -497,24 +1101,69 @@ final class LivePatternStrokePreview {
         visibleTool?.color.cgColor.alpha
     }
 
+    func visibleReplacementInk(fallbackColorHex: String?) -> PKInk? {
+        if let replacementInk,
+           replacementInk.color.cgColor.alpha > 0.01 {
+            return replacementInk
+        }
+
+        guard let tool = visibleTool else { return replacementInk }
+        let fallbackColor: UIColor
+        if let fallbackColorHex {
+            fallbackColor = UIColor(
+                ShapeColorPalette.color(named: fallbackColorHex, fallback: .orange)
+            )
+        } else {
+            fallbackColor = tool.color
+        }
+        return PKInk(
+            tool.inkType,
+            color: fallbackColor.withAlphaComponent(
+                tool.color.cgColor.alpha > 0.01
+                    ? tool.color.cgColor.alpha
+                    : 1
+            )
+        )
+    }
+
+    private var requiresLivePreview: Bool {
+        configuration.usesPattern || colorConfiguration.isContinuousActive
+    }
+
     func synchronize(
         configuration: DrawingPenConfiguration,
         on canvas: PKCanvasView
     ) {
         self.configuration = configuration.normalized
 
-        guard self.configuration.usesPattern else {
+        refreshActivation(on: canvas)
+    }
+
+    func synchronize(
+        colorConfiguration: DrawingColorCycleConfiguration,
+        on canvas: PKCanvasView
+    ) {
+        self.colorConfiguration = colorConfiguration.normalized
+        refreshActivation(on: canvas)
+    }
+
+    private func refreshActivation(on canvas: PKCanvasView) {
+        guard requiresLivePreview else {
             restoreVisibleToolIfNeeded(on: canvas)
             reset()
             return
         }
 
-        guard let currentTool = canvas.tool as? PKInkingTool else {
-            reset()
+        if isActive,
+           let currentTool = canvas.tool as? PKInkingTool,
+           currentTool.color.cgColor.alpha <= 0.01,
+           visibleTool != nil {
+            renderGesturePoints(on: canvas)
             return
         }
 
-        if isActive, currentTool.color.cgColor.alpha <= 0.01 {
+        guard let currentTool = canvas.tool as? PKInkingTool else {
+            reset()
             return
         }
 
@@ -530,7 +1179,7 @@ final class LivePatternStrokePreview {
             return
         }
 
-        guard configuration.usesPattern else {
+        guard requiresLivePreview else {
             reset()
             return
         }
@@ -539,35 +1188,61 @@ final class LivePatternStrokePreview {
     }
 
     func update(with drawing: PKDrawing, on canvas: PKCanvasView) {
-        guard !isTrackingGesture,
-              completedGesturePoints.isEmpty,
-              isActive,
-              configuration.usesPattern,
+        guard isActive,
+              requiresLivePreview,
               let stroke = drawing.strokes.last,
               visibleTool != nil
         else {
             return
         }
 
-        var points = stroke.path.map(\.location)
-        guard !points.isEmpty else {
+        let pathPoints = Array(stroke.path)
+        guard !pathPoints.isEmpty else {
             clear()
             return
         }
 
         let zoom = max(canvas.zoomScale, 0.0001)
-        points = points.map { point -> CGPoint in
-            let drawingPoint = point.applying(stroke.transform)
+        let points = pathPoints.map { point -> CGPoint in
+            let drawingPoint = point.location.applying(stroke.transform)
             return CGPoint(
                 x: drawingPoint.x * zoom - canvas.contentOffset.x,
                 y: drawingPoint.y * zoom - canvas.contentOffset.y
             )
         }
-        render(strokes: [points], zoom: zoom, on: canvas)
+        let transformScale = max(
+            hypot(stroke.transform.a, stroke.transform.c),
+            0.0001
+        )
+        let renderedWidthScale = configuration.usesPattern
+            ? 1
+            : DrawingStrokeProcessor.renderedInkWidthScale(for: stroke)
+        let widths = pathPoints.map {
+            max(
+                ($0.size.width + $0.size.height)
+                    * 0.5
+                    * transformScale
+                    * renderedWidthScale,
+                0.5
+            )
+        }
+
+        if isTrackingGesture, colorConfiguration.isContinuousActive {
+            // Use PencilKit's sampled point sizes instead of the tool's nominal
+            // width so Apple Pencil pressure looks identical before and after
+            // the hidden source stroke is finalized.
+            gesturePoints = points
+            gestureWidths = widths
+            renderGesturePoints(on: canvas)
+            return
+        }
+
+        guard !isTrackingGesture, completedGesturePoints.isEmpty else { return }
+        render(strokes: [points], strokeWidths: [widths], zoom: zoom, on: canvas)
     }
 
     func beginGestureStroke(at location: CGPoint, on canvas: PKCanvasView) {
-        guard isActive, configuration.usesPattern, visibleTool != nil else {
+        guard isActive, requiresLivePreview, visibleTool != nil else {
             return
         }
         // Both PKCanvasViewDelegate and the gesture recognizer can report the
@@ -575,6 +1250,7 @@ final class LivePatternStrokePreview {
         guard !isTrackingGesture else { return }
         isTrackingGesture = true
         gesturePoints = [viewportPoint(from: location, on: canvas)]
+        gestureWidths = [visibleTool?.width ?? 4]
         renderGesturePoints(on: canvas)
     }
 
@@ -586,6 +1262,7 @@ final class LivePatternStrokePreview {
             return
         }
         gesturePoints.append(point)
+        gestureWidths.append(gestureWidths.last ?? visibleTool?.width ?? 4)
         renderGesturePoints(on: canvas)
     }
 
@@ -594,20 +1271,26 @@ final class LivePatternStrokePreview {
         isTrackingGesture = false
         if cancelled {
             gesturePoints.removeAll(keepingCapacity: true)
+            gestureWidths.removeAll(keepingCapacity: true)
         } else if !gesturePoints.isEmpty {
             completedGesturePoints.append(gesturePoints)
+            completedGestureWidths.append(gestureWidths)
             gesturePoints.removeAll(keepingCapacity: true)
+            gestureWidths.removeAll(keepingCapacity: true)
         }
         renderGesturePoints(on: canvas)
     }
 
     private func renderGesturePoints(on canvas: PKCanvasView) {
         var strokes = completedGesturePoints
+        var widths = completedGestureWidths
         if !gesturePoints.isEmpty {
             strokes.append(gesturePoints)
+            widths.append(gestureWidths)
         }
         render(
             strokes: strokes,
+            strokeWidths: widths,
             zoom: max(canvas.zoomScale, 0.0001),
             on: canvas
         )
@@ -615,20 +1298,35 @@ final class LivePatternStrokePreview {
 
     private func render(
         strokes: [[CGPoint]],
+        strokeWidths: [[CGFloat]] = [],
         zoom: CGFloat,
         on canvas: PKCanvasView
     ) {
         guard let visibleTool, !strokes.isEmpty else {
-            hidePreviewLayer()
+            hidePreviewLayers()
+            return
+        }
+
+        let renderedStrokes = strokes.map {
+            DrawingStrokeProcessor.smoothedLocations(
+                $0,
+                amount: CGFloat(configuration.smoothing)
+            )
+        }
+
+        if colorConfiguration.isContinuousActive {
+            renderContinuous(
+                strokes: renderedStrokes,
+                strokeWidths: strokeWidths,
+                visibleTool: visibleTool,
+                zoom: zoom,
+                on: canvas
+            )
             return
         }
 
         let path = CGMutablePath()
-        for points in strokes {
-            let renderedPoints = DrawingStrokeProcessor.smoothedLocations(
-                points,
-                amount: CGFloat(configuration.smoothing)
-            )
+        for renderedPoints in renderedStrokes {
             guard let first = renderedPoints.first else { continue }
             path.move(to: first)
             if renderedPoints.count == 1 {
@@ -655,6 +1353,48 @@ final class LivePatternStrokePreview {
             NSNumber(value: Double(configuration.hiddenPatternLength * zoom))
         ]
         previewLayer.isHidden = false
+        continuousPreviewLayer.isHidden = true
+        CATransaction.commit()
+    }
+
+    private func renderContinuous(
+        strokes: [[CGPoint]],
+        strokeWidths: [[CGFloat]],
+        visibleTool: PKInkingTool,
+        zoom: CGFloat,
+        on canvas: PKCanvasView
+    ) {
+        installLayerIfNeeded(on: canvas)
+        let palette = colorConfiguration.colorHexes.map {
+            UIColor(ShapeColorPalette.color(named: $0, fallback: .orange))
+                .withAlphaComponent(visibleTool.color.cgColor.alpha)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        continuousPreviewLayer.frame = canvas.bounds
+        continuousPreviewLayer.strokes = strokes
+        continuousPreviewLayer.strokeWidths = configuration.usesPattern
+            ? []
+            : strokeWidths.map { widths in
+                widths.map { $0 * zoom }
+            }
+        continuousPreviewLayer.palette = palette
+        continuousPreviewLayer.transitionLength =
+            colorConfiguration.continuousSpeed.transitionLength * zoom
+        continuousPreviewLayer.strokeWidth = (
+            configuration.usesPattern
+                ? CGFloat(configuration.patternWidth)
+                : visibleTool.width
+        ) * zoom
+        continuousPreviewLayer.dashPattern = configuration.usesPattern
+            ? [
+                configuration.visiblePatternLength * zoom,
+                configuration.hiddenPatternLength * zoom
+            ]
+            : []
+        continuousPreviewLayer.isHidden = false
+        continuousPreviewLayer.setNeedsDisplay()
+        previewLayer.isHidden = true
         CATransaction.commit()
     }
 
@@ -667,35 +1407,56 @@ final class LivePatternStrokePreview {
 
     func clear() {
         completedGesturePoints.removeAll(keepingCapacity: true)
+        completedGestureWidths.removeAll(keepingCapacity: true)
         gesturePoints.removeAll(keepingCapacity: true)
+        gestureWidths.removeAll(keepingCapacity: true)
         isTrackingGesture = false
-        hidePreviewLayer()
+        hidePreviewLayers()
     }
 
-    private func hidePreviewLayer() {
+    private func hidePreviewLayers() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         previewLayer.path = nil
         previewLayer.isHidden = true
+        continuousPreviewLayer.strokes = []
+        continuousPreviewLayer.strokeWidths = []
+        continuousPreviewLayer.isHidden = true
         CATransaction.commit()
     }
 
     func detach() {
         clear()
         previewLayer.removeFromSuperlayer()
+        continuousPreviewLayer.removeFromSuperlayer()
         reset()
     }
 
     private func activate(using tool: PKInkingTool, on canvas: PKCanvasView) {
-        visibleTool = tool
-        replacementInk = PKInk(tool.inkType, color: tool.color)
+        let resolvedTool: PKInkingTool
+        if tool.color.cgColor.alpha <= 0.01,
+           let previousTool = visibleTool,
+           previousTool.color.cgColor.alpha > 0.01 {
+            resolvedTool = previousTool
+        } else if tool.color.cgColor.alpha <= 0.01 {
+            resolvedTool = PKInkingTool(
+                tool.inkType,
+                color: tool.color.withAlphaComponent(1),
+                width: tool.width
+            )
+        } else {
+            resolvedTool = tool
+        }
+
+        visibleTool = resolvedTool
+        replacementInk = PKInk(resolvedTool.inkType, color: resolvedTool.color)
         isActive = true
 
-        let hiddenColor = tool.color.withAlphaComponent(0.001)
+        let hiddenColor = resolvedTool.color.withAlphaComponent(0.001)
         canvas.tool = PKInkingTool(
-            tool.inkType,
+            resolvedTool.inkType,
             color: hiddenColor,
-            width: tool.width
+            width: resolvedTool.width
         )
     }
 
@@ -709,14 +1470,21 @@ final class LivePatternStrokePreview {
     }
 
     private func installLayerIfNeeded(on canvas: PKCanvasView) {
-        guard previewLayer.superlayer == nil else { return }
-        previewLayer.fillColor = UIColor.clear.cgColor
-        previewLayer.lineCap = .round
-        previewLayer.lineJoin = .round
-        previewLayer.contentsScale = UIScreen.main.scale
-        previewLayer.zPosition = 10_000
-        previewLayer.isHidden = true
-        canvas.layer.addSublayer(previewLayer)
+        if previewLayer.superlayer == nil {
+            previewLayer.fillColor = UIColor.clear.cgColor
+            previewLayer.lineCap = .round
+            previewLayer.lineJoin = .round
+            previewLayer.contentsScale = UIScreen.main.scale
+            previewLayer.zPosition = 10_000
+            previewLayer.isHidden = true
+            canvas.layer.addSublayer(previewLayer)
+        }
+        if continuousPreviewLayer.superlayer == nil {
+            continuousPreviewLayer.contentsScale = UIScreen.main.scale
+            continuousPreviewLayer.zPosition = 10_001
+            continuousPreviewLayer.isHidden = true
+            canvas.layer.addSublayer(continuousPreviewLayer)
+        }
     }
 
     private func reset() {
@@ -739,21 +1507,22 @@ struct DrawingAssistanceButton: View {
             isPresented = true
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: settings.drawingStrokeStyle.icon)
+                Image(systemName: buttonIcon)
                     .font(.system(size: 13, weight: .semibold))
                 if !compact {
-                    Text(settings.drawingStrokeStyle == .solid ? "Pen" : settings.drawingStrokeStyle.title)
+                    Text(buttonTitle)
                         .font(.caption.weight(.semibold))
                 }
             }
-            .foregroundStyle(settings.drawingStrokeStyle == .solid ? Color.primary : Color.orange)
+            .foregroundStyle(hasActiveEffect ? Color.orange : Color.primary)
             .padding(.horizontal, compact ? 10 : 12)
             .padding(.vertical, 9)
             .background(.regularMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Pen style: \(settings.drawingStrokeStyle.title)")
-        .accessibilityHint("Adjust line style, pattern width, spacing, and stroke smoothing.")
+        .accessibilityLabel("Pen settings")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityHint("Adjust line style, automatic colors, spacing, and stroke smoothing.")
         .popover(isPresented: $isPresented, arrowEdge: arrowEdge) {
             DrawingAssistancePanel()
                 .frame(idealWidth: 360)
@@ -762,6 +1531,33 @@ struct DrawingAssistanceButton: View {
                 .presentationDetents([.height(560), .large])
                 #endif
         }
+    }
+
+    private var hasActiveEffect: Bool {
+        settings.drawingStrokeStyle != .solid
+            || settings.effectiveDrawingColorCycleConfiguration.isActive
+    }
+
+    private var buttonIcon: String {
+        settings.effectiveDrawingColorCycleConfiguration.isActive
+            ? "paintpalette.fill"
+            : settings.drawingStrokeStyle.icon
+    }
+
+    private var buttonTitle: String {
+        if settings.effectiveDrawingColorCycleConfiguration.isActive { return "Colors" }
+        return settings.drawingStrokeStyle == .solid ? "Pen" : settings.drawingStrokeStyle.title
+    }
+
+    private var accessibilityValue: String {
+        let colorConfiguration = settings.effectiveDrawingColorCycleConfiguration
+        if colorConfiguration.isContinuousActive {
+            return "Continuous color flow on, \(colorConfiguration.continuousSpeed.title.lowercased()) speed"
+        }
+        if colorConfiguration.isActive {
+            return "Color cycling on, every \(colorConfiguration.strokesPerColor) strokes"
+        }
+        return "\(settings.drawingStrokeStyle.title) line"
     }
 }
 
@@ -780,7 +1576,7 @@ private struct DrawingAssistancePanel: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Pen & Stroke")
                             .font(.headline)
-                        Text("Applies when each new stroke finishes")
+                        Text("Shape and color how every line is drawn")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -851,6 +1647,10 @@ private struct DrawingAssistancePanel: View {
                         onEditingChanged: commitWhenEditingEnds
                     )
                 }
+
+                Divider()
+
+                DrawingColorCycleSettingsSection()
 
                 Divider()
 
@@ -969,6 +1769,313 @@ private struct DrawingAssistancePanel: View {
 
     private func commitDrafts() {
         settings.drawingPenConfiguration = draftConfiguration
+    }
+}
+
+private struct DrawingColorCycleSettingsSection: View {
+    @EnvironmentObject private var settings: AppSettings
+    @ObservedObject private var pro = ProManager.shared
+    @State private var showPaywall = false
+
+    private var configuration: DrawingColorCycleConfiguration {
+        settings.effectiveDrawingColorCycleConfiguration
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: enabledBinding) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Cycle stroke colors")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Move through your palette while you draw")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "paintpalette.fill")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Palette")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(configuration.colorHexes.count)/\(DrawingColorCycleConfiguration.maximumColorCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(Array(configuration.colorHexes.enumerated()), id: \.offset) { index, hex in
+                        colorControl(index: index, hex: hex)
+                    }
+
+                    if configuration.colorHexes.count < DrawingColorCycleConfiguration.maximumColorCount {
+                        Button(action: addColor) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 13, weight: .bold))
+                                .frame(width: 32, height: 32)
+                                .background(Color.secondary.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add palette color")
+                    }
+                }
+            }
+
+            HStack(spacing: 3) {
+                ForEach(DrawingColorCycleMode.allCases) { mode in
+                    modeButton(mode)
+                }
+            }
+            .padding(3)
+            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Color behavior")
+            .accessibilityHint("Choose whether colors change between strokes or within one stroke")
+
+            if !pro.isPro {
+                Label(
+                    "Continuous blends colors inside one stroke and is included with Canvio Pro.",
+                    systemImage: "lock.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if configuration.mode == .byStroke {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Change after")
+                            .font(.subheadline.weight(.semibold))
+                        Text(intervalDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Stepper(value: intervalBinding,
+                            in: DrawingColorCycleConfiguration.strokeIntervalRange) {
+                        Text("\(configuration.strokesPerColor)")
+                            .font(.subheadline.monospacedDigit().weight(.semibold))
+                            .frame(minWidth: 24)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .accessibilityLabel("Strokes before changing color")
+                    .accessibilityValue("\(configuration.strokesPerColor)")
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Color flow speed")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(configuration.continuousSpeed.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Picker("Color flow speed", selection: speedBinding) {
+                        ForEach(DrawingContinuousColorSpeed.allCases) { speed in
+                            Text(speed.title).tag(speed)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Colors blend while your finger or Pencil stays on the screen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if configuration.colorHexes.count < 2 {
+                Label("Add at least two colors to turn cycling on.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if configuration.isEnabled {
+                Label(cycleSummary, systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .sheet(isPresented: $showPaywall) {
+            PaywallSheet {
+                settings.isPro = true
+                selectMode(.continuous)
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(24)
+        }
+    }
+
+    private func modeButton(_ mode: DrawingColorCycleMode) -> some View {
+        let isSelected = configuration.mode == mode
+        let isLocked = mode == .continuous && !pro.isPro
+
+        return Button {
+            if isLocked {
+                showPaywall = true
+            } else {
+                selectMode(mode)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(mode.title)
+                    .font(.caption.weight(.semibold))
+
+                if isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.14) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(
+                        isSelected ? Color.accentColor.opacity(0.35) : Color.clear,
+                        lineWidth: 1
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.title)
+        .accessibilityValue(isLocked ? "Requires Canvio Pro" : (isSelected ? "Selected" : "Not selected"))
+        .accessibilityHint(isLocked ? "Opens the Canvio Pro upgrade screen" : "Selects this color behavior")
+    }
+
+    private func colorControl(index: Int, hex: String) -> some View {
+        VStack(spacing: 5) {
+            ZStack(alignment: .topTrailing) {
+                ColorPicker(
+                    "Color \(index + 1)",
+                    selection: colorBinding(at: index),
+                    supportsOpacity: false
+                )
+                .labelsHidden()
+                .frame(width: 34, height: 34)
+
+                if configuration.colorHexes.count > 2 {
+                    Button {
+                        removeColor(at: index)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 15, height: 15)
+                            .background(Color.black.opacity(0.68), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 5, y: -5)
+                    .accessibilityLabel("Remove color \(index + 1)")
+                }
+            }
+
+            Text("\(index + 1)")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Palette color \(index + 1), \(ShapeColorPalette.title(for: hex))")
+    }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(
+            get: { configuration.isEnabled },
+            set: { isEnabled in
+                var updated = configuration
+                updated.isEnabled = isEnabled
+                settings.drawingColorCycleConfiguration = updated
+            }
+        )
+    }
+
+    private var intervalBinding: Binding<Int> {
+        Binding(
+            get: { configuration.strokesPerColor },
+            set: { interval in
+                var updated = configuration
+                updated.strokesPerColor = interval
+                settings.drawingColorCycleConfiguration = updated
+            }
+        )
+    }
+
+    private func selectMode(_ mode: DrawingColorCycleMode) {
+        guard mode != .continuous || pro.isPro else {
+            showPaywall = true
+            return
+        }
+        var updated = configuration
+        updated.mode = mode
+        settings.drawingColorCycleConfiguration = updated
+    }
+
+    private var speedBinding: Binding<DrawingContinuousColorSpeed> {
+        Binding(
+            get: { configuration.continuousSpeed },
+            set: { speed in
+                var updated = configuration
+                updated.continuousSpeed = speed
+                settings.drawingColorCycleConfiguration = updated
+            }
+        )
+    }
+
+    private func colorBinding(at index: Int) -> Binding<Color> {
+        Binding(
+            get: {
+                guard configuration.colorHexes.indices.contains(index) else { return .orange }
+                return ShapeColorPalette.color(named: configuration.colorHexes[index], fallback: .orange)
+            },
+            set: { color in
+                guard configuration.colorHexes.indices.contains(index) else { return }
+                var updated = configuration
+                updated.colorHexes[index] = ShapeColorPalette.storageName(
+                    for: color,
+                    fallback: updated.colorHexes[index]
+                )
+                settings.drawingColorCycleConfiguration = updated
+            }
+        )
+    }
+
+    private func addColor() {
+        var updated = configuration
+        guard updated.colorHexes.count < DrawingColorCycleConfiguration.maximumColorCount else { return }
+        let suggestions = ["#34C759", "#FF2D55", "#FFCC00", "#5AC8FA", "#5856D6"]
+        let next = suggestions.first { !updated.colorHexes.contains($0) } ?? "#FF9500"
+        updated.colorHexes.append(next)
+        settings.drawingColorCycleConfiguration = updated
+    }
+
+    private func removeColor(at index: Int) {
+        var updated = configuration
+        guard updated.colorHexes.count > 2,
+              updated.colorHexes.indices.contains(index) else { return }
+        updated.colorHexes.remove(at: index)
+        settings.drawingColorCycleConfiguration = updated
+    }
+
+    private var intervalDescription: String {
+        let count = configuration.strokesPerColor
+        return count == 1 ? "Every stroke" : "Every \(count) strokes"
+    }
+
+    private var cycleSummary: String {
+        switch configuration.mode {
+        case .byStroke:
+            return "Starts with color 1, then changes after \(intervalDescription.lowercased())."
+        case .continuous:
+            return "Blends through the full palette inside every uninterrupted stroke."
+        }
     }
 }
 

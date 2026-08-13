@@ -129,6 +129,7 @@ struct PDFWorkspaceView: View {
                             pageIndex: $currentPageIndex,
                             drawing: inkLayer(for: currentPageIndex)?.pkDrawing ?? PKDrawing(),
                             penConfiguration: settings.drawingPenConfiguration,
+                            colorCycleConfiguration: settings.effectiveDrawingColorCycleConfiguration,
                             onChange: saveInk
                         )
                     case .crop:
@@ -653,6 +654,7 @@ private struct PDFInkEditor: View {
     @Binding var pageIndex: Int
     let drawing: PKDrawing
     let penConfiguration: DrawingPenConfiguration
+    let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onChange: (PKDrawing, CGSize) -> Void
 
     var body: some View {
@@ -667,6 +669,7 @@ private struct PDFInkEditor: View {
                     PDFPencilCanvas(
                         drawing: drawing,
                         penConfiguration: penConfiguration,
+                        colorCycleConfiguration: colorCycleConfiguration,
                         onChange: { onChange($0, size) }
                     )
                         .id(pageIndex)
@@ -697,11 +700,13 @@ private struct PDFInkEditor: View {
 private struct PDFPencilCanvas: UIViewRepresentable {
     let drawing: PKDrawing
     let penConfiguration: DrawingPenConfiguration
+    let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onChange: (PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             penConfiguration: penConfiguration,
+            colorCycleConfiguration: colorCycleConfiguration,
             onChange: onChange
         )
     }
@@ -713,69 +718,281 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         canvas.drawingPolicy = .default
         canvas.isScrollEnabled = false
         canvas.delegate = context.coordinator
+        context.coordinator.canvas = canvas
         let picker = PKToolPicker()
         context.coordinator.picker = picker
         picker.addObserver(canvas)
+        picker.addObserver(context.coordinator)
         picker.setVisible(true, forFirstResponder: canvas)
+        context.coordinator.updateColorCycleConfiguration(
+            colorCycleConfiguration,
+            on: canvas,
+            force: true
+        )
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.attachPreviewGesture(to: canvas)
         DispatchQueue.main.async { canvas.becomeFirstResponder() }
         return canvas
     }
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
         canvas.drawingPolicy = .default
         context.coordinator.onChange = onChange
-        context.coordinator.penConfiguration = penConfiguration
+        context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.updateColorCycleConfiguration(
+            colorCycleConfiguration,
+            on: canvas
+        )
         if canvas.drawing.dataRepresentation() != drawing.dataRepresentation(), !canvas.isFirstResponder {
             canvas.drawing = drawing
         }
         context.coordinator.picker?.setVisible(true, forFirstResponder: canvas)
     }
     static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        coordinator.detachPreview(from: canvas)
         coordinator.picker?.setVisible(false, forFirstResponder: canvas)
+        coordinator.picker?.removeObserver(coordinator)
+        coordinator.picker?.removeObserver(canvas)
         canvas.resignFirstResponder()
     }
-    final class Coordinator: NSObject, PKCanvasViewDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         var penConfiguration: DrawingPenConfiguration
+        private var colorCycleState: DrawingColorCycleState
         var onChange: (PKDrawing) -> Void
         var picker: PKToolPicker?
+        weak var canvas: PKCanvasView?
         private var isApplyingStrokeProcessing = false
         private var strokeBaseline: DrawingStrokeBaseline?
+        private var replacementInk: PKInk?
+        private var isUsingDrawingTool = false
+        private var lastVisiblePreviewDrawing: PKDrawing?
+        private let livePreview = LivePatternStrokePreview()
 
         init(
             penConfiguration: DrawingPenConfiguration,
+            colorCycleConfiguration: DrawingColorCycleConfiguration,
             onChange: @escaping (PKDrawing) -> Void
         ) {
             self.penConfiguration = penConfiguration
+            self.colorCycleState = DrawingColorCycleState()
+            _ = self.colorCycleState.updateConfiguration(
+                colorCycleConfiguration,
+                force: true
+            )
             self.onChange = onChange
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             guard !isApplyingStrokeProcessing else { return }
+            if livePreview.isActive {
+                if !isUsingDrawingTool,
+                   canvasView.drawing.strokes.contains(where: {
+                        $0.ink.color.cgColor.alpha <= 0.01
+                   }),
+                   let lastVisiblePreviewDrawing {
+                    isApplyingStrokeProcessing = true
+                    canvasView.drawing = lastVisiblePreviewDrawing
+                    canvasView.setNeedsDisplay()
+                    isApplyingStrokeProcessing = false
+                }
+                livePreview.update(with: canvasView.drawing, on: canvasView)
+                return
+            }
             onChange(canvasView.drawing)
         }
 
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            isUsingDrawingTool = true
+            lastVisiblePreviewDrawing = nil
             strokeBaseline = canvasView.tool is PKInkingTool
                 ? DrawingStrokeBaseline(drawing: canvasView.drawing)
                 : nil
+            replacementInk = livePreview.visibleReplacementInk(
+                fallbackColorHex: colorCycleState.activeColorHex
+            )
+            livePreview.beginGestureStroke(
+                at: canvasView.drawingGestureRecognizer.location(in: canvasView),
+                on: canvasView
+            )
         }
 
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
+            isUsingDrawingTool = false
             let baseline = strokeBaseline
             strokeBaseline = nil
+            let replacementInk = replacementInk
+            self.replacementInk = nil
+            livePreview.endGestureStroke(cancelled: false, on: canvasView)
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak canvasView] in
+            if baseline != nil,
+               colorCycleState.recordCompletedStroke() {
+                applyActiveCycleColor(to: canvasView)
+            }
+
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + DrawingInputDebounce.livePreviewFinalization
+            ) { [weak self, weak canvasView] in
                 guard let self, let canvasView, let baseline else { return }
-                guard let processed = DrawingStrokeProcessor.processingLatestStroke(
+                var finalDrawing = canvasView.drawing
+                if let processed = DrawingStrokeProcessor.processingLatestStroke(
                     in: canvasView.drawing,
                     since: baseline,
-                    configuration: self.penConfiguration
-                ) else { return }
+                    configuration: self.penConfiguration,
+                    replacementInk: replacementInk,
+                    colorCycleConfiguration: self.colorCycleState.configuration
+                ) {
+                    finalDrawing = processed
+                }
+                if let replacementInk,
+                   let recovered = DrawingStrokeProcessor.recoveringInvisiblePreviewStrokes(
+                        in: finalDrawing,
+                        configuration: self.penConfiguration,
+                        replacementInk: replacementInk,
+                        colorCycleConfiguration: self.colorCycleState.configuration
+                   ) {
+                    finalDrawing = recovered
+                }
 
                 self.isApplyingStrokeProcessing = true
-                canvasView.drawing = processed
-                self.onChange(processed)
+                canvasView.drawing = finalDrawing
+                canvasView.setNeedsDisplay()
+                self.onChange(finalDrawing)
                 self.isApplyingStrokeProcessing = false
+                if self.livePreview.isActive {
+                    self.lastVisiblePreviewDrawing = finalDrawing
+                }
+                self.livePreview.clear()
             }
+        }
+
+        func updatePenConfiguration(
+            _ configuration: DrawingPenConfiguration,
+            on canvas: PKCanvasView
+        ) {
+            penConfiguration = configuration
+            livePreview.synchronize(configuration: configuration, on: canvas)
+        }
+
+        func updateColorCycleConfiguration(
+            _ configuration: DrawingColorCycleConfiguration,
+            on canvas: PKCanvasView,
+            force: Bool = false
+        ) {
+            let shouldApplyFirstColor = colorCycleState.updateConfiguration(
+                configuration,
+                force: force
+            )
+            livePreview.synchronize(
+                colorConfiguration: colorCycleState.configuration,
+                on: canvas
+            )
+            if shouldApplyFirstColor {
+                applyActiveCycleColor(to: canvas)
+            }
+        }
+
+        func attachPreviewGesture(to canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.addTarget(
+                self,
+                action: #selector(handlePreviewGesture(_:))
+            )
+        }
+
+        func detachPreview(from canvas: PKCanvasView) {
+            canvas.drawingGestureRecognizer.removeTarget(
+                self,
+                action: #selector(handlePreviewGesture(_:))
+            )
+            livePreview.detach()
+        }
+
+        @objc private func handlePreviewGesture(_ recognizer: UIGestureRecognizer) {
+            guard let canvas else { return }
+            let location = recognizer.location(in: canvas)
+            switch recognizer.state {
+            case .began:
+                livePreview.beginGestureStroke(at: location, on: canvas)
+            case .changed:
+                livePreview.continueGestureStroke(at: location, on: canvas)
+            case .ended:
+                livePreview.endGestureStroke(cancelled: false, on: canvas)
+            case .cancelled, .failed:
+                livePreview.endGestureStroke(cancelled: true, on: canvas)
+            case .possible:
+                break
+            @unknown default:
+                livePreview.endGestureStroke(cancelled: true, on: canvas)
+            }
+        }
+
+        func toolPickerSelectedToolDidChange(_ toolPicker: PKToolPicker) {
+            reapplyCycleColorAfterToolChange()
+        }
+
+        @available(iOS 18.0, *)
+        func toolPickerSelectedToolItemDidChange(_ toolPicker: PKToolPicker) {
+            reapplyCycleColorAfterToolChange()
+        }
+
+        private func reapplyCycleColorAfterToolChange() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      let canvas = self.canvas else { return }
+                guard self.colorCycleState.configuration.isActive,
+                      let selectedTool = self.pickerInkingTool else {
+                    self.livePreview.selectedInkingToolDidChange(nil, on: canvas)
+                    return
+                }
+                guard let hex = self.colorCycleState.activeColorHex else { return }
+                let color = UIColor(
+                    ShapeColorPalette.color(named: hex, fallback: .orange)
+                ).withAlphaComponent(selectedTool.color.cgColor.alpha)
+                let visibleTool = PKInkingTool(
+                    selectedTool.inkType,
+                    color: color,
+                    width: selectedTool.width
+                )
+                canvas.tool = visibleTool
+                self.livePreview.selectedInkingToolDidChange(visibleTool, on: canvas)
+            }
+        }
+
+        private var pickerInkingTool: PKInkingTool? {
+            guard let picker else { return nil }
+            if #available(iOS 18.0, *) {
+                return (picker.selectedToolItem as? PKToolPickerInkingItem)?.inkingTool
+            }
+            return picker.selectedTool as? PKInkingTool
+        }
+
+        private func applyActiveCycleColor(to canvas: PKCanvasView) {
+            guard let hex = colorCycleState.activeColorHex,
+                  let currentTool = canvas.tool as? PKInkingTool else { return }
+            let color = UIColor(ShapeColorPalette.color(named: hex, fallback: .orange))
+                .withAlphaComponent(1)
+            guard !Self.colorsMatch(currentTool.color, color) else { return }
+            canvas.tool = PKInkingTool(
+                currentTool.inkType,
+                color: color.withAlphaComponent(currentTool.color.cgColor.alpha),
+                width: currentTool.width
+            )
+        }
+
+        private static func colorsMatch(_ lhs: UIColor, _ rhs: UIColor) -> Bool {
+            var lhsRed: CGFloat = 0
+            var lhsGreen: CGFloat = 0
+            var lhsBlue: CGFloat = 0
+            var lhsAlpha: CGFloat = 0
+            var rhsRed: CGFloat = 0
+            var rhsGreen: CGFloat = 0
+            var rhsBlue: CGFloat = 0
+            var rhsAlpha: CGFloat = 0
+            guard lhs.getRed(&lhsRed, green: &lhsGreen, blue: &lhsBlue, alpha: &lhsAlpha),
+                  rhs.getRed(&rhsRed, green: &rhsGreen, blue: &rhsBlue, alpha: &rhsAlpha) else {
+                return lhs.cgColor == rhs.cgColor
+            }
+            return abs(lhsRed - rhsRed) < 0.001
+                && abs(lhsGreen - rhsGreen) < 0.001
+                && abs(lhsBlue - rhsBlue) < 0.001
         }
     }
 }

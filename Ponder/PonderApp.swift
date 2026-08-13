@@ -58,8 +58,10 @@ struct PonderApp: App {
 
 private struct SyncCoordinatorView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var settings: AppSettings
     @ObservedObject private var auth = AuthService.shared
     @ObservedObject private var pro  = ProManager.shared
+    @ObservedObject private var network = NetworkMonitor.shared
     @State private var isFullSyncRunning = false
 
     private let accountCheckTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -77,9 +79,18 @@ private struct SyncCoordinatorView: View {
                     #endif
                 }())
             ) { _ in
-                Task { await pro.refreshStatus() }
+                Task {
+                    await pro.refreshStatus()
+                    await DrawingSettingsSyncService.shared.reconcile(settings: settings)
+                }
                 guard auth.currentUser != nil else { return }
                 Task { await auth.checkAccountStillExists(context: modelContext) }
+            }
+            .onChange(of: network.isConnected) { _, isConnected in
+                guard isConnected else { return }
+                Task {
+                    await DrawingSettingsSyncService.shared.reconcile(settings: settings)
+                }
             }
             // Periodic account validity check
             .onReceive(accountCheckTimer) { _ in
@@ -141,6 +152,7 @@ private struct SyncCoordinatorView: View {
         }
 
         // Step 1 — flush offline queue
+        await DrawingSettingsSyncService.shared.reconcile(settings: settings)
         await CanvasSyncService.shared.flushQueue()
         await CanvasPageSyncService.shared.flushQueue()
         await TextSyncService.shared.flushQueue()

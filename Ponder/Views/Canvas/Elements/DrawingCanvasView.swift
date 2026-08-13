@@ -966,6 +966,7 @@ struct DrawingCanvasView: View {
                     selectedColor: $selectedColor,
                     colorRevision: pickedColorRevision,
                     penConfiguration: settings.drawingPenConfiguration,
+                    colorCycleConfiguration: settings.effectiveDrawingColorCycleConfiguration,
                     onDrawingChanged: onDrawingChanged
                 )
 
@@ -979,6 +980,8 @@ struct DrawingCanvasView: View {
                     ) {
                         isPickingColor.toggle()
                     }
+                    .disabled(settings.effectiveDrawingColorCycleConfiguration.isActive)
+                    .opacity(settings.effectiveDrawingColorCycleConfiguration.isActive ? 0.5 : 1)
                 }
                 .padding(8)
 
@@ -1118,12 +1121,14 @@ private struct LivePKCanvas: UIViewRepresentable {
     @Binding var selectedColor: UIColor
     let colorRevision: Int
     let penConfiguration: DrawingPenConfiguration
+    let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onDrawingChanged: (PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selectedColor: $selectedColor,
             penConfiguration: penConfiguration,
+            colorCycleConfiguration: colorCycleConfiguration,
             smartShapeSnappingEnabled: smartShapeSnappingEnabled,
             onDrawingChanged: onDrawingChanged
         )
@@ -1153,6 +1158,11 @@ private struct LivePKCanvas: UIViewRepresentable {
         toolPicker.setVisible(true, forFirstResponder: canvas)
         context.coordinator.syncSelectedColorFromCurrentInkingTool(canvas)
         context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.updateColorCycleConfiguration(
+            colorCycleConfiguration,
+            on: canvas,
+            force: true
+        )
         context.coordinator.attachPatternGesture(to: canvas)
         DispatchQueue.main.async { canvas.becomeFirstResponder() }
 
@@ -1172,6 +1182,10 @@ private struct LivePKCanvas: UIViewRepresentable {
             colorRevision: colorRevision
         )
         context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
+        context.coordinator.updateColorCycleConfiguration(
+            colorCycleConfiguration,
+            on: canvas
+        )
         context.coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
         if !canvas.isFirstResponder {
             DispatchQueue.main.async { canvas.becomeFirstResponder() }
@@ -1190,6 +1204,7 @@ private struct LivePKCanvas: UIViewRepresentable {
     class Coordinator: NSObject, PKCanvasViewDelegate, PKToolPickerObserver {
         @Binding var selectedColor: UIColor
         var penConfiguration: DrawingPenConfiguration
+        private var colorCycleState: DrawingColorCycleState
         let onDrawingChanged: (PKDrawing) -> Void
         weak var canvas: PKCanvasView?
         var toolPicker: PKToolPicker?
@@ -1211,15 +1226,22 @@ private struct LivePKCanvas: UIViewRepresentable {
         private var pendingStrokeProcessing: DispatchWorkItem?
         private var pendingDrawingPublication: DispatchWorkItem?
         private var drawingAwaitingPublication: PKDrawing?
+        private var lastVisiblePreviewDrawing: PKDrawing?
         private let shapeSnapController = PencilShapeSnapController()
         private let patternPreview = LivePatternStrokePreview()
 
         init(selectedColor: Binding<UIColor>,
              penConfiguration: DrawingPenConfiguration,
+             colorCycleConfiguration: DrawingColorCycleConfiguration,
              smartShapeSnappingEnabled: Bool,
              onDrawingChanged: @escaping (PKDrawing) -> Void) {
             self._selectedColor = selectedColor
             self.penConfiguration = penConfiguration
+            self.colorCycleState = DrawingColorCycleState()
+            _ = self.colorCycleState.updateConfiguration(
+                colorCycleConfiguration,
+                force: true
+            )
             self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.onDrawingChanged = onDrawingChanged
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
@@ -1229,9 +1251,24 @@ private struct LivePKCanvas: UIViewRepresentable {
             guard !isApplyingStrokeProcessing else { return }
             if hasUnpublishedDrawingChanges {
                 shapeSnapController.cancelPendingSnap()
-                if penConfiguration.usesPattern, patternPreview.isActive {
+                if patternPreview.isActive {
                     patternPreview.update(with: canvas.drawing, on: canvas)
                 }
+                if !isUsingDrawingTool {
+                    schedulePendingStrokeProcessing(on: canvas)
+                }
+                return
+            }
+            if !isUsingDrawingTool,
+               patternPreview.isActive,
+               canvas.drawing.strokes.contains(where: {
+                    $0.ink.color.cgColor.alpha <= 0.01
+               }),
+               let lastVisiblePreviewDrawing {
+                isApplyingStrokeProcessing = true
+                canvas.drawing = lastVisiblePreviewDrawing
+                canvas.setNeedsDisplay()
+                isApplyingStrokeProcessing = false
                 return
             }
             onDrawingChanged(canvas.drawing)
@@ -1249,13 +1286,16 @@ private struct LivePKCanvas: UIViewRepresentable {
             cancelScheduledStrokeProcessing()
             cancelScheduledDrawingPublication()
             shapeSnapController.cancelPendingSnap()
+            lastVisiblePreviewDrawing = nil
             isUsingDrawingTool = true
             if !hasUnpublishedDrawingChanges {
                 pendingStrokeBaseline = canvas.tool is PKInkingTool
                     ? DrawingStrokeBaseline(drawing: canvas.drawing)
                     : nil
                 pendingStrokeConfiguration = penConfiguration
-                pendingReplacementInk = patternPreview.replacementInk
+                pendingReplacementInk = patternPreview.visibleReplacementInk(
+                    fallbackColorHex: colorCycleState.activeColorHex
+                )
             }
             hasUnpublishedDrawingChanges = true
             patternPreview.beginGestureStroke(
@@ -1267,7 +1307,8 @@ private struct LivePKCanvas: UIViewRepresentable {
         func canvasViewDidEndUsingTool(_ canvas: PKCanvasView) {
             isUsingDrawingTool = false
             patternPreview.endGestureStroke(cancelled: false, on: canvas)
-            if penConfiguration.usesPattern {
+            if penConfiguration.usesPattern
+                || colorCycleState.configuration.isContinuousActive {
                 shapeSnapController.cancelPendingSnap()
             }
             schedulePendingStrokeProcessing(on: canvas)
@@ -1282,7 +1323,13 @@ private struct LivePKCanvas: UIViewRepresentable {
             }
             pendingStrokeProcessing = work
             DispatchQueue.main.asyncAfter(
-                deadline: .now() + DrawingInputDebounce.strokeProcessing,
+                deadline: .now() + (
+                    patternPreview.isActive
+                        ? DrawingInputDebounce.livePreviewFinalization
+                        : colorCycleState.configuration.isActive
+                            ? 0.015
+                        : DrawingInputDebounce.strokeProcessing
+                ),
                 execute: work
             )
         }
@@ -1298,7 +1345,8 @@ private struct LivePKCanvas: UIViewRepresentable {
 
             let drawingBeforeProcessing = canvas.drawing
             let drawingForProcessing: PKDrawing
-            if configuration.usesPattern,
+            if (configuration.usesPattern
+                || colorCycleState.configuration.isContinuousActive),
                let snappedDrawing = shapeSnapController
                 .drawingBySnappingLatestStroke(in: drawingBeforeProcessing) {
                 drawingForProcessing = snappedDrawing
@@ -1312,20 +1360,39 @@ private struct LivePKCanvas: UIViewRepresentable {
                    in: drawingForProcessing,
                    since: baseline,
                    configuration: configuration,
-                   replacementInk: replacementInk
+                   replacementInk: replacementInk,
+                   colorCycleConfiguration: colorCycleState.configuration
                ) {
                 finalDrawing = processed
+            }
+            if let replacementInk,
+               let recovered = DrawingStrokeProcessor.recoveringInvisiblePreviewStrokes(
+                    in: finalDrawing,
+                    configuration: configuration,
+                    replacementInk: replacementInk,
+                    colorCycleConfiguration: colorCycleState.configuration
+               ) {
+                finalDrawing = recovered
             }
 
             if finalDrawing.dataRepresentation() != drawingBeforeProcessing.dataRepresentation() {
                 isApplyingStrokeProcessing = true
                 canvas.drawing = finalDrawing
+                canvas.setNeedsDisplay()
                 isApplyingStrokeProcessing = false
             }
 
             patternPreview.clear()
+            if patternPreview.isActive {
+                lastVisiblePreviewDrawing = finalDrawing
+            }
+            if baseline != nil,
+               colorCycleState.recordCompletedStroke() {
+                applyActiveCycleColor(to: canvas)
+            }
             scheduleDrawingPublication(finalDrawing)
-            guard !configuration.usesPattern else { return }
+            guard !configuration.usesPattern,
+                  !colorCycleState.configuration.isContinuousActive else { return }
             shapeSnapController.scheduleSnap(on: canvas) { [weak self] snappedDrawing in
                 self?.scheduleDrawingPublication(snappedDrawing)
             }
@@ -1394,6 +1461,27 @@ private struct LivePKCanvas: UIViewRepresentable {
             patternPreview.synchronize(configuration: configuration, on: canvas)
             if configuration.usesPattern {
                 cancelPendingShapeSnap()
+            }
+        }
+
+        func updateColorCycleConfiguration(
+            _ configuration: DrawingColorCycleConfiguration,
+            on canvas: PKCanvasView,
+            force: Bool = false
+        ) {
+            let shouldApplyFirstColor = colorCycleState.updateConfiguration(
+                configuration,
+                force: force
+            )
+            patternPreview.synchronize(
+                colorConfiguration: colorCycleState.configuration,
+                on: canvas
+            )
+            if colorCycleState.configuration.isContinuousActive {
+                cancelPendingShapeSnap()
+            }
+            if shouldApplyFirstColor {
+                applyActiveCycleColor(to: canvas)
             }
         }
 
@@ -1472,19 +1560,27 @@ private struct LivePKCanvas: UIViewRepresentable {
 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let canvas = self.canvas else { return }
+                var appliedCycleColor = false
 
                 if let selectedInkingTool {
                     let toolColor = selectedInkingTool.color.withAlphaComponent(1)
-                    if !self.selectedColor.isDrawingEquivalent(to: toolColor) {
+                    if self.colorCycleState.configuration.isActive,
+                       let cycleColor = self.activeCycleColor,
+                       !cycleColor.isDrawingEquivalent(to: toolColor) {
+                        self.applyColor(cycleColor, to: canvas, switchToPenIfNeeded: false)
+                        appliedCycleColor = true
+                    } else if !self.selectedColor.isDrawingEquivalent(to: toolColor) {
                         self.selectedColor = toolColor
                     }
                 } else {
                     self.syncSelectedColorFromCurrentInkingTool(canvas)
                 }
-                self.patternPreview.selectedInkingToolDidChange(
-                    selectedInkingTool,
-                    on: canvas
-                )
+                if !appliedCycleColor {
+                    self.patternPreview.selectedInkingToolDidChange(
+                        selectedInkingTool,
+                        on: canvas
+                    )
+                }
             }
         }
 
@@ -1520,6 +1616,20 @@ private struct LivePKCanvas: UIViewRepresentable {
             canvas.tool = nextTool
             isApplyingPickedColor = false
             patternPreview.selectedInkingToolDidChange(nextTool, on: canvas)
+        }
+
+        private var activeCycleColor: UIColor? {
+            guard let hex = colorCycleState.activeColorHex else { return nil }
+            return UIColor(ShapeColorPalette.color(named: hex, fallback: .orange))
+                .withAlphaComponent(1)
+        }
+
+        private func applyActiveCycleColor(to canvas: PKCanvasView) {
+            guard let color = activeCycleColor else { return }
+            if !selectedColor.isDrawingEquivalent(to: color) {
+                selectedColor = color
+            }
+            applyColor(color, to: canvas, switchToPenIfNeeded: false)
         }
 
         private func currentInkingTool(for canvas: PKCanvasView) -> PKInkingTool? {
@@ -1783,6 +1893,7 @@ struct MacDrawingEditor: View {
     let onDrawingChanged: (PKDrawing) -> Void
 
     @State private var tool = MacDrawingToolState()
+    @State private var colorCycleState = DrawingColorCycleState()
 
     var body: some View {
         ZStack {
@@ -1790,7 +1901,9 @@ struct MacDrawingEditor: View {
                 drawing: drawing,
                 tool: tool,
                 canvasScale: canvasScale,
-                onDrawingChanged: onDrawingChanged
+                colorCycleConfiguration: settings.effectiveDrawingColorCycleConfiguration,
+                onDrawingChanged: onDrawingChanged,
+                onStrokeCompleted: advanceColorCycle
             )
 
             VStack {
@@ -1803,9 +1916,13 @@ struct MacDrawingEditor: View {
         }
         .onAppear {
             syncDrawingAssistance(settings.drawingPenConfiguration)
+            syncColorCycle(settings.effectiveDrawingColorCycleConfiguration, force: true)
         }
         .onChange(of: settings.drawingPenConfiguration) { _, configuration in
             syncDrawingAssistance(configuration)
+        }
+        .onChange(of: settings.effectiveDrawingColorCycleConfiguration) { _, configuration in
+            syncColorCycle(configuration)
         }
     }
 
@@ -1816,6 +1933,29 @@ struct MacDrawingEditor: View {
         tool.patternWidth = CGFloat(normalized.patternWidth)
         tool.dashLength = CGFloat(normalized.dashLength)
         tool.patternGap = CGFloat(normalized.patternGap)
+    }
+
+    private func syncColorCycle(
+        _ configuration: DrawingColorCycleConfiguration,
+        force: Bool = false
+    ) {
+        guard colorCycleState.updateConfiguration(configuration, force: force) else { return }
+        applyActiveCycleColor()
+    }
+
+    private func advanceColorCycle() {
+        guard !tool.isErasing,
+              colorCycleState.recordCompletedStroke() else { return }
+        applyActiveCycleColor()
+    }
+
+    private func applyActiveCycleColor() {
+        guard let hex = colorCycleState.activeColorHex,
+              let sampledColor = MacDrawingSampledColor(
+                nsColor: NSColor(ShapeColorPalette.color(named: hex, fallback: .orange))
+              ) else { return }
+        tool.sampledColor = sampledColor
+        tool.usesSampledColor = true
     }
 }
 
@@ -1892,7 +2032,12 @@ private struct MacDrawingToolControls: View {
 
                     sampleColorButton
                 }
-                .opacity(tool.isErasing ? 0.45 : 1)
+                .disabled(settings.effectiveDrawingColorCycleConfiguration.isActive)
+                .opacity(
+                    tool.isErasing || settings.effectiveDrawingColorCycleConfiguration.isActive
+                        ? 0.45
+                        : 1
+                )
 
                 Divider().frame(height: 24)
 
@@ -1993,7 +2138,9 @@ private struct MacFreehandPKDrawingView: View {
     let drawing: PKDrawing
     let tool: MacDrawingToolState
     let canvasScale: CGFloat
+    let colorCycleConfiguration: DrawingColorCycleConfiguration
     var onDrawingChanged: (PKDrawing) -> Void
+    var onStrokeCompleted: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var workingDrawing = PKDrawing()
@@ -2040,12 +2187,16 @@ private struct MacFreehandPKDrawingView: View {
             }
             .onEnded { value in
                 appendPointIfNeeded(value.location)
+                let completedStroke = !tool.isErasing && currentPoints.count > 1
                 let finalDrawing = drawingAfterCurrentGesture()
                 workingDrawing = finalDrawing
                 committedDrawing = finalDrawing
                 currentPoints = []
                 isDrawing = false
                 onDrawingChanged(finalDrawing)
+                if completedStroke {
+                    onStrokeCompleted()
+                }
             }
     }
 
@@ -2096,10 +2247,17 @@ private struct MacFreehandPKDrawingView: View {
             mask: nil
         )
 
-        let renderedStrokes = DrawingStrokeProcessor.applyingLineStyle(
+        var renderedStrokes = DrawingStrokeProcessor.applyingLineStyle(
             to: stroke,
             configuration: tool.penConfiguration
         )
+        if colorCycleConfiguration.isContinuousActive {
+            renderedStrokes = DrawingStrokeProcessor.applyingContinuousColors(
+                to: renderedStrokes,
+                configuration: colorCycleConfiguration,
+                matchSourceThickness: !tool.penConfiguration.usesPattern
+            )
+        }
         return PKDrawing(strokes: committedDrawing.strokes + renderedStrokes)
     }
 
