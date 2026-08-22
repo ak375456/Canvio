@@ -25,6 +25,9 @@ struct Minimap: View {
     @Binding var isExpanded: Bool
     var isNavigationActive: Bool = false
 
+    @State private var settledCanvasOffset: CGSize?
+    @State private var settledCanvasScale: CGFloat?
+
     private let mapSize = CGSize(width: 130, height: 95)
     private let hitTargetSize: CGFloat = 22
     private let mapPaddingRatio: CGFloat = 0.12
@@ -34,31 +37,31 @@ struct Minimap: View {
         VStack(alignment: .trailing, spacing: 6) {
             toggleButton
             if isExpanded {
-                Group {
-                    if isNavigationActive {
-                        restingMapBody
-                    } else {
-                        mapBody
-                    }
-                }
+                mapBody
                     .frame(width: mapSize.width, height: mapSize.height)
                     .background(RoundedRectangle(cornerRadius: 10).fill(.regularMaterial))
                     .overlay(RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
                     .transition(.scale(scale: 0.85, anchor: .topTrailing).combined(with: .opacity))
+                    .allowsHitTesting(!isNavigationActive)
             }
         }
-    }
-
-    private var restingMapBody: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.primary.opacity(0.035))
-            Image(systemName: "map.fill")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.primary.opacity(0.22))
+        .onAppear {
+            commitSettledNavigation()
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onChange(of: canvasOffset) { _, _ in
+            guard !isNavigationActive else { return }
+            commitSettledNavigation()
+        }
+        .onChange(of: canvasScale) { _, _ in
+            guard !isNavigationActive else { return }
+            commitSettledNavigation()
+        }
+        .onChange(of: isNavigationActive) { _, isActive in
+            if !isActive {
+                commitSettledNavigation()
+            }
+        }
     }
 
     private var toggleButton: some View {
@@ -142,12 +145,12 @@ struct Minimap: View {
 
     private func viewportRect(mapSize: CGSize, worldBounds: CGRect) -> some View {
         let tl = canvasToMap(CGPoint(
-            x: -canvasOffset.width / canvasScale,
-            y: -canvasOffset.height / canvasScale
+            x: -displayedCanvasOffset.width / displayedCanvasScale,
+            y: -displayedCanvasOffset.height / displayedCanvasScale
         ), mapSize: mapSize, worldBounds: worldBounds)
         let br = canvasToMap(CGPoint(
-            x: (viewportSize.width - canvasOffset.width) / canvasScale,
-            y: (viewportSize.height - canvasOffset.height) / canvasScale
+            x: (viewportSize.width - displayedCanvasOffset.width) / displayedCanvasScale,
+            y: (viewportSize.height - displayedCanvasOffset.height) / displayedCanvasScale
         ), mapSize: mapSize, worldBounds: worldBounds)
         let rect = CGRect(x: tl.x, y: tl.y,
                          width: max(8, br.x - tl.x),
@@ -190,11 +193,24 @@ struct Minimap: View {
 
     private var viewportCanvasRect: CGRect {
         CGRect(
-            x: -canvasOffset.width / canvasScale,
-            y: -canvasOffset.height / canvasScale,
-            width: viewportSize.width / canvasScale,
-            height: viewportSize.height / canvasScale
+            x: -displayedCanvasOffset.width / displayedCanvasScale,
+            y: -displayedCanvasOffset.height / displayedCanvasScale,
+            width: viewportSize.width / displayedCanvasScale,
+            height: viewportSize.height / displayedCanvasScale
         )
+    }
+
+    private var displayedCanvasOffset: CGSize {
+        settledCanvasOffset ?? canvasOffset
+    }
+
+    private var displayedCanvasScale: CGFloat {
+        max(settledCanvasScale ?? canvasScale, 0.01)
+    }
+
+    private func commitSettledNavigation() {
+        settledCanvasOffset = canvasOffset
+        settledCanvasScale = max(canvasScale, 0.01)
     }
 
     private var elementRects: [CGRect] {

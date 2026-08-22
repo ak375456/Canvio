@@ -347,7 +347,6 @@ struct MultiSelectBar: View {
     let onGroupAction: () -> Void
     let onDuplicate: () -> Void
     let onDelete: () -> Void
-    let onDone: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -424,19 +423,32 @@ struct MultiSelectBar: View {
             }
             .buttonStyle(.plain)
             .disabled(count == 0)
-
-            Divider().frame(height: 20)
-
-            Button(action: onDone) {
-                Text("Done")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 14).frame(height: 44).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
         }
         .frame(height: 44)
         .background(.regularMaterial, in: Capsule())
         .fixedSize()
+    }
+}
+
+/// Kept outside the horizontally scrolling action strip so users can always
+/// see how to leave selection mode, regardless of the viewport width.
+struct MultiSelectDoneButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Done", systemImage: "checkmark")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .background(Color.accentColor, in: Capsule())
+        .shadow(color: Color.accentColor.opacity(0.22), radius: 8, y: 3)
+        .accessibilityLabel("Done selecting")
+        .accessibilityHint("Leaves selection mode.")
+        .accessibilityIdentifier("canvas.multiSelect.done")
     }
 }

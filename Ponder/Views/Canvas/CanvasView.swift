@@ -1872,7 +1872,7 @@ private struct CanvasPageContentView: View {
                                 refreshViewportContent()
                             },
                             isExpanded: $vm.isMinimapExpanded,
-                            isNavigationActive: isCanvasGestureActive
+                            isNavigationActive: isCanvasNavigationGestureInProgress
                         )
                     }
                     .padding(.trailing, 12).padding(.top, 12)
@@ -3066,48 +3066,58 @@ private struct CanvasPageContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.blue, in: Capsule())
-            .padding(.top, 16)
+            // History controls occupy the first 44 points at the top of the
+            // canvas on iOS. Give selection status its own row below them.
+            .padding(.top, multiSelectStatusTopPadding)
+            .allowsHitTesting(false)
 
             Spacer()
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                MultiSelectBar(
-                    count: selection.count,
-                    groupActionTitle: groupActionTitle,
-                    groupActionIcon: groupActionIcon,
-                    canUseGroupAction: canUseGroupAction,
-                    canAlign: !alignmentUnits.isEmpty,
-                    canDistribute: alignmentUnits.count >= 3,
-                    isGuideActive: isAlignmentGuideActive,
-                    isRulerActive: isAlignmentRulerActive,
-                    onToggleGuide: {
-                        toggleAlignmentGuide(viewportSize: geo.size)
-                    },
-                    onToggleRuler: {
-                        toggleAlignmentRuler(viewportSize: geo.size)
-                    },
-                    onAlign: { action in
-                        alignCanvasObjects(action, viewportSize: geo.size)
-                    },
-                    onAlignToRuler: { action in
-                        alignCanvasObjectsToRuler(action)
-                    },
-                    onRotateRuler: {
-                        rotateAlignmentRulerQuarterTurn()
-                    },
-                    onDistribute: { action in
-                        distributeCanvasObjects(action)
-                    },
-                    onGroupAction: { handleGroupAction() },
-                    onDuplicate: { duplicateSelected() },
-                    onDelete: { deleteSelected() },
-                    onDone: {
-                        withAnimation(.spring(duration: 0.3)) { selection.exit() }
-                        dismissEverything()
-                    }
-                )
-                .padding(.horizontal, 16)
+            HStack(spacing: 10) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    MultiSelectBar(
+                        count: selection.count,
+                        groupActionTitle: groupActionTitle,
+                        groupActionIcon: groupActionIcon,
+                        canUseGroupAction: canUseGroupAction,
+                        canAlign: !alignmentUnits.isEmpty,
+                        canDistribute: alignmentUnits.count >= 3,
+                        isGuideActive: isAlignmentGuideActive,
+                        isRulerActive: isAlignmentRulerActive,
+                        onToggleGuide: {
+                            toggleAlignmentGuide(viewportSize: geo.size)
+                        },
+                        onToggleRuler: {
+                            toggleAlignmentRuler(viewportSize: geo.size)
+                        },
+                        onAlign: { action in
+                            alignCanvasObjects(action, viewportSize: geo.size)
+                        },
+                        onAlignToRuler: { action in
+                            alignCanvasObjectsToRuler(action)
+                        },
+                        onRotateRuler: {
+                            rotateAlignmentRulerQuarterTurn()
+                        },
+                        onDistribute: { action in
+                            distributeCanvasObjects(action)
+                        },
+                        onGroupAction: { handleGroupAction() },
+                        onDuplicate: { duplicateSelected() },
+                        onDelete: { deleteSelected() }
+                    )
+                }
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .frame(maxWidth: .infinity)
+
+                MultiSelectDoneButton {
+                    withAnimation(.spring(duration: 0.3)) { selection.exit() }
+                    dismissEverything()
+                }
+                .fixedSize()
+                .layoutPriority(1)
             }
+            .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity)
@@ -3118,6 +3128,14 @@ private struct CanvasPageContentView: View {
 
     private var multiSelectStatusText: String {
         selection.count == 0 ? "Tap elements to select" : "\(selection.count) selected"
+    }
+
+    private var multiSelectStatusTopPadding: CGFloat {
+        #if os(iOS)
+        68
+        #else
+        16
+        #endif
     }
 
     private func lassoOverlay(geo: GeometryProxy) -> some View {
@@ -6296,7 +6314,7 @@ private struct CanvasPageContentView: View {
         Group {
             if let text = element as? TextElementModel {
                 TextElementView(element: text, canvasScale: elementRenderScale, canvasOffset: vm.offset,
-                                canvasBoundary: boundary,
+                                canvasBoundary: boundary, viewportSize: viewportSize,
                                 vm: vm.textVM, isMultiSelectMode: multiSelect,
                                 isSelectedInMultiSelect: isElemSelected,
                                 onExternalTap: { dismissEverything() },

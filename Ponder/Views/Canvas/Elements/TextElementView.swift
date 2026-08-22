@@ -6,6 +6,15 @@
 import SwiftUI
 import SwiftData
 
+private enum TextFloatingControlsPlacement {
+    case above
+    case below
+
+    var direction: CGFloat {
+        self == .above ? -1 : 1
+    }
+}
+
 struct TextElementView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var settings: AppSettings
@@ -14,6 +23,7 @@ struct TextElementView: View {
     let canvasScale: CGFloat
     let canvasOffset: CGSize
     let canvasBoundary: CGSize
+    let viewportSize: CGSize
     @ObservedObject var vm: TextElementViewModel
     let isMultiSelectMode: Bool
     var isSelectedInMultiSelect: Bool = false
@@ -45,6 +55,11 @@ struct TextElementView: View {
     private let handleSize: CGFloat   = 26
 
     private let toolbarHeight: CGFloat = 44
+    private let toolbarMaximumWidth: CGFloat = 340
+    private let toolbarViewportMargin: CGFloat = 16
+    private let toolbarHandleGap: CGFloat = 8
+    private let floatingControlsSafeTop: CGFloat = 72
+    private let floatingControlsBottomReserve: CGFloat = 104
     private let cardPickerGap: CGFloat = 8
     private let inlineFormattingPanelGap: CGFloat = 18
 
@@ -63,19 +78,22 @@ struct TextElementView: View {
             if isSelected && !isMultiSelectMode && !isInlineEditing {
                 if showCardPicker {
                     cardPickerPanel
-                        .scaleEffect(1.0 / canvasScale)
-                        .offset(y: -(textSize.height / 2)
-                                   - (toolbarHeight / canvasScale)
-                                   - (cardPickerGap / canvasScale)
-                                   - (estimatedCardPickerHeight / canvasScale / 2))
+                        .scaleEffect(1.0 / safeCanvasScale)
+                        .offset(
+                            x: floatingControlsHorizontalOffset,
+                            y: cardPickerYOffset
+                        )
                         .zIndex(600)
                         .transition(.scale(scale: 0.9, anchor: .bottom).combined(with: .opacity))
                         .animation(.spring(duration: 0.22), value: showCardPicker)
                 }
 
                 formattingToolbar
-                    .offset(y: -(textSize.height / 2) - 44 / canvasScale)
-                    .scaleEffect(1.0 / canvasScale)
+                    .scaleEffect(1.0 / safeCanvasScale)
+                    .offset(
+                        x: floatingControlsHorizontalOffset,
+                        y: formattingToolbarYOffset
+                    )
                     .zIndex(500)
                     .transition(.scale(scale: 0.85, anchor: .bottom).combined(with: .opacity))
                     .animation(.spring(duration: 0.22), value: isSelected)
@@ -117,6 +135,80 @@ struct TextElementView: View {
 
     private var estimatedCardPickerHeight: CGFloat {
         element.strokeColorName != "none" ? 260 : 200
+    }
+
+    /// The toolbar is authored in screen points and inverse-scaled inside the
+    /// zooming canvas. Its offset must be applied after that inverse scale so
+    /// the parent canvas transform preserves a constant visual gap.
+    private var formattingToolbarYOffset: CGFloat {
+        floatingControlsPlacement.direction * (
+            textSize.height / 2 + toolbarCenterDistance / safeCanvasScale
+        )
+    }
+
+    private var cardPickerYOffset: CGFloat {
+        let distanceFromTextEdge = toolbarHandleGap
+            + handleSize / 2
+            + toolbarHeight
+            + cardPickerGap
+            + estimatedCardPickerHeight / 2
+
+        return floatingControlsPlacement.direction * (
+            textSize.height / 2 + distanceFromTextEdge / safeCanvasScale
+        )
+    }
+
+    private var toolbarCenterDistance: CGFloat {
+        handleSize / 2 + toolbarHandleGap + toolbarHeight / 2
+    }
+
+    private var floatingControlsStackExtent: CGFloat {
+        handleSize / 2
+            + toolbarHandleGap
+            + toolbarHeight
+            + (showCardPicker ? cardPickerGap + estimatedCardPickerHeight : 0)
+    }
+
+    private var floatingControlsPlacement: TextFloatingControlsPlacement {
+        let selectedTop = selectedScreenCenter.y - textSize.height * safeCanvasScale / 2
+        let selectedBottom = selectedScreenCenter.y + textSize.height * safeCanvasScale / 2
+        let safeBottom = max(floatingControlsSafeTop, viewportSize.height - floatingControlsBottomReserve)
+
+        if selectedTop - floatingControlsStackExtent >= floatingControlsSafeTop {
+            return .above
+        }
+
+        if selectedBottom + floatingControlsStackExtent <= safeBottom {
+            return .below
+        }
+
+        let availableAbove = selectedTop - floatingControlsSafeTop
+        let availableBelow = safeBottom - selectedBottom
+        return availableAbove >= availableBelow ? .above : .below
+    }
+
+    private var selectedScreenCenter: CGPoint {
+        CGPoint(
+            x: (element.x + dragOffset.width) * safeCanvasScale + canvasOffset.width,
+            y: (element.y + dragOffset.height) * safeCanvasScale + canvasOffset.height
+        )
+    }
+
+    private var floatingControlsHorizontalOffset: CGFloat {
+        guard viewportSize.width > 0 else { return 0 }
+        let halfWidth = floatingToolbarWidth / 2
+        let minimumX = toolbarViewportMargin + halfWidth
+        let maximumX = max(minimumX, viewportSize.width - toolbarViewportMargin - halfWidth)
+        let clampedX = min(max(selectedScreenCenter.x, minimumX), maximumX)
+        return (clampedX - selectedScreenCenter.x) / safeCanvasScale
+    }
+
+    private var floatingToolbarWidth: CGFloat {
+        min(toolbarMaximumWidth, max(0, viewportSize.width - toolbarViewportMargin * 2))
+    }
+
+    private var safeCanvasScale: CGFloat {
+        max(canvasScale, 0.01)
     }
 
     // MARK: - Text layer
@@ -564,12 +656,11 @@ struct TextElementView: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
         }
-        .frame(maxWidth: 340)
+        .frame(width: floatingToolbarWidth, height: toolbarHeight)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(.regularMaterial)
         )
-        .fixedSize(horizontal: true, vertical: true)
     }
 
     private var customTextColorPanel: some View {
