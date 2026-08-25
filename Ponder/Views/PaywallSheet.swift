@@ -14,10 +14,20 @@ struct PaywallSheet: View {
     @State private var selectedPlan: ProManager.Plan = .yearly
 
     private let plans: [PaywallPlan] = [
-        .init(plan: .monthly,  title: "Monthly",  badge: nil),
-        .init(plan: .yearly,   title: "Yearly",   badge: "Save 16%"),
-        .init(plan: .lifetime, title: "Lifetime", badge: "Best Value")
+        .init(plan: .monthly,  title: "Monthly Cloud", badge: nil),
+        .init(plan: .yearly,   title: "Yearly Cloud",  badge: "Popular"),
+        .init(plan: .local,    title: "Local Pro",     badge: "No Sync"),
+        .init(plan: .lifetime, title: "Lifetime Pro",  badge: "Best Value")
     ]
+
+    private var visiblePlans: [PaywallPlan] {
+        pro.ownsLocalPro ? plans.filter { $0.plan != .local } : plans
+    }
+
+    private var pricingColumns: [GridItem] {
+        let count = pro.ownsLocalPro ? 3 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: 10), count: count)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +46,14 @@ struct PaywallSheet: View {
         .task {
             await pro.loadProducts()
             await pro.refreshStatus()
+            if pro.isEligibleForLifetimeUpgrade {
+                selectedPlan = .lifetime
+            }
+        }
+        .onChange(of: pro.isEligibleForLifetimeUpgrade) { _, isEligible in
+            if isEligible {
+                selectedPlan = .lifetime
+            }
         }
     }
 
@@ -71,11 +89,13 @@ struct PaywallSheet: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Unlock Canvio Pro")
+                    Text(pro.ownsLocalPro ? "Add Cloud Sync" : "Unlock Canvio Pro")
                         .font(.system(size: 32, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
 
-                    Text("Everything you need to think visually")
+                    Text(pro.ownsLocalPro
+                         ? "Choose monthly, yearly or a one-time lifetime upgrade"
+                         : "Choose cloud sync or a one-time local upgrade")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.74))
                 }
@@ -101,18 +121,45 @@ struct PaywallSheet: View {
 
     private var featureList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            featureRow(icon: "checkmark.circle.fill", title: "Create unlimited canvases")
-            featureRow(icon: "checkmark.circle.fill", title: "Create unlimited pages inside every canvas")
-            featureRow(icon: "checkmark.circle.fill", title: "Add unlimited images, audio and tables")
-            featureRow(icon: "checkmark.circle.fill", title: "Use templates without image, audio and table limits")
-            featureRow(icon: "checkmark.circle.fill", title: "All grid styles — grid, lines, columns, blank")
-            featureRow(icon: "checkmark.circle.fill", title: "Premium canvas background palettes")
-            featureRow(icon: "checkmark.circle.fill", title: "Custom light and dark canvas background colors")
-            featureRow(icon: "checkmark.circle.fill", title: "Continuous color cycling within every stroke")
-            featureRow(icon: "checkmark.circle.fill", title: "Watermark-free PNG and PDF exports")
-            featureRow(icon: "checkmark.circle.fill", title: "Import custom .ttf fonts for text")
+            if pro.ownsLocalPro {
+                localProOwnedRow
+            } else {
+                featureRow(icon: "checkmark.circle.fill", title: "Create unlimited canvases")
+                featureRow(icon: "checkmark.circle.fill", title: "Create unlimited pages inside every canvas")
+                featureRow(icon: "checkmark.circle.fill", title: "Add unlimited images, audio and tables")
+                featureRow(icon: "checkmark.circle.fill", title: "Use templates without image, audio and table limits")
+                featureRow(icon: "checkmark.circle.fill", title: "All grid styles — grid, lines, columns, blank")
+                featureRow(icon: "checkmark.circle.fill", title: "Premium canvas background palettes")
+                featureRow(icon: "checkmark.circle.fill", title: "Custom light and dark canvas background colors")
+                featureRow(icon: "checkmark.circle.fill", title: "Continuous color cycling within every stroke")
+                featureRow(icon: "checkmark.circle.fill", title: "Watermark-free PNG and PDF exports")
+                featureRow(icon: "checkmark.circle.fill", title: "Import custom .ttf fonts for text")
+            }
             syncFeatureRow
         }
+    }
+
+    private var localProOwnedRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.green)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Local Pro is already unlocked")
+                    .font(.headline.weight(.bold))
+
+                Text("Your one-time Local Pro purchase remains yours.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func featureRow(icon: String, title: String) -> some View {
@@ -134,40 +181,54 @@ struct PaywallSheet: View {
 
     private var syncFeatureRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "star.fill")
+            Image(systemName: selectedPlan.includesCloudSync ? "icloud.fill" : "icloud.slash.fill")
                 .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.yellow)
+                .foregroundStyle(selectedPlan.includesCloudSync ? Color.accentColor : .secondary)
                 .frame(width: 24)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Sync across iPhone, iPad and Mac")
+                Text(selectedPlan.includesCloudSync
+                     ? "Sync across iPhone, iPad and Mac"
+                     : "Cloud sync is not included")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.primary)
 
-                Text("Most Popular Reason to Upgrade")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                Text(selectedPlan.includesCloudSync
+                     ? "Included with Cloud Pro and Lifetime Pro"
+                     : "Your canvases remain local to each device")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(selectedPlan.includesCloudSync ? Color.accentColor : .secondary)
             }
 
             Spacer(minLength: 0)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+            selectedPlan.includesCloudSync
+                ? Color.accentColor.opacity(0.12)
+                : Color.secondary.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 14)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+                .strokeBorder(
+                    selectedPlan.includesCloudSync
+                        ? Color.accentColor.opacity(0.25)
+                        : Color.secondary.opacity(0.14),
+                    lineWidth: 1
+                )
         )
     }
 
     // MARK: - Pricing cards
 
     private var pricingCards: some View {
-        HStack(spacing: 8) {
-            ForEach(plans) { option in
+        LazyVGrid(
+            columns: pricingColumns,
+            spacing: 10
+        ) {
+            ForEach(visiblePlans) { option in
                 priceCard(option)
             }
         }
@@ -175,6 +236,8 @@ struct PaywallSheet: View {
 
     private func priceCard(_ option: PaywallPlan) -> some View {
         let isSelected = selectedPlan == option.plan
+        let isOwned = isPlanOwned(option.plan)
+        let purchasePlan = purchasePlan(for: option.plan)
 
         return Button {
             withAnimation(.spring(duration: 0.22)) {
@@ -182,20 +245,20 @@ struct PaywallSheet: View {
             }
         } label: {
             VStack(spacing: 8) {
-                Text(option.title)
+                Text(cardTitle(for: option))
                     .font(.caption.weight(.bold))
                     .foregroundStyle(.secondary)
 
-                Text(displayPrice(for: option.plan))
+                Text(isOwned ? "Owned" : displayPrice(for: purchasePlan))
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isOwned ? Color.accentColor : .primary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.76)
 
-                Text(option.badge ?? " ")
+                Text(cardBadge(for: option) ?? " ")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(option.badge == nil ? .clear : Color.accentColor)
+                    .foregroundStyle(cardBadge(for: option) == nil ? .clear : Color.accentColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
@@ -214,6 +277,7 @@ struct PaywallSheet: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(isOwned)
     }
 
     // MARK: - CTA
@@ -231,7 +295,7 @@ struct PaywallSheet: View {
 
             Button {
                 Task {
-                    let success = await pro.purchase(selectedPlan)
+                    let success = await pro.purchase(purchasePlan(for: selectedPlan))
                     if success {
                         dismiss()
                         onPurchaseCompleted?()
@@ -243,7 +307,7 @@ struct PaywallSheet: View {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Text("Get Canvio Pro — \(displayPrice(for: selectedPlan))")
+                        Text(ctaTitle)
                             .font(.headline.weight(.semibold))
                     }
                 }
@@ -253,14 +317,16 @@ struct PaywallSheet: View {
                 .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(pro.isLoading)
+            .disabled(pro.isLoading || isPlanOwned(selectedPlan))
 
             Button {
                 Task {
                     await pro.restorePurchases()
-                    if pro.isPro {
+                    if pro.canUseCloudSync {
                         dismiss()
                         onPurchaseCompleted?()
+                    } else if pro.ownsLocalPro {
+                        selectedPlan = .lifetime
                     }
                 }
             } label: {
@@ -272,7 +338,11 @@ struct PaywallSheet: View {
             .disabled(pro.isLoading)
 
             HStack(spacing: 4) {
-                Text("Cancel anytime · Billed by Apple ·")
+                Text(purchasePlan(for: selectedPlan) == .local
+                     || purchasePlan(for: selectedPlan) == .lifetime
+                     || purchasePlan(for: selectedPlan) == .lifetimeUpgrade
+                     ? "One-time payment · Billed by Apple ·"
+                     : "Auto-renews · Cancel anytime · Billed by Apple ·")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
@@ -299,6 +369,51 @@ struct PaywallSheet: View {
         pro.products.first { $0.id == plan.rawValue }
     }
 
+    private func purchasePlan(for displayedPlan: ProManager.Plan) -> ProManager.Plan {
+        if displayedPlan == .lifetime, pro.isEligibleForLifetimeUpgrade {
+            return .lifetimeUpgrade
+        }
+        return displayedPlan
+    }
+
+    private func isPlanOwned(_ plan: ProManager.Plan) -> Bool {
+        switch plan {
+        case .local:
+            return pro.ownsLocalPro
+        case .lifetime:
+            return pro.hasLifetimeAccess
+        case .monthly, .yearly, .lifetimeUpgrade:
+            return false
+        }
+    }
+
+    private func cardTitle(for option: PaywallPlan) -> String {
+        if option.plan == .lifetime, pro.isEligibleForLifetimeUpgrade {
+            return "Lifetime Upgrade"
+        }
+        return option.title
+    }
+
+    private func cardBadge(for option: PaywallPlan) -> String? {
+        if isPlanOwned(option.plan) {
+            return "Purchased"
+        }
+        if option.plan == .lifetime, pro.isEligibleForLifetimeUpgrade {
+            return "Local Pro Credit"
+        }
+        return option.badge
+    }
+
+    private var ctaTitle: String {
+        if isPlanOwned(selectedPlan) {
+            return "Already Purchased"
+        }
+
+        let plan = purchasePlan(for: selectedPlan)
+        let action = plan == .lifetimeUpgrade ? "Upgrade to" : "Get"
+        return "\(action) \(purchaseName(for: plan)) — \(displayPrice(for: plan))"
+    }
+
     private func displayPrice(for plan: ProManager.Plan) -> String {
         guard let product = product(for: plan) else {
             return fallbackPrice(for: plan)
@@ -309,7 +424,11 @@ struct PaywallSheet: View {
             return "\(product.displayPrice)/month"
         case .yearly:
             return "\(product.displayPrice)/year"
+        case .local:
+            return "\(product.displayPrice) once"
         case .lifetime:
+            return "\(product.displayPrice) once"
+        case .lifetimeUpgrade:
             return "\(product.displayPrice) once"
         }
     }
@@ -320,8 +439,21 @@ struct PaywallSheet: View {
             return "Loading..."
         case .yearly:
             return "Loading..."
-        case .lifetime:
+        case .local, .lifetime, .lifetimeUpgrade:
             return "Loading..."
+        }
+    }
+
+    private func purchaseName(for plan: ProManager.Plan) -> String {
+        switch plan {
+        case .monthly, .yearly:
+            return "Cloud Pro"
+        case .local:
+            return "Local Pro"
+        case .lifetime:
+            return "Lifetime Pro"
+        case .lifetimeUpgrade:
+            return "Lifetime Pro"
         }
     }
 

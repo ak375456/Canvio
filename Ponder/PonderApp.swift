@@ -102,17 +102,17 @@ private struct SyncCoordinatorView: View {
             // before the user had an account up to Supabase.
             .onReceive(AuthService.shared.didSignIn) {
                 Task {
-                    guard ProManager.shared.isPro else { return }
+                    guard ProManager.shared.canUseCloudSync else { return }
                     print("🔑 Login detected — reconciling all local data")
                     await fullSyncAfterAuth()
                 }
             }
-            // ── Trigger reconcile when Pro is purchased ───────────────
+            // ── Trigger reconcile when Cloud Pro is purchased ────────
             // This pushes all local data that existed before Pro was bought.
-            .onChange(of: pro.isPro) { _, isPro in
-                guard isPro, auth.currentUser != nil else { return }
+            .onChange(of: pro.canUseCloudSync) { _, canUseCloudSync in
+                guard canUseCloudSync, auth.currentUser != nil else { return }
                 Task {
-                    print("⭐ Pro purchased — reconciling all local data")
+                    print("⭐ Cloud Pro purchased — reconciling all local data")
                     await fullSyncAfterAuth()
                 }
             }
@@ -123,7 +123,7 @@ private struct SyncCoordinatorView: View {
     private func restoreAndSync() async {
         await ProManager.shared.refreshStatus()
         await AuthService.shared.restoreSession()
-        guard ProManager.shared.isPro,
+        guard ProManager.shared.canUseCloudSync,
               AuthService.shared.currentUser != nil else { return }
         await fullSyncAfterAuth()
     }
@@ -135,7 +135,7 @@ private struct SyncCoordinatorView: View {
     // 3. Pull everything from Supabase → local
 
     private func fullSyncAfterAuth() async {
-        guard ProManager.shared.isPro,
+        guard ProManager.shared.canUseCloudSync,
               let currentUserID = AuthService.shared.syncUserID else { return }
         guard !isFullSyncRunning else {
             print("⏭️ Full sync already running — skipped duplicate trigger")

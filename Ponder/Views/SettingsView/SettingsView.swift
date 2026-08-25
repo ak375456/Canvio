@@ -6,12 +6,14 @@
 import SwiftUI
 import SwiftData
 import Auth
+import StoreKit
 
 struct SettingsView: View {
     @ObservedObject private var auth = AuthService.shared
     @ObservedObject private var pro = ProManager.shared
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.requestReview) private var requestReview
 
     @State private var displayName: String = ""
     @State private var isEditingName: Bool = false
@@ -19,6 +21,8 @@ struct SettingsView: View {
     @State private var showSignOutConfirm: Bool = false
     @State private var showPaywall: Bool = false
     @State private var showAuth: Bool = false
+    @State private var showFeedback: Bool = false
+    @State private var requestReviewAfterFeedback: Bool = false
     @State private var isSigningOut: Bool = false
     @State private var isDeleting: Bool = false
     @State private var deleteError: String? = nil
@@ -175,16 +179,24 @@ struct SettingsView: View {
                             openURL("https://ak375456.github.io/canvio-site/terms.html")
                         }
 
+                        settingsRow(icon: "bubble.left.and.text.bubble.right", iconColor: .teal, title: "Send Feedback") {
+                            showFeedback = true
+                        }
+
                         settingsRow(icon: "envelope", iconColor: .orange, title: "Contact Support") {
                             openURL("mailto:ak375456@gmail.com")
+                        }
+
+                        settingsRow(icon: "star.bubble", iconColor: .yellow, title: "Rate Canvio") {
+                            openURL("https://apps.apple.com/app/id6771719475?action=write-review")
                         }
 
                         settingsRow(
                             icon: pro.isPro ? "checkmark.seal.fill" : "star.fill",
                             iconColor: pro.isPro ? .green : .yellow,
-                            title: pro.isPro ? "Canvio Pro Active" : "Unlock Canvio Pro"
+                            title: purchaseStatusTitle
                         ) {
-                            if !pro.isPro { showPaywall = true }
+                            if !pro.canUseCloudSync { showPaywall = true }
                         }
                     }
                     .padding(.top, 8)
@@ -235,7 +247,7 @@ struct SettingsView: View {
         .task { await loadProfile() }
         .sheet(isPresented: $showPaywall) {
             PaywallSheet {
-                if auth.currentUser == nil {
+                if pro.canUseCloudSync, auth.currentUser == nil {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         showAuth = true
                     }
@@ -257,6 +269,14 @@ struct SettingsView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showFeedback, onDismiss: requestPendingReviewIfNeeded) {
+            FeedbackSheet {
+                requestReviewAfterFeedback = true
+            }
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
         }
         .alert("Sign Out", isPresented: $showSignOutConfirm) {
             Button("Sign Out", role: .destructive) {
@@ -304,6 +324,29 @@ struct SettingsView: View {
         #endif
     }
 
+    private func requestPendingReviewIfNeeded() {
+        guard requestReviewAfterFeedback else { return }
+        requestReviewAfterFeedback = false
+
+        Task { @MainActor in
+            // Give SwiftUI time to finish removing the feedback sheet so the
+            // StoreKit rating sheet has a clear presentation context.
+            try? await Task.sleep(for: .milliseconds(700))
+
+            #if os(iOS)
+            if let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }) {
+                AppStore.requestReview(in: scene)
+            } else {
+                requestReview()
+            }
+            #else
+            requestReview()
+            #endif
+        }
+    }
+
     private func loadProfile() async {
         if let name = await AuthService.shared.fetchDisplayName() {
             displayName = name
@@ -322,11 +365,21 @@ struct SettingsView: View {
     }
 
     private func handleSignInTap() {
-        if pro.isPro {
+        if pro.canUseCloudSync {
             showAuth = true
         } else {
             showPaywall = true
         }
+    }
+
+    private var purchaseStatusTitle: String {
+        if pro.canUseCloudSync {
+            return "Canvio Cloud Pro Active"
+        }
+        if pro.isPro {
+            return "Local Pro Active · Upgrade for Sync"
+        }
+        return "Unlock Canvio Pro"
     }
 
     private func performSignOut() async {

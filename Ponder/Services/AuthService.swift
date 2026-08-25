@@ -32,9 +32,9 @@ final class AuthService: NSObject, ObservableObject {
 
     private override init() { super.init() }
 
-    // syncUserID only works when Pro is active AND user is logged in
+    // syncUserID only works when Cloud Pro is active AND user is logged in.
     var syncUserID: String? {
-        guard ProManager.shared.isPro else { return nil }
+        guard ProManager.shared.canUseCloudSync else { return nil }
         return currentUser?.id.uuidString
     }
 

@@ -82,7 +82,7 @@ struct SettingsSheet: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         isImportingFont = true
                     }
-                } else if auth.currentUser == nil {
+                } else if pro.canUseCloudSync, auth.currentUser == nil {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         showAuth = true
                     }

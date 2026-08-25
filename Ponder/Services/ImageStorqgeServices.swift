@@ -340,7 +340,7 @@ enum ImageStorageService {
     // MARK: - Encode
     /// Resizes to max 2048px on the longest side. Images with alpha are saved
     /// as PNG so transparent backgrounds survive; other images use JPEG.
-    private static func prepareForStorage(data: Data) -> (data: Data, fileExtension: String)? {
+    static func prepareForStorage(data: Data) -> (data: Data, fileExtension: String)? {
         #if canImport(UIKit)
         guard let image = UIImage(data: data) else { return nil }
         let hasAlpha = hasAlphaChannel(data: data)

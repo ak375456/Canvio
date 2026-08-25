@@ -14,23 +14,60 @@ final class ProManager: ObservableObject {
     enum Plan: String, CaseIterable, Identifiable {
         case monthly = "com.lexur.canvio.pro.monthlyy"
         case yearly = "com.lexur.canvio.pro.yearly"
+        case local = "com.lexur.canvio.pro.local"
         case lifetime = "com.lexur.canvio.pro.lifetime"
+        case lifetimeUpgrade = "com.lexur.canvio.pro.cloud.lifetime.upgrade"
 
         var id: String { rawValue }
+
+        static let availableForPurchase: [Plan] = [
+            .monthly,
+            .yearly,
+            .local,
+            .lifetime,
+            .lifetimeUpgrade
+        ]
+
+        var includesCloudSync: Bool {
+            switch self {
+            case .monthly, .yearly, .lifetime:
+                return true
+            case .local, .lifetimeUpgrade:
+                return false
+            }
+        }
     }
 
     @AppStorage("isPro") private var storedIsPro = false
     @AppStorage("hasLifetimePro") private var hasLifetimePro = false
+    @AppStorage("canUseCloudSync") private var storedCanUseCloudSync = false
 
     @Published private(set) var isPro: Bool
+    @Published private(set) var canUseCloudSync: Bool
+    @Published private(set) var ownsLocalPro: Bool
+    @Published private(set) var ownsLifetimePro: Bool
+    @Published private(set) var ownsLifetimeUpgrade: Bool
     @Published private(set) var products: [Product] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
 
     private var updatesTask: Task<Void, Never>?
 
+    var isEligibleForLifetimeUpgrade: Bool {
+        ownsLocalPro && !ownsLifetimePro && !ownsLifetimeUpgrade
+    }
+
+    var hasLifetimeAccess: Bool {
+        ownsLifetimePro || (ownsLocalPro && ownsLifetimeUpgrade)
+    }
+
     private init() {
         isPro = UserDefaults.standard.bool(forKey: "isPro")
+        canUseCloudSync = UserDefaults.standard.bool(forKey: "canUseCloudSync")
+            || UserDefaults.standard.bool(forKey: "hasLifetimePro")
+        ownsLocalPro = false
+        ownsLifetimePro = UserDefaults.standard.bool(forKey: "hasLifetimePro")
+        ownsLifetimeUpgrade = false
         updatesTask = listenForTransactionUpdates()
     }
 
@@ -41,7 +78,7 @@ final class ProManager: ObservableObject {
     func loadProducts() async {
         guard products.isEmpty else { return }
         do {
-            products = try await Product.products(for: Plan.allCases.map(\.rawValue))
+            products = try await Product.products(for: Plan.availableForPurchase.map(\.rawValue))
                 .sorted { lhs, rhs in
                     order(for: lhs.id) < order(for: rhs.id)
                 }
@@ -51,7 +88,12 @@ final class ProManager: ObservableObject {
     }
 
     func refreshStatus() async {
-        var hasActiveEntitlement = hasLifetimePro
+        // Preserve the entitlement promised to purchasers of the retired
+        // all-inclusive lifetime product, including while they are offline.
+        var ownsLocal = false
+        var ownsLifetime = hasLifetimePro
+        var ownsUpgrade = false
+        var hasActiveCloudSubscription = false
 
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result),
@@ -59,13 +101,28 @@ final class ProManager: ObservableObject {
                   transaction.revocationDate == nil
             else { continue }
 
-            if transaction.productID == Plan.lifetime.rawValue {
+            let plan = Plan(rawValue: transaction.productID)!
+            switch plan {
+            case .monthly, .yearly:
+                hasActiveCloudSubscription = true
+            case .local:
+                ownsLocal = true
+            case .lifetime:
+                ownsLifetime = true
                 hasLifetimePro = true
+            case .lifetimeUpgrade:
+                ownsUpgrade = true
             }
-            hasActiveEntitlement = true
         }
 
-        setPro(hasActiveEntitlement)
+        ownsLocalPro = ownsLocal
+        ownsLifetimePro = ownsLifetime
+        ownsLifetimeUpgrade = ownsUpgrade
+
+        let hasLifetimeAccess = ownsLifetime || (ownsLocal && ownsUpgrade)
+        let hasProFeatures = ownsLocal || hasActiveCloudSubscription || hasLifetimeAccess
+        let hasCloudSync = hasActiveCloudSubscription || hasLifetimeAccess
+        setEntitlements(pro: hasProFeatures, cloudSync: hasCloudSync)
     }
 
     @discardableResult
@@ -73,6 +130,14 @@ final class ProManager: ObservableObject {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
+
+        if plan == .lifetimeUpgrade {
+            await refreshStatus()
+            guard ownsLocalPro else {
+                errorMessage = "The Lifetime Cloud Upgrade requires Canvio Local Pro."
+                return false
+            }
+        }
 
         await loadProducts()
         guard let product = products.first(where: { $0.id == plan.rawValue }) else {
@@ -90,7 +155,14 @@ final class ProManager: ObservableObject {
                 }
                 await transaction.finish()
                 await refreshStatus()
-                return isPro
+                switch plan {
+                case .local:
+                    return ownsLocalPro
+                case .lifetimeUpgrade:
+                    return canUseCloudSync && ownsLifetimeUpgrade
+                case .monthly, .yearly, .lifetime:
+                    return canUseCloudSync
+                }
             case .pending:
                 errorMessage = "Purchase is pending approval."
                 return false
@@ -115,7 +187,7 @@ final class ProManager: ObservableObject {
             try await AppStore.sync()
             await refreshStatus()
             if !isPro {
-                errorMessage = "No active Canvio Pro purchase was found."
+                errorMessage = "No active Canvio purchase was found."
             }
         } catch {
             errorMessage = "Restore failed: \(error.localizedDescription)"
@@ -128,7 +200,7 @@ final class ProManager: ObservableObject {
             for await result in Transaction.updates {
                 guard let transaction = try? self.checkVerified(result) else { continue }
                 if transaction.productID == Plan.lifetime.rawValue {
-                    self.hasLifetimePro = true
+                    self.hasLifetimePro = transaction.revocationDate == nil
                 }
                 await transaction.finish()
                 await self.refreshStatus()
@@ -145,17 +217,21 @@ final class ProManager: ObservableObject {
         }
     }
 
-    private func setPro(_ value: Bool) {
-        storedIsPro = value
-        isPro = value
+    private func setEntitlements(pro: Bool, cloudSync: Bool) {
+        storedIsPro = pro
+        storedCanUseCloudSync = cloudSync
+        isPro = pro
+        canUseCloudSync = cloudSync
     }
 
     private func order(for productID: String) -> Int {
         switch Plan(rawValue: productID) {
         case .monthly: return 0
         case .yearly: return 1
-        case .lifetime: return 2
-        case .none: return 3
+        case .local: return 2
+        case .lifetime: return 3
+        case .lifetimeUpgrade: return 4
+        case .none: return 5
         }
     }
 }

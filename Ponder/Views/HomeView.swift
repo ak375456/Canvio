@@ -1,15 +1,19 @@
 import SwiftUI
 import SwiftData
 import Auth
+import StoreKit
 
 struct HomeView: View {
     @StateObject private var viewModel = HomeViewModel()
     @ObservedObject private var auth = AuthService.shared
     @ObservedObject private var pro = ProManager.shared
     @Environment(\.modelContext) private var context
+    @Environment(\.requestReview) private var requestReview
     @Query(sort: \CanvasModel.createdAt, order: .reverse) var canvases: [CanvasModel]
 
     @State private var showSettings = false
+    @State private var showFeedback = false
+    @State private var requestReviewAfterFeedback = false
     @State private var isSyncing = false
     @State private var showPaywall = false
     @State private var showAuth = false
@@ -60,6 +64,14 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(24)
+            }
+            .sheet(isPresented: $showFeedback, onDismiss: requestPendingReviewIfNeeded) {
+                FeedbackSheet {
+                    requestReviewAfterFeedback = true
+                }
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(24)
@@ -118,7 +130,7 @@ struct HomeView: View {
     }
 
     private func handleSyncTap() {
-        guard pro.isPro else {
+        guard pro.canUseCloudSync else {
             showPaywall = true
             return
         }
@@ -130,7 +142,7 @@ struct HomeView: View {
     }
 
     private func settingsDidUnlockPro() {
-        if auth.currentUser == nil {
+        if pro.canUseCloudSync, auth.currentUser == nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 showAuth = true
             }
@@ -140,7 +152,7 @@ struct HomeView: View {
     // MARK: - Sync
 
     private func syncAll() async {
-        guard !isSyncing, pro.isPro, auth.currentUser != nil else { return }
+        guard !isSyncing, pro.canUseCloudSync, auth.currentUser != nil else { return }
         isSyncing = true
         defer { isSyncing = false }
 
@@ -221,6 +233,7 @@ struct HomeView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 libraryHero
+                feedbackSupportBanner
 
                 if canvases.isEmpty {
                     emptyState
@@ -346,6 +359,72 @@ struct HomeView: View {
                 .shadow(color: Color.accentColor.opacity(0.22), radius: 10, y: 5)
         }
         .buttonStyle(.plain)
+    }
+
+    private var feedbackSupportBanner: some View {
+        Button {
+            showFeedback = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.teal.opacity(0.13))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.teal)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Feedback & Support")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Report a bug · Request a feature · Share an opinion")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.opacity(0.82), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.teal.opacity(0.16), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Feedback and Support")
+        .accessibilityHint("Report a bug, request a feature, or share an opinion")
+    }
+
+    private func requestPendingReviewIfNeeded() {
+        guard requestReviewAfterFeedback else { return }
+        requestReviewAfterFeedback = false
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(700))
+
+            #if os(iOS)
+            if let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }) {
+                AppStore.requestReview(in: scene)
+            } else {
+                requestReview()
+            }
+            #else
+            requestReview()
+            #endif
+        }
     }
 
     private var libraryControls: some View {
