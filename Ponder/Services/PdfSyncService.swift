@@ -51,6 +51,7 @@ private struct PDFDeleteUpdate: Encodable {
 
 private struct PDFDeletePayload: Codable {
     let id:                  String
+    let document_id:         String?
     let user_id:             String
     let updated_at:          String
     let pdf_file_name:       String
@@ -123,7 +124,9 @@ final class PDFSyncService {
         let now       = iso.string(from: Date())
 
         guard network.isConnected else {
-            let payload = PDFDeletePayload(id: elementID, user_id: userID, updated_at: now,
+            let payload = PDFDeletePayload(id: elementID,
+                                           document_id: element.resolvedDocumentID.uuidString,
+                                           user_id: userID, updated_at: now,
                                            pdf_file_name: element.pdfFileName,
                                            thumbnail_file_name: element.thumbnailFileName,
                                            delete_asset: deleteAsset)
@@ -141,6 +144,12 @@ final class PDFSyncService {
                 .eq("user_id", value: userID)
                 .execute()
             if deleteAsset {
+                try await supabase
+                    .from("pdf_documents")
+                    .update(PDFDeleteUpdate(is_deleted: true, updated_at: now))
+                    .eq("id", value: element.resolvedDocumentID.uuidString)
+                    .eq("user_id", value: userID)
+                    .execute()
                 Task {
                     await media.deleteBundle(.pdf(
                         pdfFileName: element.pdfFileName,
@@ -149,7 +158,9 @@ final class PDFSyncService {
                 }
             }
         } catch {
-            let payload = PDFDeletePayload(id: elementID, user_id: userID, updated_at: now,
+            let payload = PDFDeletePayload(id: elementID,
+                                           document_id: element.resolvedDocumentID.uuidString,
+                                           user_id: userID, updated_at: now,
                                            pdf_file_name: element.pdfFileName,
                                            thumbnail_file_name: element.thumbnailFileName,
                                            delete_asset: deleteAsset)
@@ -303,6 +314,15 @@ final class PDFSyncService {
                                 .eq("user_id", value: payload.user_id)
                                 .execute()
                             if payload.delete_asset {
+                                try await supabase
+                                    .from("pdf_documents")
+                                    .update(PDFDeleteUpdate(
+                                        is_deleted: true,
+                                        updated_at: payload.updated_at
+                                    ))
+                                    .eq("id", value: payload.document_id ?? payload.id)
+                                    .eq("user_id", value: payload.user_id)
+                                    .execute()
                                 Task {
                                     await media.deleteBundle(.pdf(
                                         pdfFileName: payload.pdf_file_name,
