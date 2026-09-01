@@ -62,6 +62,41 @@ private struct CanvasNavigationTransform<Content: View>: View {
     }
 }
 
+/// Applies a live selection translation without rebuilding its potentially
+/// expensive content (PDF pages, PencilKit drawings, tables, and images).
+private struct CanvasLiveDragTransform<Content: View>: View {
+    @ObservedObject var drag: CanvasDragTranslationState
+    let content: Content
+
+    var body: some View {
+        content.offset(drag.offset)
+    }
+}
+
+private struct CanvasLiveDragModifier: ViewModifier {
+    let drag: CanvasDragTranslationState?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let drag {
+            CanvasLiveDragTransform(drag: drag, content: content)
+        } else {
+            content
+        }
+    }
+}
+
+/// The selection outline is cheap to redraw, so it can observe the same isolated
+/// drag state directly while the canvas document remains untouched.
+private struct CanvasLiveDragObserver<Content: View>: View {
+    @ObservedObject var drag: CanvasDragTranslationState
+    @ViewBuilder let content: (CGSize) -> Content
+
+    var body: some View {
+        content(drag.offset)
+    }
+}
+
 private struct ElementPositionSnapshot {
     let id: UUID
     let x: Double
@@ -1141,8 +1176,6 @@ private struct CanvasPageContentView: View {
     #endif
     @State private var selectedGroupID: UUID?
     @State private var draggingGroupID: UUID?
-    @State private var groupDragOffset: CGSize = .zero
-    @State private var multiSelectDragOffset: CGSize = .zero
     @State private var alignmentGuidePoint: CGPoint?
     @State private var alignmentRuler: CanvasAlignmentRulerState?
     @State private var isLassoModeActive = false
@@ -1336,8 +1369,12 @@ private struct CanvasPageContentView: View {
             height: height
         )
 
-        let padX = max(220, width * 0.85)
-        let padY = max(220, height * 0.85)
+        // Keep a screen-sized prefetch gutter instead of multiplying the canvas
+        // viewport. The old percentage-based padding became enormous at 30% zoom
+        // and kept several screens of rich elements mounted off-screen.
+        let screenPadding: CGFloat = 360
+        let padX = screenPadding / renderScale
+        let padY = screenPadding / renderScale
         return rect.insetBy(dx: -padX, dy: -padY)
     }
 
@@ -1426,9 +1463,9 @@ private struct CanvasPageContentView: View {
         }
 
         guard let id = activeSelectedElementID,
-              let bounds = boundsMap[id] else { return nil }
+              let element = layerableElement(withID: id) else { return nil }
 
-        return screenRect(for: bounds.rect)
+        return screenRect(for: elementBounds(for: element).rect)
             .insetBy(dx: -44, dy: -80)
     }
 
@@ -1642,6 +1679,10 @@ private struct CanvasPageContentView: View {
 
                 canvasElementsSurface(geo: geo)
 
+                if !vm.showCanvasDrawingOverlay && !isLassoModeActive {
+                    selectedGroupToolbarLayer(viewportSize: geo.size)
+                }
+
                 if isAlignmentGuideActive {
                     alignmentGuideLayer(geo: geo)
                 }
@@ -1765,7 +1806,7 @@ private struct CanvasPageContentView: View {
                         }
                         let zoomSensitivity: CGFloat = 0.008
                         let delta    = -deltaY * zoomSensitivity
-                        let newScale = max(0.15, min(vm.scale * (1.0 + delta), 8.0))
+                        let newScale = max(canvasMinimumZoomScale, min(vm.scale * (1.0 + delta), 8.0))
                         let scaleDelta = newScale / vm.scale
                         let newW = focal.x - (focal.x - vm.offset.width)  * scaleDelta
                         let newH = focal.y - (focal.y - vm.offset.height) * scaleDelta
@@ -2032,9 +2073,18 @@ private struct CanvasPageContentView: View {
                     .presentationCornerRadius(24)
             }
             .sheet(isPresented: $showLayers) {
-                LayersSheet(allElements: allLayerableElements, vm: layersVM) { id in
-                    layersVM.highlight(id); selectElement(id: id)
-                }
+                LayersSheet(
+                    allElements: allLayerableElements,
+                    elementGroups: elementGroups,
+                    vm: layersVM,
+                    onSelectElement: { id in
+                        layersVM.highlight(id)
+                        selectElement(id: id)
+                    },
+                    onSelectGroup: { groupID in
+                        selectGroup(groupID)
+                    }
+                )
                 .presentationDetents([.medium, .large]).presentationDragIndicator(.visible).presentationCornerRadius(24)
             }
             .sheet(isPresented: $vm.showAudioPicker) {
@@ -2199,10 +2249,16 @@ private struct CanvasPageContentView: View {
 
     @ViewBuilder
     private func canvasElementsSurface(geo: GeometryProxy) -> some View {
+        let currentBoundsMap = boundsMap
+        let renderViewport = visibleCanvasRect(viewportSize: geo.size)
+
         CanvasNavigationTransform(navigation: vm.navigation) {
             ZStack {
-                connectorOverlayLayer
-                connectorAnchorLayer
+                connectorOverlayLayer(
+                    boundsMap: currentBoundsMap,
+                    visibleCanvasRect: renderViewport
+                )
+                connectorAnchorLayer(boundsMap: currentBoundsMap)
                 visibleElementsLayer(viewportSize: geo.size)
             }
         }
@@ -2219,19 +2275,23 @@ private struct CanvasPageContentView: View {
         #endif
     }
 
-    private var connectorOverlayLayer: some View {
+    private func connectorOverlayLayer(
+        boundsMap: [UUID: ElementBounds],
+        visibleCanvasRect: CGRect
+    ) -> some View {
         ConnectorOverlayView(
             connectors: connectors,
             boundsMap: boundsMap,
             vm: vm.connectorVM,
             undoManager: vm.undoManager,
             canvasID: activeContentCanvasID,
-            canvasScale: elementRenderScale
+            canvasScale: elementRenderScale,
+            visibleCanvasRect: visibleCanvasRect
         )
         .zIndex(-1)
     }
 
-    private var connectorAnchorLayer: some View {
+    private func connectorAnchorLayer(boundsMap: [UUID: ElementBounds]) -> some View {
         ConnectorAnchorDotsView(
             boundsMap: boundsMap,
             vm: vm.connectorVM,
@@ -2286,19 +2346,22 @@ private struct CanvasPageContentView: View {
         let _ = viewportContentRevision
         let visibleElements = visibleSortedElements(viewportSize: viewportSize)
         let nextZIndex = LayersViewModel.nextZ(among: allLayerableElements)
+        let multiSelectBounds = selection.isMultiSelectActive ? selectedMultiSelectBounds : nil
+        let visibleGroupIDs = Set(visibleElements.compactMap(\.groupID))
 
         ForEach(visibleElements.filter { !$0.isLayerHidden }, id: \.id) { element in
             renderElement(
                 element,
                 nextZIndex: nextZIndex,
-                viewportSize: viewportSize
+                viewportSize: viewportSize,
+                multiSelectBounds: multiSelectBounds
             )
         }
 
         if selection.isMultiSelectActive {
-            multiSelectDragLayer(viewportSize: viewportSize)
+            multiSelectDragLayer(bounds: multiSelectBounds, viewportSize: viewportSize)
         } else {
-            groupSelectionLayer
+            groupSelectionLayer(visibleGroupIDs: visibleGroupIDs)
         }
     }
 
@@ -2908,7 +2971,7 @@ private struct CanvasPageContentView: View {
         let availableHeight = max(80, viewportSize.height - padding * 2)
         let scaleX = availableWidth / CGFloat(page.width)
         let scaleY = availableHeight / CGFloat(page.height)
-        let nextScale = max(0.15, min(scaleX, scaleY, 1.1))
+        let nextScale = max(canvasMinimumZoomScale, min(scaleX, scaleY, 1.1))
         let center = page.center
         let nextOffset = CGSize(
             width: viewportSize.width / 2 - CGFloat(center.x) * nextScale,
@@ -3111,6 +3174,7 @@ private struct CanvasPageContentView: View {
                 .frame(maxWidth: .infinity)
 
                 MultiSelectDoneButton {
+                    vm.selectionDrag.reset()
                     withAnimation(.spring(duration: 0.3)) { selection.exit() }
                     dismissEverything()
                 }
@@ -3532,15 +3596,15 @@ private struct CanvasPageContentView: View {
     }
 
     @ViewBuilder
-    private func multiSelectDragLayer(viewportSize: CGSize) -> some View {
-        if let bounds = selectedMultiSelectBounds {
+    private func multiSelectDragLayer(bounds: CGRect?, viewportSize: CGSize) -> some View {
+        if let bounds {
             multiSelectDragView(bounds: bounds, viewportSize: viewportSize)
         }
     }
 
     private var selectedMultiSelectBounds: CGRect? {
         let rects = selection.selectedIDs.compactMap { id in
-            boundsMap[id]?.rect
+            layerableElement(withID: id).map { elementBounds(for: $0).rect }
         }
         guard var union = rects.first else { return nil }
 
@@ -3556,55 +3620,58 @@ private struct CanvasPageContentView: View {
         viewportSize: CGSize
     ) -> some View {
         let safeScale = max(vm.scale, 0.01)
-        let isDragging = multiSelectDragOffset != .zero
 
-        return ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(
-                    Color.blue.opacity(isDragging ? 0.95 : 0.78),
-                    style: StrokeStyle(
-                        lineWidth: max(1.5 / safeScale, 0.6),
-                        dash: [8 / safeScale, 5 / safeScale]
+        return CanvasLiveDragObserver(drag: vm.selectionDrag) { dragOffset in
+            let isDragging = dragOffset != .zero
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(
+                        Color.blue.opacity(isDragging ? 0.95 : 0.78),
+                        style: StrokeStyle(
+                            lineWidth: max(1.5 / safeScale, 0.6),
+                            dash: [8 / safeScale, 5 / safeScale]
+                        )
+                    )
+                    .frame(width: bounds.width, height: bounds.height)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color.blue.opacity(isDragging ? 0.075 : 0.045))
+                            .frame(width: bounds.width, height: bounds.height)
+                    )
+                    .allowsHitTesting(false)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Move")
+                        .font(.caption.weight(.bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 11)
+                .frame(height: 30)
+                .background(Color.blue, in: Capsule())
+                .contentShape(Capsule())
+                .scaleEffect(1 / safeScale)
+                .offset(y: -bounds.height / 2 - 28 / safeScale)
+                .gesture(
+                    multiSelectDragGesture(
+                        bounds: bounds,
+                        viewportSize: viewportSize
                     )
                 )
-                .frame(width: bounds.width, height: bounds.height)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.blue.opacity(isDragging ? 0.075 : 0.045))
-                        .frame(width: bounds.width, height: bounds.height)
-                )
-                .allowsHitTesting(false)
-
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
-                    .font(.system(size: 12, weight: .bold))
-                Text("Move")
-                    .font(.caption.weight(.bold))
+                .accessibilityLabel("Move selected items")
+                .accessibilityHint("Drag to move the complete selection.")
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 11)
-            .frame(height: 30)
-            .background(Color.blue, in: Capsule())
-            .contentShape(Capsule())
-            .scaleEffect(1 / safeScale)
-            .offset(y: -bounds.height / 2 - 28 / safeScale)
-            .gesture(
-                multiSelectDragGesture(
-                    bounds: bounds,
-                    viewportSize: viewportSize
-                )
+            .frame(width: bounds.width, height: bounds.height)
+            .position(
+                x: bounds.midX + dragOffset.width,
+                y: bounds.midY + dragOffset.height
             )
-            .accessibilityLabel("Move selected items")
-            .accessibilityHint("Drag to move the complete selection.")
+            .zIndex(17000)
+            .allowsHitTesting(true)
+            .animation(.spring(response: 0.22, dampingFraction: 0.88), value: selection.selectedIDs)
         }
-        .frame(width: bounds.width, height: bounds.height)
-        .position(
-            x: bounds.midX + multiSelectDragOffset.width,
-            y: bounds.midY + multiSelectDragOffset.height
-        )
-        .zIndex(17000)
-        .allowsHitTesting(true)
-        .animation(.spring(response: 0.22, dampingFraction: 0.88), value: selection.selectedIDs)
     }
 
     private func multiSelectDragGesture(
@@ -3614,24 +3681,28 @@ private struct CanvasPageContentView: View {
         DragGesture(minimumDistance: 5)
             .onChanged { value in
                 guard selection.hasSelection, !isCanvasGestureActive else { return }
-                multiSelectDragOffset = constrainedMultiSelectTranslation(
+                vm.selectionDrag.offset = constrainedMultiSelectTranslation(
                     value.translation,
                     bounds: bounds,
                     viewportSize: viewportSize
                 )
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard selection.hasSelection else {
-                    multiSelectDragOffset = .zero
+                    vm.selectionDrag.reset()
                     return
                 }
-                let translation = constrainedMultiSelectTranslation(
-                    value.translation,
-                    bounds: bounds,
-                    viewportSize: viewportSize
-                )
-                moveSelectedElements(by: translation)
-                multiSelectDragOffset = .zero
+
+                // Commit the exact transform that was last rendered. The final
+                // DragGesture value can be a few points ahead of the last onChanged
+                // frame, which makes the selection visibly jump when the finger lifts.
+                let renderedTranslation = vm.selectionDrag.offset
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    moveSelectedElements(by: renderedTranslation)
+                    vm.selectionDrag.reset()
+                }
             }
     }
 
@@ -3660,9 +3731,14 @@ private struct CanvasPageContentView: View {
     }
 
     @ViewBuilder
-    private var groupSelectionLayer: some View {
-        ForEach(elementGroups, id: \.id) { group in
-            if let bounds = groupBounds(for: group.id) {
+    private func groupSelectionLayer(visibleGroupIDs: Set<UUID>) -> some View {
+        ForEach(elementGroups.filter {
+            visibleGroupIDs.contains($0.id)
+                || selectedGroupID == $0.id
+                || draggingGroupID == $0.id
+        }, id: \.id) { group in
+            if groupMembers(for: group.id).contains(where: { !$0.isLayerHidden }),
+               let bounds = groupBounds(for: group.id) {
                 groupSelectionView(group: group, bounds: bounds)
             }
         }
@@ -3670,7 +3746,10 @@ private struct CanvasPageContentView: View {
 
     private func groupSelectionView(group: CanvasElementGroupModel, bounds: CGRect) -> some View {
         let isActive = selectedGroupID == group.id || draggingGroupID == group.id
-        let dragOffset = draggingGroupID == group.id ? groupDragOffset : .zero
+        // Install the live transform as soon as the group is selected. Keeping the
+        // wrapper stable before a drag begins prevents SwiftUI from cancelling the
+        // first gesture when draggingGroupID changes.
+        let liveDrag = isActive ? vm.groupDrag : nil
         let cornerRadius: CGFloat = 12
         let safeScale = max(vm.scale, 0.01)
         let minimumHitSize = 76 / safeScale
@@ -3697,16 +3776,15 @@ private struct CanvasPageContentView: View {
                     )
                     .allowsHitTesting(false)
 
-                groupToolbar(group: group)
-                    .offset(y: -bounds.height / 2 - 34 / safeScale)
-                    .scaleEffect(1 / safeScale)
-                    .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
             }
         }
         .frame(width: hitWidth, height: hitHeight)
-        .position(x: bounds.midX + dragOffset.width, y: bounds.midY + dragOffset.height)
+        .position(x: bounds.midX, y: bounds.midY)
+        .modifier(CanvasLiveDragModifier(drag: liveDrag))
         .zIndex(isActive ? 15000 : 14000)
         .allowsHitTesting(true)
+        // Match individual elements: first tap selects, then the selected view owns
+        // a stable drag recognizer for every following gesture.
         .gesture(isActive ? groupDragGesture(groupID: group.id) : nil)
         .highPriorityGesture(
             LongPressGesture(minimumDuration: 0.5).onEnded { _ in
@@ -3718,7 +3796,37 @@ private struct CanvasPageContentView: View {
             guard !isCanvasGestureActive else { return }
             selectGroup(group.id)
         }
-        .animation(.spring(response: 0.24, dampingFraction: 0.86), value: selectedGroupID)
+    }
+
+    @ViewBuilder
+    private func selectedGroupToolbarLayer(viewportSize: CGSize) -> some View {
+        if let groupID = selectedGroupID,
+           let group = elementGroups.first(where: { $0.id == groupID }),
+           let bounds = groupBounds(for: groupID) {
+            CanvasNavigationObserver(navigation: vm.navigation) { offset, scale in
+                CanvasLiveDragObserver(drag: vm.groupDrag) { dragOffset in
+                    let screenMidX = (bounds.midX + dragOffset.width) * scale + offset.width
+                    let screenMinY = (bounds.minY + dragOffset.height) * scale + offset.height
+                    let screenMaxY = (bounds.maxY + dragOffset.height) * scale + offset.height
+                    let preferredY = screenMinY - 27
+                    let toolbarY = preferredY >= 24 ? preferredY : screenMaxY + 27
+                    let clampedX = min(
+                        max(110, screenMidX),
+                        max(110, viewportSize.width - 110)
+                    )
+                    let clampedY = min(
+                        max(24, toolbarY),
+                        max(24, viewportSize.height - 24)
+                    )
+
+                    groupToolbar(group: group)
+                        .position(x: clampedX, y: clampedY)
+                        .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
+                }
+            }
+            .frame(width: viewportSize.width, height: viewportSize.height, alignment: .topLeading)
+            .zIndex(18000)
+        }
     }
 
     private func groupToolbar(group: CanvasElementGroupModel) -> some View {
@@ -4073,9 +4181,7 @@ private struct CanvasPageContentView: View {
     }
 
     private func groupBounds(for groupID: UUID) -> CGRect? {
-        let rects = groupMembers(for: groupID).compactMap { element -> CGRect? in
-            boundsMap[element.id]?.rect
-        }
+        let rects = groupMembers(for: groupID).map { elementBounds(for: $0).rect }
         guard var union = rects.first else { return nil }
         for rect in rects.dropFirst() {
             union = union.union(rect)
@@ -4092,19 +4198,10 @@ private struct CanvasPageContentView: View {
         )
     }
 
-    private func groupDragOffset(for element: any LayerableElement) -> CGSize {
+    private func liveGroupDrag(for element: any LayerableElement) -> CanvasDragTranslationState? {
         guard let groupID = element.groupID,
-              draggingGroupID == groupID else { return .zero }
-        return groupDragOffset
-    }
-
-    private func selectionDragOffset(for element: any LayerableElement) -> CGSize {
-        if selection.isMultiSelectActive,
-           selection.selectedIDs.contains(element.id) {
-            return multiSelectDragOffset
-        }
-
-        return groupDragOffset(for: element)
+              selectedGroupID == groupID || draggingGroupID == groupID else { return nil }
+        return vm.groupDrag
     }
 
     private func multiSelectIDs(for element: any LayerableElement) -> Set<UUID> {
@@ -4149,21 +4246,33 @@ private struct CanvasPageContentView: View {
     private func groupDragGesture(groupID: UUID) -> some Gesture {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
-                guard !isCanvasGestureActive else { return }
+                guard !isCanvasGestureActive,
+                      selectedGroupID == groupID else { return }
                 if draggingGroupID != groupID {
-                    selectGroup(groupID)
-                    draggingGroupID = groupID
-                }
-                groupDragOffset = value.translation
-            }
-            .onEnded { value in
-                guard draggingGroupID == groupID else {
-                    groupDragOffset = .zero
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        draggingGroupID = groupID
+                        vm.groupDrag.offset = value.translation
+                    }
                     return
                 }
-                moveGroup(groupID, by: value.translation)
-                groupDragOffset = .zero
-                draggingGroupID = nil
+                vm.groupDrag.offset = value.translation
+            }
+            .onEnded { _ in
+                guard draggingGroupID == groupID else {
+                    vm.groupDrag.reset()
+                    return
+                }
+
+                let renderedTranslation = vm.groupDrag.offset
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    moveGroup(groupID, by: renderedTranslation)
+                    vm.groupDrag.reset()
+                    draggingGroupID = nil
+                }
             }
     }
 
@@ -4309,7 +4418,7 @@ private struct CanvasPageContentView: View {
         withAnimation(.spring(duration: 0.25)) {
             if selectedGroupID == groupID { selectedGroupID = nil }
             if draggingGroupID == groupID { draggingGroupID = nil }
-            groupDragOffset = .zero
+            vm.groupDrag.reset()
             selection.exit()
         }
     }
@@ -4951,7 +5060,7 @@ private struct CanvasPageContentView: View {
         withAnimation(.spring(duration: 0.25)) {
             selectedGroupID = nil
             draggingGroupID = nil
-            groupDragOffset = .zero
+            vm.groupDrag.reset()
         }
     }
 
@@ -5513,7 +5622,7 @@ private struct CanvasPageContentView: View {
 
     private func applyCanvasNavigationGesture() {
         let baseScale = max(vm.lastScale, 0.0001)
-        let nextScale = max(0.3, min(baseScale * vm.navigation.magnification, 5.0))
+        let nextScale = max(canvasMinimumZoomScale, min(baseScale * vm.navigation.magnification, 5.0))
         let scaleDelta = nextScale / baseScale
 
         let zoomedOffset: CGSize
@@ -6304,7 +6413,8 @@ private struct CanvasPageContentView: View {
     private func renderElement(
         _ element: any LayerableElement,
         nextZIndex: Int,
-        viewportSize: CGSize
+        viewportSize: CGSize,
+        multiSelectBounds: CGRect?
     ) -> some View {
         let boundary       = elementInteractionBoundary
         let multiSelect    = selection.isMultiSelectActive
@@ -6443,7 +6553,10 @@ private struct CanvasPageContentView: View {
                   ? 0
                   : layersVM.highlightedID == element.id ? 0.5 : 1) * element.layerOpacity)
         .zIndex((element as? DrawingElementModel)?.isCanvasHighlighterDrawing == true ? -2 : 0)
-        .offset(selectionDragOffset(for: element))
+        .modifier(CanvasLiveDragModifier(drag: liveGroupDrag(for: element)))
+        .modifier(CanvasLiveDragModifier(
+            drag: multiSelect && isElemSelected ? vm.selectionDrag : nil
+        ))
         .animation(.easeInOut(duration: 0.3), value: layersVM.highlightedID)
         .allowsHitTesting(!vm.showCanvasDrawingOverlay)
         .highPriorityGesture(
@@ -6464,9 +6577,9 @@ private struct CanvasPageContentView: View {
             } : nil
         )
         .simultaneousGesture(
-            (multiSelect && isElemSelected && selectedMultiSelectBounds != nil)
+            (multiSelect && isElemSelected && multiSelectBounds != nil)
             ? multiSelectDragGesture(
-                bounds: selectedMultiSelectBounds ?? .zero,
+                bounds: multiSelectBounds ?? .zero,
                 viewportSize: viewportSize
             )
             : nil
@@ -6615,9 +6728,10 @@ private struct CanvasPageContentView: View {
 
     private func dismissEverything() {
         stackPicker = nil
+        vm.selectionDrag.reset()
+        vm.groupDrag.reset()
         selectedGroupID = nil
         draggingGroupID = nil
-        groupDragOffset = .zero
         alignmentGuidePoint = nil
         alignmentRuler = nil
         if let inlineID = vm.textVM.inlineEditingID,

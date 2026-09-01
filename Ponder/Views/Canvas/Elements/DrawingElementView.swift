@@ -44,35 +44,42 @@ struct DrawingElementView: View {
     private var hasStrokes: Bool { !element.pkDrawing.strokes.isEmpty }
 
     var body: some View {
-        ZStack {
-            drawingCard
-            selectionRing
-
-            if isSelected && !isEditing && !isMultiSelectMode {
-                selectionToolbar
-                    .offset(y: -(CGFloat(element.height) / 2) - 30)
-
-                deleteHandle
-                    .offset(x: -(CGFloat(element.width) / 2),
-                            y: -(CGFloat(element.height) / 2))
-                rotateHandle
-                    .offset(x: -(CGFloat(element.width) / 2),
-                            y:  CGFloat(element.height) / 2)
-                resizeHandle
-                    .offset(x:  CGFloat(element.width) / 2,
-                            y:  CGFloat(element.height) / 2)
-            }
-
-            if isEditing {
-                doneButton.offset(y: -(CGFloat(element.height) / 2) - 30)
-            }
-        }
+        // Keep selection affordances outside the drawing's layout tree. In particular,
+        // canvas drawings are sized tightly around their ink, so a toolbar or resize
+        // handle must not change the GeometryReader size used to render the snapshot.
+        // Otherwise the ink can appear to jump when its selection state changes.
+        drawingCard
         .frame(width: CGFloat(element.width), height: CGFloat(element.height))
+        .overlay { selectionOverlay }
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
         .position(x: element.x + dragOffset.width, y: element.y + dragOffset.height)
         .gesture(canMove ? moveDragGesture : nil)
         .onAppear {
             if !hasLoadedRotation { rotationAngle = element.rotation; hasLoadedRotation = true }
+        }
+    }
+
+    @ViewBuilder
+    private var selectionOverlay: some View {
+        selectionRing.allowsHitTesting(false)
+
+        if isSelected && !isEditing && !isMultiSelectMode {
+            selectionToolbar
+                .offset(y: -(CGFloat(element.height) / 2) - 30)
+
+            deleteHandle
+                .offset(x: -(CGFloat(element.width) / 2),
+                        y: -(CGFloat(element.height) / 2))
+            rotateHandle
+                .offset(x: -(CGFloat(element.width) / 2),
+                        y:  CGFloat(element.height) / 2)
+            resizeHandle
+                .offset(x:  CGFloat(element.width) / 2,
+                        y:  CGFloat(element.height) / 2)
+        }
+
+        if isEditing {
+            doneButton.offset(y: -(CGFloat(element.height) / 2) - 30)
         }
     }
 

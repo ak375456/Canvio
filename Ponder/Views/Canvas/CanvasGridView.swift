@@ -60,8 +60,13 @@ struct CanvasGridView: View {
         context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(appearance.base))
 
         let resolvedSpacing = max(8, spacing)
-        let stepX = max(1, resolvedSpacing * scale)
-        let stepY = max(1, resolvedSpacing * scale)
+        let rawStep = max(0.25, resolvedSpacing * scale)
+        // At overview zoom levels, drawing every logical grid point can create tens
+        // of thousands of paths per frame. Skip evenly spaced subdivisions while
+        // preserving the same canvas origin so panning remains visually stable.
+        let subdivisionStride = max(1, ceil(12 / rawStep))
+        let stepX = rawStep * subdivisionStride
+        let stepY = rawStep * subdivisionStride
 
         if showsAlternatingBands {
             drawAlternatingBands(context: context, size: size, stepX: stepX, stepY: stepY)

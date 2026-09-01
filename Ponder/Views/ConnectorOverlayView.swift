@@ -17,6 +17,7 @@ struct ConnectorOverlayView: View {
     let undoManager:  CanvasUndoManager?
     let canvasID:     UUID
     let canvasScale:  CGFloat
+    let visibleCanvasRect: CGRect
 
     var body: some View {
         ZStack {
@@ -37,7 +38,9 @@ struct ConnectorOverlayView: View {
             // Persisted connector lines
             ForEach(connectors) { connector in
                 if let (start, end) = ConnectorViewModel.resolvePoints(
-                    connector: connector, boundsMap: boundsMap) {
+                    connector: connector, boundsMap: boundsMap),
+                   vm.selectedConnectorID == connector.id
+                    || connectorBounds(from: start, to: end).intersects(visibleCanvasRect) {
 
                     let isSelected = vm.selectedConnectorID == connector.id
                     let color      = paletteColor(connector.colorName)
@@ -111,6 +114,17 @@ struct ConnectorOverlayView: View {
     }
 
     // MARK: - Selection badge
+
+    private func connectorBounds(from start: CGPoint, to end: CGPoint) -> CGRect {
+        let padding = 100 / max(canvasScale, 0.01)
+        return CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: max(1, abs(end.x - start.x)),
+            height: max(1, abs(end.y - start.y))
+        )
+        .insetBy(dx: -padding, dy: -padding)
+    }
 
     private func connectorBadge(connector: ConnectorModel, at point: CGPoint) -> some View {
         HStack(spacing: 6) {

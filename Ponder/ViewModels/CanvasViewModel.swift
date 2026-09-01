@@ -7,6 +7,8 @@ import SwiftUI
 import Combine
 import PhotosUI
 
+let canvasMinimumZoomScale: CGFloat = 0.55
+
 @MainActor
 final class CanvasNavigationState: ObservableObject {
     @Published var offset: CGSize = .zero
@@ -21,9 +23,23 @@ final class CanvasNavigationState: ObservableObject {
     var pendingViewportRefreshID = UUID()
 }
 
+/// Publishes a transient drag translation independently from the canvas view
+/// model. The canvas passes these objects only to lightweight offset wrappers,
+/// so pointer updates do not invalidate the complete document tree.
+@MainActor
+final class CanvasDragTranslationState: ObservableObject {
+    @Published var offset: CGSize = .zero
+
+    func reset() {
+        offset = .zero
+    }
+}
+
 @MainActor
 class CanvasViewModel: ObservableObject {
     let navigation = CanvasNavigationState()
+    let selectionDrag = CanvasDragTranslationState()
+    let groupDrag = CanvasDragTranslationState()
 
     var offset: CGSize {
         get { navigation.offset }
@@ -35,11 +51,11 @@ class CanvasViewModel: ObservableObject {
     }
     var scale: CGFloat {
         get { navigation.scale }
-        set { navigation.scale = newValue }
+        set { navigation.scale = max(canvasMinimumZoomScale, newValue) }
     }
     var lastScale: CGFloat {
         get { navigation.lastScale }
-        set { navigation.lastScale = newValue }
+        set { navigation.lastScale = max(canvasMinimumZoomScale, newValue) }
     }
     @Published var showTextSheet: Bool = false
     @Published var showShapePicker: Bool = false
@@ -97,7 +113,7 @@ class CanvasViewModel: ObservableObject {
     func handleDragEnd() { lastOffset = offset }
 
     func handleMagnification(_ magnification: CGFloat, focalPoint: CGPoint) {
-        let newScale   = max(0.3, min(lastScale * magnification, 5.0))
+        let newScale   = max(canvasMinimumZoomScale, min(lastScale * magnification, 5.0))
         let scaleDelta = newScale / scale
         let dx = focalPoint.x - offset.width
         let dy = focalPoint.y - offset.height
@@ -148,7 +164,7 @@ class CanvasViewModel: ObservableObject {
         let padding: CGFloat = 40
         let scaleX   = (viewportSize.width  - padding * 2) / boundary.width
         let scaleY   = (viewportSize.height - padding * 2) / boundary.height
-        let fitScale = min(scaleX, scaleY, 1.0)
+        let fitScale = max(canvasMinimumZoomScale, min(scaleX, scaleY, 1.0))
         scale      = fitScale
         lastScale  = fitScale
         let x = (viewportSize.width  - boundary.width  * fitScale) / 2

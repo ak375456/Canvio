@@ -87,20 +87,28 @@ class LayersViewModel: ObservableObject {
     /// (bottom of array = bottom of stack).
     func reorder(_ orderedElements: [any LayerableElement], context: ModelContext,
                  undoManager: CanvasUndoManager? = nil) {
-        let before = zState(for: orderedElements)
-        for (i, el) in orderedElements.enumerated() {
+        let changedElements = orderedElements.enumerated().compactMap { index, element in
+            element.zIndex == index ? nil : element
+        }
+        guard !changedElements.isEmpty else { return }
+
+        let before = zState(for: changedElements)
+        let changedIDs = Set(changedElements.map(\.id))
+        let now = Date()
+
+        for (i, el) in orderedElements.enumerated() where changedIDs.contains(el.id) {
             el.zIndex = i
-            el.updatedAt = Date()
+            el.updatedAt = now
         }
         try? context.save()
         Task {
-            for element in orderedElements {
+            for element in changedElements {
                 await CanvasElementSyncRouter.upsert(element)
             }
         }
         recordZChange(
             name: "Reorder layers", before: before,
-            elements: orderedElements, context: context, undoManager: undoManager
+            elements: changedElements, context: context, undoManager: undoManager
         )
     }
 
