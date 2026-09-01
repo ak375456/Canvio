@@ -14,6 +14,7 @@ private struct StickyNoteRow: Codable {
     let canvas_id:      String
     let user_id:        String
     let text:           String
+    let drawing_data:   String?
     let x:              Double
     let y:              Double
     let width:          Double
@@ -151,6 +152,7 @@ final class StickyNoteSyncService {
                     let remoteUpdated = iso.date(from: row.updated_at) ?? .distantPast
                     if remoteUpdated > local.updatedAt {
                         local.text         = row.text
+                        local.drawingData  = row.drawing_data.flatMap { Data(base64Encoded: $0) } ?? Data()
                         local.x            = row.x
                         local.y            = row.y
                         local.width        = row.width
@@ -170,6 +172,7 @@ final class StickyNoteSyncService {
                     let note = StickyNoteModel(canvasID: canvasID, x: row.x, y: row.y)
                     note.id           = rowID
                     note.text         = row.text
+                    note.drawingData  = row.drawing_data.flatMap { Data(base64Encoded: $0) } ?? Data()
                     note.width        = row.width
                     note.height       = row.height
                     note.rotation     = row.rotation
@@ -235,6 +238,7 @@ final class StickyNoteSyncService {
             canvas_id:      note.canvasID.uuidString,
             user_id:        userID,
             text:           note.text,
+            drawing_data:   note.drawingData.base64EncodedString(),
             x:              note.x,
             y:              note.y,
             width:          note.width,

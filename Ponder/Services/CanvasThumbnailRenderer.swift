@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import PencilKit
 
 // MARK: - Thumbnail size constants
 private let kThumbWidth:  CGFloat = 360
@@ -354,10 +355,23 @@ private struct ThumbnailStickyView: View {
     let scale: CGFloat
     private var bg: Color { StickyNoteColor.color(named: note.colorName).background }
     var body: some View {
-        RoundedRectangle(cornerRadius: 4)
-            .fill(bg)
-            .frame(width: CGFloat(note.width) * scale,
-                   height: CGFloat(note.height) * scale)
+        ZStack {
+            RoundedRectangle(cornerRadius: 4).fill(bg)
+            if !note.pkDrawing.strokes.isEmpty {
+                let inkImage = note.pkDrawing.image(
+                    from: CGRect(x: 0, y: 0, width: note.width, height: note.height),
+                    scale: max(scale, 0.1)
+                )
+                #if canImport(UIKit)
+                Image(uiImage: inkImage).resizable()
+                #else
+                Image(nsImage: inkImage).resizable()
+                #endif
+            }
+        }
+        .frame(width: CGFloat(note.width) * scale,
+               height: CGFloat(note.height) * scale)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 

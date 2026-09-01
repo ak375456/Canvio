@@ -437,6 +437,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.customCanvasBackgroundDarkHex") private var customCanvasBackgroundDarkHexRaw: String = CanvasCustomBackgroundColors.defaults.darkHex
     @AppStorage("ponder.customCanvasBackgroundHistory") private var customCanvasBackgroundHistoryRaw: String = ""
     @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
+    @AppStorage("ponder.smartAlignmentEnabled") private var smartAlignmentEnabledRaw: Bool = true
     @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
     @AppStorage("ponder.drawingPenSmoothing") private var drawingPenSmoothingRaw: Double = DrawingPenConfiguration.default.smoothing
     @AppStorage("ponder.drawingStrokeStyle") private var drawingStrokeStyleRaw: String = DrawingPenConfiguration.default.lineStyle.rawValue
@@ -649,6 +650,11 @@ class AppSettings: ObservableObject {
     var overlapStackPickerEnabled: Bool {
         get { overlapStackPickerEnabledRaw }
         set { overlapStackPickerEnabledRaw = newValue; objectWillChange.send() }
+    }
+
+    var smartAlignmentEnabled: Bool {
+        get { smartAlignmentEnabledRaw }
+        set { smartAlignmentEnabledRaw = newValue; objectWillChange.send() }
     }
 
     var smartShapeSnappingEnabled: Bool {

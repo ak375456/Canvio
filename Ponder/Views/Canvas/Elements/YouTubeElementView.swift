@@ -24,6 +24,7 @@ struct YouTubeElementView: View {
     var usesFloatingPlayback: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var isResizing = false
@@ -283,16 +284,18 @@ struct YouTubeElementView: View {
             .onChanged {
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                dragOffset = $0.translation
+                dragOffset = smartDragAdjustment.changed($0.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation
+                let t = smartDragAdjustment.ended(dragOffset)
                 dragOffset = .zero
                 vm.updatePosition(
                     element: element,

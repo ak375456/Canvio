@@ -117,6 +117,17 @@ struct LayerPreviewView: View {
                 .foregroundStyle(.black.opacity(0.72))
                 .lineLimit(4)
                 .padding(5)
+            if !note.pkDrawing.strokes.isEmpty {
+                LayerBitmapPreview(source: .drawing(
+                    id: note.id,
+                    version: note.updatedAt.timeIntervalSinceReferenceDate,
+                    data: note.drawingData,
+                    width: note.width,
+                    height: note.height
+                )) {
+                    Color.clear
+                }
+            }
         }
         .overlay(alignment: .topTrailing) {
             TriangleFold().fill(palette.foldShadow).frame(width: 10, height: 10)

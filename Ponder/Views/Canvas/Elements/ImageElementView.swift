@@ -19,6 +19,7 @@ struct ImageElementView: View {
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
@@ -386,16 +387,19 @@ struct ImageElementView: View {
             .onChanged {
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                dragOffset = $0.translation
+                dragOffset = smartDragAdjustment.changed($0.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation; dragOffset = .zero
+                let t = smartDragAdjustment.ended(dragOffset)
+                dragOffset = .zero
                 vm.updatePosition(
                     element: element,
                     translation: t,

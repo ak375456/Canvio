@@ -29,6 +29,7 @@ struct TextElementView: View {
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize    = .zero
     @State private var isDragging: Bool      = false
@@ -959,18 +960,20 @@ struct TextElementView: View {
                 guard canMove else {
                     isDragging = false
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
                 isDragging = true
-                dragOffset = value.translation
+                dragOffset = smartDragAdjustment.changed(value.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
                     isDragging = false
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t      = value.translation
+                let t = smartDragAdjustment.ended(dragOffset)
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary,

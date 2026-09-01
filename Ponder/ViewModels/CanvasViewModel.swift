@@ -40,6 +40,7 @@ class CanvasViewModel: ObservableObject {
     let navigation = CanvasNavigationState()
     let selectionDrag = CanvasDragTranslationState()
     let groupDrag = CanvasDragTranslationState()
+    let smartAlignment = CanvasSmartAlignmentState()
 
     var offset: CGSize {
         get { navigation.offset }

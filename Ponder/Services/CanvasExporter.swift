@@ -907,6 +907,21 @@ struct CanvasExportView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .multilineTextAlignment(.leading)
                 .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: fold + 8))
+            if !el.pkDrawing.strokes.isEmpty {
+                let inkImage = el.pkDrawing.image(
+                    from: CGRect(x: 0, y: 0, width: el.width, height: el.height),
+                    scale: 2
+                )
+                #if canImport(UIKit)
+                Image(uiImage: inkImage)
+                    .resizable()
+                    .frame(width: el.width, height: el.height)
+                #else
+                Image(nsImage: inkImage)
+                    .resizable()
+                    .frame(width: el.width, height: el.height)
+                #endif
+            }
             GeometryReader { geo in
                 Path { path in
                     let w = geo.size.width

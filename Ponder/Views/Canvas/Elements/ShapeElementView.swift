@@ -68,9 +68,12 @@ struct ShapeElementView: View {
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeDelta: CGSize = .zero
+    @State private var isAspectRatioLocked = false
+    @State private var resizesFromHandle = false
     @State private var rotationAngle: Double = 0
     @State private var rotationGestureState = CanvasElementRotationState()
     @State private var hasLoadedRotation = false
@@ -79,8 +82,7 @@ struct ShapeElementView: View {
 
     private var isSelected: Bool { vm.editingID == shape.id }
     private var currentSize: CGSize {
-        CGSize(width: max(40, shape.width + resizeDelta.width),
-               height: max(2, shape.height + resizeDelta.height))
+        resizedSize(for: resizeDelta)
     }
     private var strokeColor: Color { paletteColor(shape.strokeColorName) }
     private var fillColor: Color { paletteColor(shape.fillColorName) }
@@ -96,7 +98,10 @@ struct ShapeElementView: View {
             if isSelected && !isMultiSelectMode { cornerHandles }
         }
         .rotationEffect(.degrees(rotationAngle), anchor: .center)
-        .position(x: shape.x + dragOffset.width, y: shape.y + dragOffset.height)
+        .position(
+            x: shape.x + dragOffset.width + currentResizeCenterOffset.width,
+            y: shape.y + dragOffset.height + currentResizeCenterOffset.height
+        )
         .gesture(canMove ? moveDragGesture : nil)
         .popover(item: $customColorTarget) { target in
             customColorPanel(for: target)
@@ -249,6 +254,9 @@ struct ShapeElementView: View {
             }
             Divider().frame(height: 18)
             strokeWidthMenu
+            Divider().frame(height: 18)
+            aspectRatioLockButton
+            resizeOriginMenu
             if shape.shapeKind == .line {
                 Divider().frame(height: 18)
                 Menu {
@@ -447,6 +455,79 @@ struct ShapeElementView: View {
             .frame(width: 42, height: 26)
         }
         .disabled(!hasVisibleStroke)
+    }
+
+    private var aspectRatioLockButton: some View {
+        Button {
+            resizeDelta = .zero
+            isAspectRatioLocked.toggle()
+        } label: {
+            Image(systemName: isAspectRatioLocked ? "lock.fill" : "lock.open")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(
+                    isAspectRatioLocked
+                        ? Color.accentColor
+                        : Color.primary.opacity(0.6)
+                )
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            isAspectRatioLocked ? "Unlock aspect ratio" : "Lock aspect ratio"
+        )
+        .help(
+            isAspectRatioLocked
+                ? "Width and height resize together"
+                : "Resize width and height independently"
+        )
+    }
+
+    private var resizeOriginMenu: some View {
+        Menu {
+            Button {
+                resizeDelta = .zero
+                resizesFromHandle = false
+            } label: {
+                Label(
+                    "From Center",
+                    systemImage: resizesFromHandle
+                        ? "arrow.up.left.and.arrow.down.right"
+                        : "checkmark"
+                )
+            }
+
+            Button {
+                resizeDelta = .zero
+                resizesFromHandle = true
+            } label: {
+                Label(
+                    "From Drag Handle",
+                    systemImage: resizesFromHandle ? "checkmark" : "arrow.down.right"
+                )
+            }
+        } label: {
+            Image(
+                systemName: resizesFromHandle
+                    ? "arrow.down.right"
+                    : "arrow.up.left.and.arrow.down.right"
+            )
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(
+                resizesFromHandle
+                    ? Color.accentColor
+                    : Color.primary.opacity(0.6)
+            )
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Resize origin")
+        .accessibilityValue(resizesFromHandle ? "From drag handle" : "From center")
+        .help(
+            resizesFromHandle
+                ? "Keep the opposite corner fixed while resizing"
+                : "Resize equally around the shape center"
+        )
     }
 
     private func openCustomColorPanel(for target: ShapeCustomColorTarget) {
@@ -653,15 +734,71 @@ struct ShapeElementView: View {
             .gesture(DragGesture()
                 .onChanged { resizeDelta = $0.translation }
                 .onEnded { value in
-                    let t = value.translation; resizeDelta = .zero
+                    let newSize = resizedSize(for: value.translation)
+                    let centerOffset = resizeCenterOffset(for: newSize)
+                    resizeDelta = .zero
                     vm.updateSize(
                         shape: shape,
-                        width: shape.width + t.width,
-                        height: shape.height + t.height,
+                        width: newSize.width,
+                        height: newSize.height,
+                        centerX: shape.x + centerOffset.width,
+                        centerY: shape.y + centerOffset.height,
                         context: context,
                         undoManager: canvasHistory
                     )
                 })
+    }
+
+    private func resizedSize(for translation: CGSize) -> CGSize {
+        let minimum = CGFloat(ShapeElementSizing.minimumDimension)
+        let startingSize = CGSize(
+            width: max(minimum, CGFloat(shape.width)),
+            height: max(minimum, CGFloat(shape.height))
+        )
+
+        guard isAspectRatioLocked else {
+            return CGSize(
+                width: max(minimum, startingSize.width + translation.width),
+                height: max(minimum, startingSize.height + translation.height)
+            )
+        }
+
+        let horizontalChange = translation.width / startingSize.width
+        let verticalChange = translation.height / startingSize.height
+        let requestedScale = abs(horizontalChange) >= abs(verticalChange)
+            ? 1 + horizontalChange
+            : 1 + verticalChange
+        let minimumScale = max(
+            minimum / startingSize.width,
+            minimum / startingSize.height
+        )
+        let scale = max(requestedScale, minimumScale)
+
+        return CGSize(
+            width: startingSize.width * scale,
+            height: startingSize.height * scale
+        )
+    }
+
+    private var currentResizeCenterOffset: CGSize {
+        resizeCenterOffset(for: currentSize)
+    }
+
+    private func resizeCenterOffset(for size: CGSize) -> CGSize {
+        guard resizesFromHandle else { return .zero }
+
+        let localOffset = CGSize(
+            width: (size.width - CGFloat(shape.width)) / 2,
+            height: (size.height - CGFloat(shape.height)) / 2
+        )
+        let radians = CGFloat(rotationAngle * .pi / 180)
+        let cosine = cos(radians)
+        let sine = sin(radians)
+
+        return CGSize(
+            width: localOffset.width * cosine - localOffset.height * sine,
+            height: localOffset.width * sine + localOffset.height * cosine
+        )
     }
 
     private func handleCircle(icon: String, color: Color) -> some View {
@@ -676,16 +813,19 @@ struct ShapeElementView: View {
             .onChanged {
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                dragOffset = $0.translation
+                dragOffset = smartDragAdjustment.changed($0.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation; dragOffset = .zero
+                let t = smartDragAdjustment.ended(dragOffset)
+                dragOffset = .zero
                 vm.updatePosition(
                     shape: shape,
                     translation: t,
@@ -716,11 +856,17 @@ private struct ShapeInteractionRegion: Shape {
 
     func path(in rect: CGRect) -> Path {
         let basePath = basePath(in: rect)
-        guard !capturesInterior || kind == .line else { return basePath }
+        let needsExpandedHitArea = kind == .line
+            || !capturesInterior
+            || min(rect.width, rect.height) < strokeWidth
+        guard needsExpandedHitArea else { return basePath }
 
         var hitPath = basePath.strokedPath(
             StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
         )
+        if capturesInterior {
+            hitPath.addPath(basePath)
+        }
         if kind == .line, lineEnding.includesStart {
             hitPath.addPath(arrowPath(in: rect, atStart: true))
         }

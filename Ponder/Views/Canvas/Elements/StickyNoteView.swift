@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PencilKit
 
 private struct StickyContentHistoryState: Equatable {
     let text: String
@@ -9,6 +10,7 @@ private struct StickyContentHistoryState: Equatable {
 struct StickyNoteView: View {
     @Environment(\.modelContext) private var context
     @EnvironmentObject private var canvasHistory: CanvasUndoManager
+    @EnvironmentObject private var settings: AppSettings
     let note: StickyNoteModel
     let canvasScale: CGFloat
     let canvasBoundary: CGSize
@@ -17,17 +19,21 @@ struct StickyNoteView: View {
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool = false
     @State private var resizeDelta: CGSize = .zero
     @State private var tapTimer: Timer? = nil
     @State private var tapCount = 0
+    @State private var drawingEditorRevision = 0
     @StateObject private var textEditing = EditableTextBehavior()
     @FocusState private var textFocused: Bool
 
     private var isSelected: Bool { vm.editingID == note.id }
     private var isWriting: Bool { vm.writingID == note.id && !note.isCollapsed && !isMultiSelectMode }
+    private var isDrawing: Bool { vm.drawingID == note.id && !note.isCollapsed && !isMultiSelectMode }
+    private var hasDrawing: Bool { !note.pkDrawing.strokes.isEmpty }
     private var palette: StickyNoteColor { StickyNoteColor.color(named: note.colorName) }
     private var currentSize: CGSize {
         note.isCollapsed
@@ -106,6 +112,21 @@ struct StickyNoteView: View {
                 .padding(note.isCollapsed
                          ? EdgeInsets(top: 10, leading: 12, bottom: 8, trailing: activeFoldSize + 10)
                          : EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: activeFoldSize + 8))
+
+            if !note.isCollapsed && (hasDrawing || isDrawing) {
+                DrawingCanvasView(
+                    drawing: note.pkDrawing,
+                    isEditing: isDrawing,
+                    canvasScale: canvasScale,
+                    smartShapeSnappingEnabled: settings.smartShapeSnappingEnabled,
+                    showsInlineControls: false,
+                    onDrawingChanged: saveStickyDrawing
+                )
+                .padding(4)
+                .clipShape(FoldedRectangle(foldSize: activeFoldSize))
+                .allowsHitTesting(isDrawing)
+                .id(drawingEditorRevision)
+            }
         }
         .overlay(
             FoldedRectangle(foldSize: activeFoldSize)
@@ -286,30 +307,61 @@ struct StickyNoteView: View {
 
     private var toolbar: some View {
         HStack(spacing: 6) {
-            listButton(.none, icon: "text.alignleft")
-            listButton(.bullets, icon: "list.bullet")
-            listButton(.numbers, icon: "list.number")
-            Divider().frame(height: 18)
-            formatButton(icon: "bold", active: note.isBold) {
-                let oldValue = note.isBold
-                note.isBold.toggle()
-                markStickyChanged()
-                canvasHistory.recordElementChange(
-                    name: "Toggle sticky bold", element: note,
-                    from: oldValue, to: note.isBold, context: context
-                ) { $0.isBold = $1 }
+            if isDrawing {
+                Button {
+                    textEditing.flushRemoteSync(syncStickyNote)
+                    vm.stopDrawing()
+                } label: {
+                    Label("Done", systemImage: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .frame(height: 28)
+                        .background(Color.orange, in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                if hasDrawing {
+                    Divider().frame(height: 18)
+                    formatButton(icon: "trash", active: false, inactiveTint: .red) {
+                        vm.updateDrawing(
+                            note: note,
+                            drawing: PKDrawing(),
+                            context: context,
+                            undoManager: canvasHistory
+                        )
+                        drawingEditorRevision += 1
+                    }
+                }
+            } else {
+                listButton(.none, icon: "text.alignleft")
+                listButton(.bullets, icon: "list.bullet")
+                listButton(.numbers, icon: "list.number")
+                Divider().frame(height: 18)
+                formatButton(icon: "bold", active: note.isBold) {
+                    let oldValue = note.isBold
+                    note.isBold.toggle()
+                    markStickyChanged()
+                    canvasHistory.recordElementChange(
+                        name: "Toggle sticky bold", element: note,
+                        from: oldValue, to: note.isBold, context: context
+                    ) { $0.isBold = $1 }
+                }
+                formatButton(icon: "italic", active: note.isItalic) {
+                    let oldValue = note.isItalic
+                    note.isItalic.toggle()
+                    markStickyChanged()
+                    canvasHistory.recordElementChange(
+                        name: "Toggle sticky italic", element: note,
+                        from: oldValue, to: note.isItalic, context: context
+                    ) { $0.isItalic = $1 }
+                }
+                Divider().frame(height: 18)
+                colorMenu
+                formatButton(icon: "pencil.tip", active: false, inactiveTint: .orange) {
+                    startDrawing()
+                }
             }
-            formatButton(icon: "italic", active: note.isItalic) {
-                let oldValue = note.isItalic
-                note.isItalic.toggle()
-                markStickyChanged()
-                canvasHistory.recordElementChange(
-                    name: "Toggle sticky italic", element: note,
-                    from: oldValue, to: note.isItalic, context: context
-                ) { $0.isItalic = $1 }
-            }
-            Divider().frame(height: 18)
-            colorMenu
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.regularMaterial, in: Capsule())
@@ -324,10 +376,12 @@ struct StickyNoteView: View {
         }.buttonStyle(.plain)
     }
 
-    private func formatButton(icon: String, active: Bool, action: @escaping () -> Void) -> some View {
+    private func formatButton(icon: String, active: Bool,
+                              inactiveTint: Color = Color.primary.opacity(0.7),
+                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(active ? Color.accentColor : Color.primary.opacity(0.7))
+                .foregroundStyle(active ? Color.accentColor : inactiveTint)
                 .frame(width: 26, height: 26)
         }.buttonStyle(.plain)
     }
@@ -434,6 +488,34 @@ struct StickyNoteView: View {
         vm.startWriting(noteID: note.id)
     }
 
+    private func startDrawing() {
+        commitLocalTextIfNeeded()
+        if !isSelected {
+            onExternalTap?()
+        }
+        if note.isCollapsed {
+            vm.setCollapsed(
+                note: note,
+                collapsed: false,
+                context: context,
+                undoManager: canvasHistory
+            )
+        }
+        textFocused = false
+        vm.startDrawing(noteID: note.id)
+    }
+
+    private func saveStickyDrawing(_ drawing: PKDrawing) {
+        vm.updateDrawing(
+            note: note,
+            drawing: drawing,
+            context: context,
+            undoManager: canvasHistory,
+            syncRemotely: false
+        )
+        textEditing.scheduleRemoteSync(syncStickyNote)
+    }
+
     private func commitLocalTextIfNeeded() {
         textEditing.commitDraft(
             localSave: { saveStickyText($0) },
@@ -480,20 +562,22 @@ struct StickyNoteView: View {
                 guard canMove else {
                     isDragging = false
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
                 isDragging = true
-                dragOffset = value.translation
+                dragOffset = smartDragAdjustment.changed(value.translation)
                 // Dismiss keyboard while dragging so it doesn't fight the gesture
                 if textFocused { textFocused = false }
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
                     isDragging = false
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation
+                let t = smartDragAdjustment.ended(dragOffset)
                 dragOffset = .zero
                 vm.updatePosition(note: note, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary, context: context,
@@ -506,7 +590,7 @@ struct StickyNoteView: View {
     }
 
     private var canMove: Bool {
-        isSelected && !isMultiSelectMode && !isCanvasGestureActive
+        isSelected && !isDrawing && !isMultiSelectMode && !isCanvasGestureActive
     }
 
     private var stickyFont: Font {

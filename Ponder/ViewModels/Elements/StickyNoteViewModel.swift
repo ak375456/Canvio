@@ -6,6 +6,7 @@
 import SwiftUI
 import SwiftData
 import Combine
+import PencilKit
 
 @MainActor
 class StickyNoteViewModel: ObservableObject {
@@ -14,9 +15,13 @@ class StickyNoteViewModel: ObservableObject {
             if editingID != writingID {
                 writingID = nil
             }
+            if editingID != drawingID {
+                drawingID = nil
+            }
         }
     }
     @Published var writingID: UUID? = nil
+    @Published var drawingID: UUID? = nil
 
     func addNote(canvasID: UUID, center: CGPoint, offset: CGSize,
                  scale: CGFloat, zIndex: Int, context: ModelContext,
@@ -86,6 +91,7 @@ class StickyNoteViewModel: ObservableObject {
                                    x: note.x + Double(offset.width),
                                    y: note.y + Double(offset.height))
         copy.text = note.text; copy.colorName = note.colorName
+        copy.drawingData = note.drawingData
         copy.fontSize = note.fontSize; copy.isBold = note.isBold
         copy.isItalic = note.isItalic; copy.width = note.width
         copy.height = note.height; copy.isCollapsed = note.isCollapsed
@@ -97,7 +103,8 @@ class StickyNoteViewModel: ObservableObject {
 
         let id = copy.id
         let snapshot = (
-            canvasID: copy.canvasID, text: copy.text, x: copy.x, y: copy.y,
+            canvasID: copy.canvasID, text: copy.text, drawingData: copy.drawingData,
+            x: copy.x, y: copy.y,
             width: copy.width, height: copy.height, rotation: copy.rotation,
             fontSize: copy.fontSize, isBold: copy.isBold, isItalic: copy.isItalic,
             fontName: copy.fontName, colorName: copy.colorName,
@@ -118,7 +125,8 @@ class StickyNoteViewModel: ObservableObject {
                     x: snapshot.x,
                     y: snapshot.y
                 )
-                el.id = id; el.text = snapshot.text; el.width = snapshot.width
+                el.id = id; el.text = snapshot.text; el.drawingData = snapshot.drawingData
+                el.width = snapshot.width
                 el.height = snapshot.height; el.rotation = snapshot.rotation
                 el.fontSize = snapshot.fontSize; el.isBold = snapshot.isBold
                 el.isItalic = snapshot.isItalic; el.fontName = snapshot.fontName
@@ -161,9 +169,44 @@ class StickyNoteViewModel: ObservableObject {
         Task { await StickyNoteSyncService.shared.upsert(note) }
     }
 
+    func updateDrawing(note: StickyNoteModel, drawing: PKDrawing,
+                       context: ModelContext, undoManager: CanvasUndoManager? = nil,
+                       syncRemotely: Bool = true) {
+        let oldData = note.drawingData
+        let newData = drawing.dataRepresentation()
+        guard oldData != newData else { return }
+
+        note.drawingData = newData
+        note.updatedAt = Date()
+        try? context.save()
+        if syncRemotely {
+            Task { await StickyNoteSyncService.shared.upsert(note) }
+        }
+
+        undoManager?.recordElementChange(
+            name: "Draw on sticky note",
+            element: note,
+            from: oldData,
+            to: newData,
+            context: context,
+            coalescingKey: "sticky-drawing-\(note.id)"
+        ) { $0.drawingData = $1 }
+    }
+
     func startWriting(noteID: UUID) {
         editingID = noteID
+        drawingID = nil
         writingID = noteID
+    }
+
+    func startDrawing(noteID: UUID) {
+        editingID = noteID
+        writingID = nil
+        drawingID = noteID
+    }
+
+    func stopDrawing() {
+        drawingID = nil
     }
 
     func setCollapsed(note: StickyNoteModel, collapsed: Bool, context: ModelContext,
@@ -173,6 +216,9 @@ class StickyNoteViewModel: ObservableObject {
         note.updatedAt = Date()
         if collapsed, writingID == note.id {
             writingID = nil
+        }
+        if collapsed, drawingID == note.id {
+            drawingID = nil
         }
         try? context.save()
         Task { await StickyNoteSyncService.shared.upsert(note) }
@@ -188,6 +234,7 @@ class StickyNoteViewModel: ObservableObject {
     func delete(note: StickyNoteModel, context: ModelContext,
                 undoManager: CanvasUndoManager? = nil) {
         let snap = (id: note.id, canvasID: note.canvasID, text: note.text,
+                    drawingData: note.drawingData,
                     x: note.x, y: note.y, width: note.width, height: note.height,
                     colorName: note.colorName, fontSize: note.fontSize,
                     isBold: note.isBold, isItalic: note.isItalic,
@@ -206,7 +253,8 @@ class StickyNoteViewModel: ObservableObject {
             name: "Delete sticky note",
             undo: {
                 let el = StickyNoteModel(canvasID: snap.canvasID, x: snap.x, y: snap.y)
-                el.id = snap.id; el.text = snap.text; el.colorName = snap.colorName
+                el.id = snap.id; el.text = snap.text; el.drawingData = snap.drawingData
+                el.colorName = snap.colorName
                 el.fontSize = snap.fontSize; el.isBold = snap.isBold
                 el.isItalic = snap.isItalic; el.width = snap.width
                 el.height = snap.height; el.isCollapsed = snap.isCollapsed
@@ -229,5 +277,6 @@ class StickyNoteViewModel: ObservableObject {
     func stopEditing() {
         editingID = nil
         writingID = nil
+        drawingID = nil
     }
 }

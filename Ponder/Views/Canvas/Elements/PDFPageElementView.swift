@@ -19,6 +19,7 @@ struct PDFPageElementView: View {
     var onRecrop: (() -> Void)?
     var onExternalTap: (() -> Void)?
     var isCanvasGestureActive = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var image: PlatformImage?
     @State private var dragOffset: CGSize = .zero
@@ -173,9 +174,12 @@ struct PDFPageElementView: View {
     private var canMove: Bool { isSelected && !isMultiSelectMode && !isCanvasGestureActive }
 
     private var moveGesture: some Gesture {
-        DragGesture().onChanged { dragOffset = $0.translation }.onEnded { value in
+        DragGesture().onChanged {
+            dragOffset = smartDragAdjustment.changed($0.translation)
+        }.onEnded { _ in
+            let translation = smartDragAdjustment.ended(dragOffset)
             dragOffset = .zero
-            vm.updatePosition(element: element, translation: value.translation,
+            vm.updatePosition(element: element, translation: translation,
                               boundary: canvasBoundary, context: context,
                               undoManager: canvasHistory)
         }

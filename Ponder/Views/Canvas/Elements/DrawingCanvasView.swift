@@ -951,6 +951,7 @@ struct DrawingCanvasView: View {
     let isEditing: Bool
     let canvasScale: CGFloat
     let smartShapeSnappingEnabled: Bool
+    var showsInlineControls: Bool = true
     let onDrawingChanged: (PKDrawing) -> Void
 
     @State private var selectedColor = UIColor.systemOrange
@@ -970,22 +971,24 @@ struct DrawingCanvasView: View {
                     onDrawingChanged: onDrawingChanged
                 )
 
-                HStack(spacing: 6) {
-                    DrawingAssistanceButton()
+                if showsInlineControls {
+                    HStack(spacing: 6) {
+                        DrawingAssistanceButton()
 
-                    DrawingColorPickerButton(
-                        selectedColor: $selectedColor,
-                        compact: true,
-                        isActive: isPickingColor
-                    ) {
-                        isPickingColor.toggle()
+                        DrawingColorPickerButton(
+                            selectedColor: $selectedColor,
+                            compact: true,
+                            isActive: isPickingColor
+                        ) {
+                            isPickingColor.toggle()
+                        }
+                        .disabled(settings.effectiveDrawingColorCycleConfiguration.isActive)
+                        .opacity(settings.effectiveDrawingColorCycleConfiguration.isActive ? 0.5 : 1)
                     }
-                    .disabled(settings.effectiveDrawingColorCycleConfiguration.isActive)
-                    .opacity(settings.effectiveDrawingColorCycleConfiguration.isActive ? 0.5 : 1)
+                    .padding(8)
                 }
-                .padding(8)
 
-                if isPickingColor {
+                if showsInlineControls && isPickingColor {
                     DrawingColorSamplingOverlay(
                         onColorPicked: { color in
                             selectedColor = color
@@ -1696,6 +1699,7 @@ struct DrawingCanvasView: View {
     let isEditing: Bool
     let canvasScale: CGFloat
     let smartShapeSnappingEnabled: Bool
+    var showsInlineControls: Bool = true
     let onDrawingChanged: (PKDrawing) -> Void
 
     var body: some View {

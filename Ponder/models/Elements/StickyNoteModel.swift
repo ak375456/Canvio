@@ -6,6 +6,7 @@
 import Foundation
 import SwiftData
 import SwiftUI
+import PencilKit
 
 enum StickyListStyle: String, Codable {
     case none
@@ -18,6 +19,7 @@ class StickyNoteModel: LayerableElement {
     var id: UUID
     var canvasID: UUID
     var text: String
+    var drawingData: Data = Data()
     var x: Double
     var y: Double
     var width: Double
@@ -45,6 +47,7 @@ class StickyNoteModel: LayerableElement {
         self.id = UUID()
         self.canvasID = canvasID
         self.text = ""
+        self.drawingData = Data()
         self.x = x
         self.y = y
         self.width = 190
@@ -68,4 +71,9 @@ class StickyNoteModel: LayerableElement {
     }
     var layerIcon: String { "note.text" }
     var layerTint: Color { .orange }
+
+    var pkDrawing: PKDrawing {
+        get { (try? PKDrawing(data: drawingData)) ?? PKDrawing() }
+        set { drawingData = newValue.dataRepresentation() }
+    }
 }

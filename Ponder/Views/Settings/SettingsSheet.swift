@@ -1042,6 +1042,18 @@ struct SettingsSheet: View {
             label("SELECTION")
             VStack(alignment: .leading, spacing: 8) {
                 settingsToggleCard(
+                    icon: "align.horizontal.center.fill",
+                    title: "Smart alignment",
+                    subtitle: "Magnetically align item edges and centers while moving them. Temporary guides show the active alignment.",
+                    isOn: Binding(
+                        get: { settings.smartAlignmentEnabled },
+                        set: { settings.smartAlignmentEnabled = $0 }
+                    )
+                )
+
+                Divider()
+
+                settingsToggleCard(
                     icon: "square.3.layers.3d",
                     title: "Overlapping item picker",
                     subtitle: "When several items overlap, tapping that spot can show a small picker so you can choose the item behind the front one. It only checks the stack while this is enabled.",

@@ -22,6 +22,7 @@ struct DrawingElementView: View {
     var onExternalTap: (() -> Void)? = nil
     var onContinueCanvasDrawing: ((DrawingElementModel) -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var resizeStartWidth: Double = 0
@@ -255,16 +256,18 @@ struct DrawingElementView: View {
             .onChanged { value in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                dragOffset = value.translation
+                dragOffset = smartDragAdjustment.changed(value.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation
+                let t = smartDragAdjustment.ended(dragOffset)
                 dragOffset = .zero
                 vm.updatePosition(element: element, translation: t,
                                   scale: canvasScale, boundary: canvasBoundary,

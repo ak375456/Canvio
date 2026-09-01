@@ -24,6 +24,7 @@ struct TableElementView: View {
     var onMultiSelectTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
     var isCanvasNavigationActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @State private var dragOffset: CGSize = .zero
     @State private var rotationAngle: Double = 0
@@ -338,22 +339,28 @@ struct TableElementView: View {
             .onChanged { value in
                 guard canMove else {
                     dragOffset = .zero
-                    return
-                }
-                if vm.editingCellID == nil { dragOffset = value.translation }
-            }
-            .onEnded { value in
-                guard canMove else {
-                    dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
                 if vm.editingCellID == nil {
-                    let t = value.translation; dragOffset = .zero
+                    dragOffset = smartDragAdjustment.changed(value.translation)
+                }
+            }
+            .onEnded { _ in
+                guard canMove else {
+                    dragOffset = .zero
+                    smartDragAdjustment.cancelled()
+                    return
+                }
+                if vm.editingCellID == nil {
+                    let t = smartDragAdjustment.ended(dragOffset)
+                    dragOffset = .zero
                     vm.updatePosition(table: table, translation: t,
                                       scale: canvasScale, boundary: canvasBoundary,
                                       context: context, undoManager: canvasHistory)
                 } else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                 }
             }
     }

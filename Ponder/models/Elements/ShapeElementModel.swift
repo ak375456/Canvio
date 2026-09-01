@@ -126,6 +126,12 @@ enum ShapeColorPalette {
     }
 }
 
+enum ShapeElementSizing {
+    /// Keeps SwiftUI geometry valid while still allowing a shape to collapse
+    /// visually into a single stroke.
+    static let minimumDimension: Double = 1
+}
+
 @Model
 class ShapeElementModel: LayerableElement {
     var id: UUID

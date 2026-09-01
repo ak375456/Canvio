@@ -17,6 +17,7 @@ struct AudioElementView: View {
     var isSelectedInMultiSelect: Bool = false
     var onExternalTap: (() -> Void)? = nil
     var isCanvasGestureActive: Bool = false
+    var smartDragAdjustment = CanvasSmartDragAdjustment()
 
     @StateObject private var player = AudioPlayerViewModel()
     @State private var dragOffset: CGSize = .zero
@@ -143,16 +144,19 @@ struct AudioElementView: View {
             .onChanged {
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                dragOffset = $0.translation
+                dragOffset = smartDragAdjustment.changed($0.translation)
             }
-            .onEnded { value in
+            .onEnded { _ in
                 guard canMove else {
                     dragOffset = .zero
+                    smartDragAdjustment.cancelled()
                     return
                 }
-                let t = value.translation; dragOffset = .zero
+                let t = smartDragAdjustment.ended(dragOffset)
+                dragOffset = .zero
                 vm.updatePosition(
                     element: element,
                     translation: t,

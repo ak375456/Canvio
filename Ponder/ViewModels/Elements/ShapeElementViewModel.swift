@@ -140,27 +140,35 @@ class ShapeElementViewModel: ObservableObject {
     }
 
     func updateSize(shape: ShapeElementModel, width: Double, height: Double,
+                    centerX: Double? = nil, centerY: Double? = nil,
                     context: ModelContext, undoManager: CanvasUndoManager? = nil) {
+        let oldX = shape.x, oldY = shape.y
         let oldW = shape.width, oldH = shape.height
-        if shape.shapeKind == .line {
-            shape.width = max(40, width); shape.height = max(2, min(40, height))
-        } else {
-            shape.width = max(40, width); shape.height = max(40, height)
-        }
+        shape.x = centerX ?? shape.x
+        shape.y = centerY ?? shape.y
+        shape.width = max(ShapeElementSizing.minimumDimension, width)
+        shape.height = max(ShapeElementSizing.minimumDimension, height)
         shape.updatedAt = Date(); try? context.save()
         Task { await ShapeSyncService.shared.upsert(shape) }
 
-        let id = shape.id; let newW = shape.width, newH = shape.height
+        let id = shape.id
+        let newX = shape.x, newY = shape.y
+        let newW = shape.width, newH = shape.height
         undoManager?.push(CanvasAction(
+            name: "Resize shape",
             undo: {
                 if let el = try? context.fetch(FetchDescriptor<ShapeElementModel>()).first(where: { $0.id == id }) {
-                    el.width = oldW; el.height = oldH; el.updatedAt = Date(); try? context.save()
+                    el.x = oldX; el.y = oldY
+                    el.width = oldW; el.height = oldH
+                    el.updatedAt = Date(); try? context.save()
                     Task { await ShapeSyncService.shared.upsert(el) }
                 }
             },
             redo: {
                 if let el = try? context.fetch(FetchDescriptor<ShapeElementModel>()).first(where: { $0.id == id }) {
-                    el.width = newW; el.height = newH; el.updatedAt = Date(); try? context.save()
+                    el.x = newX; el.y = newY
+                    el.width = newW; el.height = newH
+                    el.updatedAt = Date(); try? context.save()
                     Task { await ShapeSyncService.shared.upsert(el) }
                 }
             }
