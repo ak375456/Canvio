@@ -439,6 +439,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.overlapStackPickerEnabled") private var overlapStackPickerEnabledRaw: Bool = false
     @AppStorage("ponder.smartAlignmentEnabled") private var smartAlignmentEnabledRaw: Bool = true
     @AppStorage("ponder.smartShapeSnappingEnabled") private var smartShapeSnappingEnabledRaw: Bool = true
+    @AppStorage("ponder.scribbleToEraseEnabled") private var scribbleToEraseEnabledRaw: Bool = true
     @AppStorage("ponder.drawingPenSmoothing") private var drawingPenSmoothingRaw: Double = DrawingPenConfiguration.default.smoothing
     @AppStorage("ponder.drawingStrokeStyle") private var drawingStrokeStyleRaw: String = DrawingPenConfiguration.default.lineStyle.rawValue
     @AppStorage("ponder.drawingPatternWidth") private var drawingPatternWidthRaw: Double = DrawingPenConfiguration.default.patternWidth
@@ -670,6 +671,11 @@ class AppSettings: ObservableObject {
         }
     }
 
+    var scribbleToEraseEnabled: Bool {
+        get { scribbleToEraseEnabledRaw }
+        set { scribbleToEraseEnabledRaw = newValue; objectWillChange.send() }
+    }
+
     var drawingStrokeStyle: DrawingStrokeStyle {
         get { DrawingStrokeStyle(rawValue: drawingStrokeStyleRaw) ?? .solid }
         set {
@@ -709,7 +715,8 @@ class AppSettings: ObservableObject {
                 lineStyle: drawingStrokeStyle,
                 patternWidth: drawingPatternWidth,
                 dashLength: drawingDashLength,
-                patternGap: drawingPatternGap
+                patternGap: drawingPatternGap,
+                scribbleToEraseEnabled: scribbleToEraseEnabled
             )
         }
         set {
@@ -720,6 +727,7 @@ class AppSettings: ObservableObject {
             drawingPatternWidthRaw = configuration.patternWidth
             drawingDashLengthRaw = configuration.dashLength
             drawingPatternGapRaw = configuration.patternGap
+            scribbleToEraseEnabledRaw = configuration.scribbleToEraseEnabled
             objectWillChange.send()
         }
     }

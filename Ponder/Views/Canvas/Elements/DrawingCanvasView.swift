@@ -953,6 +953,9 @@ struct DrawingCanvasView: View {
     let smartShapeSnappingEnabled: Bool
     var showsInlineControls: Bool = true
     let onDrawingChanged: (PKDrawing) -> Void
+    var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)? = nil
+    var onUndoScribble: (() -> Void)? = nil
+    @State private var scribbleUndoDrawing: PKDrawing?
 
     @State private var selectedColor = UIColor.systemOrange
     @State private var isPickingColor = false
@@ -968,7 +971,13 @@ struct DrawingCanvasView: View {
                     colorRevision: pickedColorRevision,
                     penConfiguration: settings.drawingPenConfiguration,
                     colorCycleConfiguration: settings.effectiveDrawingColorCycleConfiguration,
-                    onDrawingChanged: onDrawingChanged
+                    onDrawingChanged: onDrawingChanged,
+                    onScribbleErased: { before, after in
+                        if let onScribbleErased { onScribbleErased(before, after) }
+                        else { onDrawingChanged(after) }
+                        scribbleUndoDrawing = before
+                    },
+                    onStrokeBegan: { scribbleUndoDrawing = nil }
                 )
 
                 if showsInlineControls {
@@ -1000,6 +1009,16 @@ struct DrawingCanvasView: View {
                         }
                     )
                     .zIndex(2)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                if let scribbleUndoDrawing {
+                    ScribbleEraseFeedback {
+                        if let onUndoScribble { onUndoScribble() }
+                        else { onDrawingChanged(scribbleUndoDrawing) }
+                        self.scribbleUndoDrawing = nil
+                    }
+                    .padding(.bottom, 8)
                 }
             }
         } else {
@@ -1126,6 +1145,8 @@ private struct LivePKCanvas: UIViewRepresentable {
     let penConfiguration: DrawingPenConfiguration
     let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onDrawingChanged: (PKDrawing) -> Void
+    var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)? = nil
+    var onStrokeBegan: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -1133,7 +1154,9 @@ private struct LivePKCanvas: UIViewRepresentable {
             penConfiguration: penConfiguration,
             colorCycleConfiguration: colorCycleConfiguration,
             smartShapeSnappingEnabled: smartShapeSnappingEnabled,
-            onDrawingChanged: onDrawingChanged
+            onDrawingChanged: onDrawingChanged,
+            onScribbleErased: onScribbleErased,
+            onStrokeBegan: onStrokeBegan
         )
     }
 
@@ -1173,11 +1196,13 @@ private struct LivePKCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        context.coordinator.onScribbleErased = onScribbleErased
+        context.coordinator.onStrokeBegan = onStrokeBegan
         canvas.drawingPolicy = .default
         context.coordinator.smartShapeSnappingEnabled = smartShapeSnappingEnabled
         if canvas.drawing.dataRepresentation() != drawing.dataRepresentation()
-            && !canvas.isFirstResponder {
-            canvas.drawing = drawing
+            && !context.coordinator.hasPendingInput {
+            context.coordinator.applyExternalDrawing(drawing, to: canvas)
         }
         context.coordinator.applyPickedColorIfNeeded(
             to: canvas,
@@ -1209,6 +1234,12 @@ private struct LivePKCanvas: UIViewRepresentable {
         var penConfiguration: DrawingPenConfiguration
         private var colorCycleState: DrawingColorCycleState
         let onDrawingChanged: (PKDrawing) -> Void
+        var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)?
+        var onStrokeBegan: () -> Void
+        var hasPendingInput: Bool {
+            isUsingDrawingTool || hasUnpublishedDrawingChanges || drawingAwaitingPublication != nil
+        }
+        private var scribbleBaselines: [DrawingStrokeBaseline] = []
         weak var canvas: PKCanvasView?
         var toolPicker: PKToolPicker?
         var smartShapeSnappingEnabled: Bool {
@@ -1237,7 +1268,9 @@ private struct LivePKCanvas: UIViewRepresentable {
              penConfiguration: DrawingPenConfiguration,
              colorCycleConfiguration: DrawingColorCycleConfiguration,
              smartShapeSnappingEnabled: Bool,
-             onDrawingChanged: @escaping (PKDrawing) -> Void) {
+             onDrawingChanged: @escaping (PKDrawing) -> Void,
+             onScribbleErased: ((PKDrawing, PKDrawing) -> Void)?,
+             onStrokeBegan: @escaping () -> Void) {
             self._selectedColor = selectedColor
             self.penConfiguration = penConfiguration
             self.colorCycleState = DrawingColorCycleState()
@@ -1247,6 +1280,8 @@ private struct LivePKCanvas: UIViewRepresentable {
             )
             self.smartShapeSnappingEnabled = smartShapeSnappingEnabled
             self.onDrawingChanged = onDrawingChanged
+            self.onScribbleErased = onScribbleErased
+            self.onStrokeBegan = onStrokeBegan
             self.shapeSnapController.isEnabled = smartShapeSnappingEnabled
         }
 
@@ -1285,12 +1320,24 @@ private struct LivePKCanvas: UIViewRepresentable {
             }
         }
 
+        func applyExternalDrawing(_ drawing: PKDrawing, to canvas: PKCanvasView) {
+            isApplyingStrokeProcessing = true
+            canvas.drawing = drawing
+            lastVisiblePreviewDrawing = drawing
+            isApplyingStrokeProcessing = false
+        }
+
         func canvasViewDidBeginUsingTool(_ canvas: PKCanvasView) {
+            onStrokeBegan()
             cancelScheduledStrokeProcessing()
             cancelScheduledDrawingPublication()
             shapeSnapController.cancelPendingSnap()
             lastVisiblePreviewDrawing = nil
             isUsingDrawingTool = true
+            if penConfiguration.scribbleToEraseEnabled,
+               canvas.tool is PKInkingTool, !canvas.isRulerActive {
+                scribbleBaselines.append(DrawingStrokeBaseline(drawing: canvas.drawing))
+            }
             if !hasUnpublishedDrawingChanges {
                 pendingStrokeBaseline = canvas.tool is PKInkingTool
                     ? DrawingStrokeBaseline(drawing: canvas.drawing)
@@ -1347,6 +1394,33 @@ private struct LivePKCanvas: UIViewRepresentable {
             hasUnpublishedDrawingChanges = false
 
             let drawingBeforeProcessing = canvas.drawing
+            let eraseBaselines = scribbleBaselines
+            scribbleBaselines.removeAll(keepingCapacity: true)
+            if let erased = ScribbleEraser.erasePendingStrokes(
+                    in: drawingBeforeProcessing, since: eraseBaselines, viewScale: canvas.zoomScale
+               ) {
+                let result = ScribbleEraser.finalizing(
+                    erased, originalDrawing: drawingBeforeProcessing,
+                    since: baseline, configuration: configuration,
+                    replacementInk: replacementInk,
+                    colorCycleConfiguration: colorCycleState.configuration
+                )
+                shapeSnapController.cancelPendingSnap()
+                cancelScheduledDrawingPublication()
+                drawingAwaitingPublication = nil
+                isApplyingStrokeProcessing = true
+                canvas.drawing = result.after
+                lastVisiblePreviewDrawing = result.after
+                patternPreview.clear()
+                isApplyingStrokeProcessing = false
+                if let onScribbleErased {
+                    onScribbleErased(result.before, result.after)
+                } else {
+                    onDrawingChanged(result.after)
+                }
+                UIAccessibility.post(notification: .announcement, argument: "Ink erased")
+                return
+            }
             let drawingForProcessing: PKDrawing
             if (configuration.usesPattern
                 || colorCycleState.configuration.isContinuousActive),
@@ -1407,6 +1481,7 @@ private struct LivePKCanvas: UIViewRepresentable {
         }
 
         private func cancelPendingStrokeProcessing() {
+            scribbleBaselines.removeAll(keepingCapacity: true)
             cancelScheduledStrokeProcessing()
             pendingStrokeBaseline = nil
             pendingStrokeConfiguration = nil
@@ -1701,14 +1776,33 @@ struct DrawingCanvasView: View {
     let smartShapeSnappingEnabled: Bool
     var showsInlineControls: Bool = true
     let onDrawingChanged: (PKDrawing) -> Void
+    var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)? = nil
+    var onUndoScribble: (() -> Void)? = nil
+    @State private var scribbleUndoDrawing: PKDrawing?
 
     var body: some View {
         if isEditing {
             MacDrawingEditor(
                 drawing: drawing,
                 canvasScale: canvasScale,
-                onDrawingChanged: onDrawingChanged
+                onDrawingChanged: onDrawingChanged,
+                onScribbleErased: { before, after in
+                    if let onScribbleErased { onScribbleErased(before, after) }
+                    else { onDrawingChanged(after) }
+                    scribbleUndoDrawing = before
+                },
+                onStrokeBegan: { scribbleUndoDrawing = nil }
             )
+            .overlay(alignment: .top) {
+                if let scribbleUndoDrawing {
+                    ScribbleEraseFeedback {
+                        if let onUndoScribble { onUndoScribble() }
+                        else { onDrawingChanged(scribbleUndoDrawing) }
+                        self.scribbleUndoDrawing = nil
+                    }
+                    .padding(.top, 8)
+                }
+            }
         } else {
             MacDrawingSnapshot(drawing: drawing, canvasScale: canvasScale)
         }
@@ -1895,6 +1989,8 @@ struct MacDrawingEditor: View {
     let drawing: PKDrawing
     let canvasScale: CGFloat
     let onDrawingChanged: (PKDrawing) -> Void
+    var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)? = nil
+    var onStrokeBegan: () -> Void = {}
 
     @State private var tool = MacDrawingToolState()
     @State private var colorCycleState = DrawingColorCycleState()
@@ -1906,7 +2002,10 @@ struct MacDrawingEditor: View {
                 tool: tool,
                 canvasScale: canvasScale,
                 colorCycleConfiguration: settings.effectiveDrawingColorCycleConfiguration,
+                scribbleToEraseEnabled: settings.scribbleToEraseEnabled,
                 onDrawingChanged: onDrawingChanged,
+                onScribbleErased: onScribbleErased,
+                onStrokeBegan: onStrokeBegan,
                 onStrokeCompleted: advanceColorCycle
             )
 
@@ -2143,7 +2242,10 @@ private struct MacFreehandPKDrawingView: View {
     let tool: MacDrawingToolState
     let canvasScale: CGFloat
     let colorCycleConfiguration: DrawingColorCycleConfiguration
+    let scribbleToEraseEnabled: Bool
     var onDrawingChanged: (PKDrawing) -> Void
+    var onScribbleErased: ((PKDrawing, PKDrawing) -> Void)?
+    var onStrokeBegan: () -> Void
     var onStrokeCompleted: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -2181,6 +2283,7 @@ private struct MacFreehandPKDrawingView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 if !isDrawing {
+                    onStrokeBegan()
                     isDrawing = true
                     committedDrawing = workingDrawing
                     currentPoints = [value.startLocation]
@@ -2191,6 +2294,22 @@ private struct MacFreehandPKDrawingView: View {
             }
             .onEnded { value in
                 appendPointIfNeeded(value.location)
+                if scribbleToEraseEnabled, !tool.isErasing,
+                   let gesture = ScribbleEraseGesture(points: currentPoints, viewScale: canvasScale) {
+                    let erased = gesture.erasingStrokes(in: committedDrawing)
+                    if erased.strokes.count != committedDrawing.strokes.count {
+                        if let onScribbleErased {
+                            onScribbleErased(committedDrawing, erased)
+                        } else {
+                            onDrawingChanged(erased)
+                        }
+                        workingDrawing = erased
+                        committedDrawing = erased
+                        currentPoints = []
+                        isDrawing = false
+                        return
+                    }
+                }
                 let completedStroke = !tool.isErasing && currentPoints.count > 1
                 let finalDrawing = drawingAfterCurrentGesture()
                 workingDrawing = finalDrawing

@@ -123,7 +123,13 @@ struct DrawingElementView: View {
                         context: context,
                         undoManager: canvasHistory
                     )
-                }
+                },
+                onScribbleErased: { before, after in
+                    vm.saveDrawing(element: element, drawing: before, context: context, undoManager: canvasHistory)
+                    vm.saveDrawing(element: element, drawing: after, context: context,
+                                   undoManager: canvasHistory, isScribbleErase: true)
+                },
+                onUndoScribble: { canvasHistory.undo() }
             )
             .clipShape(RoundedRectangle(cornerRadius: element.isCanvasDrawing ? 0 : 12))
 

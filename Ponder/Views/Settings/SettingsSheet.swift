@@ -419,6 +419,10 @@ struct SettingsSheet: View {
 
                 Divider()
 
+                ScribbleEraseSettingsSection()
+
+                Divider()
+
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Label("Stroke smoothing", systemImage: "waveform.path")

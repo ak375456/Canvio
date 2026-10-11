@@ -51,19 +51,22 @@ struct DrawingPenConfiguration: Equatable {
     var patternWidth: Double
     var dashLength: Double
     var patternGap: Double
+    var scribbleToEraseEnabled: Bool
 
     init(
         smoothing: Double,
         lineStyle: DrawingStrokeStyle = .solid,
         patternWidth: Double = 4,
         dashLength: Double = 12,
-        patternGap: Double = 8
+        patternGap: Double = 8,
+        scribbleToEraseEnabled: Bool = true
     ) {
         self.smoothing = smoothing
         self.lineStyle = lineStyle
         self.patternWidth = patternWidth
         self.dashLength = dashLength
         self.patternGap = patternGap
+        self.scribbleToEraseEnabled = scribbleToEraseEnabled
     }
 
     var normalized: DrawingPenConfiguration {
@@ -72,7 +75,8 @@ struct DrawingPenConfiguration: Equatable {
             lineStyle: lineStyle,
             patternWidth: Self.patternWidthRange.clamped(patternWidth),
             dashLength: Self.dashLengthRange.clamped(dashLength),
-            patternGap: Self.patternGapRange.clamped(patternGap)
+            patternGap: Self.patternGapRange.clamped(patternGap),
+            scribbleToEraseEnabled: scribbleToEraseEnabled
         )
     }
 
@@ -236,32 +240,6 @@ enum DrawingInputDebounce {
 extension ClosedRange where Bound == Double {
     func clamped(_ value: Double) -> Double {
         Swift.min(Swift.max(value, lowerBound), upperBound)
-    }
-}
-
-struct DrawingStrokeBaseline {
-    fileprivate let strokeCount: Int
-    fileprivate let lastStroke: DrawingStrokeSignature?
-
-    init(drawing: PKDrawing) {
-        strokeCount = drawing.strokes.count
-        lastStroke = drawing.strokes.last.map(DrawingStrokeSignature.init)
-    }
-}
-
-private struct DrawingStrokeSignature: Equatable {
-    let randomSeed: UInt32
-    let pointCount: Int
-    let creationDate: Date
-    let lastPointLocation: CGPoint?
-    let renderBounds: CGRect
-
-    init(_ stroke: PKStroke) {
-        randomSeed = stroke.randomSeed
-        pointCount = stroke.path.count
-        creationDate = stroke.path.creationDate
-        lastPointLocation = stroke.path.last?.location
-        renderBounds = stroke.renderBounds
     }
 }
 
@@ -1650,6 +1628,10 @@ private struct DrawingAssistancePanel: View {
 
                 Divider()
 
+                ScribbleEraseSettingsSection()
+
+                Divider()
+
                 DrawingColorCycleSettingsSection()
 
                 Divider()
@@ -1749,7 +1731,8 @@ private struct DrawingAssistancePanel: View {
             lineStyle: settings.drawingStrokeStyle,
             patternWidth: draftPatternWidth,
             dashLength: draftDashLength,
-            patternGap: draftPatternGap
+            patternGap: draftPatternGap,
+            scribbleToEraseEnabled: settings.scribbleToEraseEnabled
         )
     }
 
@@ -2118,5 +2101,90 @@ private struct DrawingLineStylePreview: View {
         case .dashed:
             return [CGFloat(config.dashLength), config.hiddenPatternLength]
         }
+    }
+}
+
+extension ScribbleEraser {
+    static func finalizing(
+        _ result: ScribbleEraseResult,
+        originalDrawing: PKDrawing,
+        since baseline: DrawingStrokeBaseline?,
+        configuration: DrawingPenConfiguration,
+        replacementInk: PKInk?,
+        colorCycleConfiguration: DrawingColorCycleConfiguration
+    ) -> ScribbleEraseResult {
+        let firstNewIndex = baseline?.firstNewStrokeIndex(in: originalDrawing) ?? originalDrawing.strokes.count
+        let newStrokes = originalDrawing.strokes.dropFirst(firstNewIndex)
+        func process(_ drawing: PKDrawing) -> PKDrawing {
+            // Erasing changes array indices. Match original paths instead of
+            // treating a surviving, already styled stroke as new handwriting.
+            let strokes = drawing.strokes.flatMap { stroke -> [PKStroke] in
+                guard newStrokes.contains(where: {
+                    $0.randomSeed == stroke.randomSeed && $0.path.creationDate == stroke.path.creationDate
+                }) else { return [stroke] }
+                return DrawingStrokeProcessor.processingNewStrokes(
+                    in: PKDrawing(strokes: [stroke]), startingAt: 0,
+                    configuration: configuration, replacementInk: replacementInk,
+                    colorCycleConfiguration: colorCycleConfiguration
+                )?.strokes ?? [stroke]
+            }
+            var final = PKDrawing(strokes: strokes)
+            if let replacementInk,
+               let recovered = DrawingStrokeProcessor.recoveringInvisiblePreviewStrokes(
+                    in: final, configuration: configuration, replacementInk: replacementInk,
+                    colorCycleConfiguration: colorCycleConfiguration
+               ) { final = recovered }
+            return final
+        }
+        return ScribbleEraseResult(
+            before: process(result.before), after: process(result.after),
+            externalTargets: result.externalTargets
+        )
+    }
+
+}
+
+struct ScribbleEraseSettingsSection: View {
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(
+                get: { settings.scribbleToEraseEnabled },
+                set: { settings.scribbleToEraseEnabled = $0 }
+            )) {
+                Label("Scribble to erase", systemImage: "eraser")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .tint(.orange)
+            .accessibilityHint("Scribble back and forth over ink, then lift to erase it.")
+            Text("Scribble back and forth over ink, then lift to erase. Keep writing with the same pen.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct ScribbleEraseFeedback: View {
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Label("Ink erased", systemImage: "eraser")
+                .font(.caption.weight(.medium))
+            Button("Undo", action: onUndo)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.orange)
+                .buttonStyle(.plain)
+                .frame(minWidth: 44, minHeight: 32)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Undo scribble erase")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.1), radius: 8, y: 3)
+        .fixedSize()
     }
 }

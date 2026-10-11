@@ -171,7 +171,7 @@ class StickyNoteViewModel: ObservableObject {
 
     func updateDrawing(note: StickyNoteModel, drawing: PKDrawing,
                        context: ModelContext, undoManager: CanvasUndoManager? = nil,
-                       syncRemotely: Bool = true) {
+                       syncRemotely: Bool = true, isScribbleErase: Bool = false) {
         let oldData = note.drawingData
         let newData = drawing.dataRepresentation()
         guard oldData != newData else { return }
@@ -184,12 +184,12 @@ class StickyNoteViewModel: ObservableObject {
         }
 
         undoManager?.recordElementChange(
-            name: "Draw on sticky note",
+            name: isScribbleErase ? "Scribble to erase" : "Draw on sticky note",
             element: note,
             from: oldData,
             to: newData,
             context: context,
-            coalescingKey: "sticky-drawing-\(note.id)"
+            coalescingKey: isScribbleErase ? nil : "sticky-drawing-\(note.id)"
         ) { $0.drawingData = $1 }
     }
 

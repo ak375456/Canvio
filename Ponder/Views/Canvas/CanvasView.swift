@@ -1301,6 +1301,7 @@ private struct CanvasPageContentView: View {
     @State private var canvasDrawingInitialDrawing = PKDrawing()
     @State private var canvasDrawingCaptureMode: CanvasDrawingCaptureMode = .drawing
     @State private var continuingCanvasDrawingID: UUID?
+    @State private var scribbleEraseRestoreDrawingID: UUID?
     @State private var floatingYouTubeStopToken: UUID?
     @State private var isCanvasHighlighterToolSelected = false
     @State private var isCanvasDrawingInputActive = true
@@ -2481,6 +2482,19 @@ private struct CanvasPageContentView: View {
                         effectiveScale: effectiveScale,
                         effectiveOffset: effectiveOffset
                     )
+                },
+                additionalScribbleTargets: { scale, offset in
+                    drawings.filter {
+                        $0.isCanvasDrawing && !$0.isLayerHidden && $0.layerOpacity > 0
+                            && $0.id != continuingCanvasDrawingID
+                    }.map {
+                        ScribbleEraseTarget(id: $0.id, drawing: viewportDrawing(for: $0, scale: scale, offset: offset))
+                    }
+                },
+                onScribbleErased: persistScribbleErase,
+                onUndoScribble: {
+                    vm.undoManager.undo()
+                    continuingCanvasDrawingID = scribbleEraseRestoreDrawingID
                 },
                 onExit: finishCanvasDrawingSession
             )
@@ -5865,18 +5879,25 @@ private struct CanvasPageContentView: View {
         vm.showCanvasDrawingOverlay = true
     }
 
-    private func viewportDrawing(for element: DrawingElementModel) -> PKDrawing {
+    private func viewportDrawing(for element: DrawingElementModel,
+                                 scale: CGFloat? = nil, offset: CGSize? = nil) -> PKDrawing {
+        element.pkDrawing.transformed(using: viewportDrawingTransform(for: element, scale: scale, offset: offset))
+    }
+
+    private func viewportDrawingTransform(for element: DrawingElementModel,
+                                          scale: CGFloat? = nil, offset: CGSize? = nil) -> CGAffineTransform {
         let width = CGFloat(element.width)
         let height = CGFloat(element.height)
         let angle = CGFloat(element.rotation) * .pi / 180
         let cosA = cos(angle)
         let sinA = sin(angle)
-        let scale = vm.scale
+        let scale = scale ?? vm.scale
+        let offset = offset ?? vm.offset
 
-        let tx = vm.offset.width + scale * (CGFloat(element.x) - cosA * width / 2 + sinA * height / 2)
-        let ty = vm.offset.height + scale * (CGFloat(element.y) - sinA * width / 2 - cosA * height / 2)
+        let tx = offset.width + scale * (CGFloat(element.x) - cosA * width / 2 + sinA * height / 2)
+        let ty = offset.height + scale * (CGFloat(element.y) - sinA * width / 2 - cosA * height / 2)
 
-        let transform = CGAffineTransform(
+        return CGAffineTransform(
             a: scale * cosA,
             b: scale * sinA,
             c: -scale * sinA,
@@ -5884,7 +5905,27 @@ private struct CanvasPageContentView: View {
             tx: tx,
             ty: ty
         )
-        return element.pkDrawing.transformed(using: transform)
+    }
+
+    private func persistScribbleErase(_ drawing: PKDrawing, targets: [ScribbleEraseTarget],
+                                     scale: CGFloat, offset: CGSize) {
+        scribbleEraseRestoreDrawingID = continuingCanvasDrawingID
+        vm.undoManager.beginGrouping(name: "Scribble to erase")
+        defer { vm.undoManager.endGrouping() }
+        for target in targets {
+            guard let element = canvasDrawingElement(withID: target.id) else { continue }
+            let localDrawing = target.drawing.transformed(
+                using: viewportDrawingTransform(for: element, scale: scale, offset: offset).inverted()
+            )
+            if canvasDrawingHasVisibleInk(localDrawing) {
+                vm.drawingVM.saveDrawing(element: element, drawing: localDrawing,
+                                        context: context, undoManager: vm.undoManager,
+                                        isScribbleErase: true)
+            } else {
+                vm.drawingVM.delete(element: element, context: context, undoManager: vm.undoManager)
+            }
+        }
+        persistCanvasDrawing(drawing, effectiveScale: scale, effectiveOffset: offset, keepsSessionActive: true)
     }
 
     private func saveCanvasDrawing(_ pkDrawing: PKDrawing, effectiveScale: CGFloat, effectiveOffset: CGSize) {

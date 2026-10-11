@@ -105,19 +105,20 @@ class DrawingElementViewModel: ObservableObject {
     }
 
     func saveDrawing(element: DrawingElementModel, drawing: PKDrawing, context: ModelContext,
-                     undoManager: CanvasUndoManager? = nil) {
+                     undoManager: CanvasUndoManager? = nil, isScribbleErase: Bool = false) {
         let oldData = element.drawingData
+        guard oldData != drawing.dataRepresentation() else { return }
         element.pkDrawing = drawing
         element.updatedAt = Date()
         try? context.save()
         Task { await DrawingSyncService.shared.upsert(element) }
         undoManager?.recordElementChange(
-            name: "Edit drawing",
+            name: isScribbleErase ? "Scribble to erase" : "Edit drawing",
             element: element,
             from: oldData,
             to: element.drawingData,
             context: context,
-            coalescingKey: "drawing-data-\(element.id)"
+            coalescingKey: isScribbleErase ? nil : "drawing-data-\(element.id)"
         ) { $0.drawingData = $1 }
     }
 

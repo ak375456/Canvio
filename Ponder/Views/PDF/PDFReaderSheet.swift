@@ -656,6 +656,7 @@ private struct PDFInkEditor: View {
     let penConfiguration: DrawingPenConfiguration
     let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onChange: (PKDrawing, CGSize) -> Void
+    @State private var scribbleUndoDrawing: PKDrawing?
 
     var body: some View {
         GeometryReader { geo in
@@ -670,7 +671,12 @@ private struct PDFInkEditor: View {
                         drawing: drawing,
                         penConfiguration: penConfiguration,
                         colorCycleConfiguration: colorCycleConfiguration,
-                        onChange: { onChange($0, size) }
+                        onChange: { onChange($0, size) },
+                        onStrokeBegan: { scribbleUndoDrawing = nil },
+                        onScribbleErased: { before, after in
+                            scribbleUndoDrawing = before
+                            onChange(after, size)
+                        }
                     )
                         .id(pageIndex)
                     #endif
@@ -679,9 +685,19 @@ private struct PDFInkEditor: View {
                 .background(.white)
                 .shadow(color: .black.opacity(0.2), radius: 14, y: 6)
                 .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                .overlay(alignment: .top) {
+                    if let scribbleUndoDrawing {
+                        ScribbleEraseFeedback {
+                            onChange(scribbleUndoDrawing, size)
+                            self.scribbleUndoDrawing = nil
+                        }
+                        .padding(.top, 12)
+                    }
+                }
             }
         }
         .overlay(alignment: .bottom) { pageStepper }
+        .onChange(of: pageIndex) { _, _ in scribbleUndoDrawing = nil }
     }
 
     private var pageStepper: some View {
@@ -702,12 +718,16 @@ private struct PDFPencilCanvas: UIViewRepresentable {
     let penConfiguration: DrawingPenConfiguration
     let colorCycleConfiguration: DrawingColorCycleConfiguration
     let onChange: (PKDrawing) -> Void
+    let onStrokeBegan: () -> Void
+    let onScribbleErased: (PKDrawing, PKDrawing) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             penConfiguration: penConfiguration,
             colorCycleConfiguration: colorCycleConfiguration,
-            onChange: onChange
+            onChange: onChange,
+            onStrokeBegan: onStrokeBegan,
+            onScribbleErased: onScribbleErased
         )
     }
     func makeUIView(context: Context) -> PKCanvasView {
@@ -737,13 +757,15 @@ private struct PDFPencilCanvas: UIViewRepresentable {
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
         canvas.drawingPolicy = .default
         context.coordinator.onChange = onChange
+        context.coordinator.onStrokeBegan = onStrokeBegan
+        context.coordinator.onScribbleErased = onScribbleErased
         context.coordinator.updatePenConfiguration(penConfiguration, on: canvas)
         context.coordinator.updateColorCycleConfiguration(
             colorCycleConfiguration,
             on: canvas
         )
-        if canvas.drawing.dataRepresentation() != drawing.dataRepresentation(), !canvas.isFirstResponder {
-            canvas.drawing = drawing
+        if canvas.drawing.dataRepresentation() != drawing.dataRepresentation(), !context.coordinator.hasPendingInput {
+            context.coordinator.applyExternalDrawing(drawing, to: canvas)
         }
         context.coordinator.picker?.setVisible(true, forFirstResponder: canvas)
     }
@@ -758,6 +780,11 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         var penConfiguration: DrawingPenConfiguration
         private var colorCycleState: DrawingColorCycleState
         var onChange: (PKDrawing) -> Void
+        var onStrokeBegan: () -> Void
+        var onScribbleErased: (PKDrawing, PKDrawing) -> Void
+        var hasPendingInput: Bool { isUsingDrawingTool || isFinalizingStroke }
+        private var isFinalizingStroke = false
+        private var scribbleBaseline: DrawingStrokeBaseline?
         var picker: PKToolPicker?
         weak var canvas: PKCanvasView?
         private var isApplyingStrokeProcessing = false
@@ -770,7 +797,9 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         init(
             penConfiguration: DrawingPenConfiguration,
             colorCycleConfiguration: DrawingColorCycleConfiguration,
-            onChange: @escaping (PKDrawing) -> Void
+            onChange: @escaping (PKDrawing) -> Void,
+            onStrokeBegan: @escaping () -> Void,
+            onScribbleErased: @escaping (PKDrawing, PKDrawing) -> Void
         ) {
             self.penConfiguration = penConfiguration
             self.colorCycleState = DrawingColorCycleState()
@@ -779,6 +808,8 @@ private struct PDFPencilCanvas: UIViewRepresentable {
                 force: true
             )
             self.onChange = onChange
+            self.onStrokeBegan = onStrokeBegan
+            self.onScribbleErased = onScribbleErased
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
@@ -800,7 +831,18 @@ private struct PDFPencilCanvas: UIViewRepresentable {
             onChange(canvasView.drawing)
         }
 
+        func applyExternalDrawing(_ drawing: PKDrawing, to canvas: PKCanvasView) {
+            isApplyingStrokeProcessing = true
+            canvas.drawing = drawing
+            lastVisiblePreviewDrawing = drawing
+            isApplyingStrokeProcessing = false
+        }
+
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
+            onStrokeBegan()
+            scribbleBaseline = penConfiguration.scribbleToEraseEnabled
+                && canvasView.tool is PKInkingTool && !canvasView.isRulerActive
+                ? DrawingStrokeBaseline(drawing: canvasView.drawing) : nil
             isUsingDrawingTool = true
             lastVisiblePreviewDrawing = nil
             strokeBaseline = canvasView.tool is PKInkingTool
@@ -818,20 +860,42 @@ private struct PDFPencilCanvas: UIViewRepresentable {
         func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
             isUsingDrawingTool = false
             let baseline = strokeBaseline
+            let eraseBaseline = scribbleBaseline
+            scribbleBaseline = nil
             strokeBaseline = nil
             let replacementInk = replacementInk
             self.replacementInk = nil
             livePreview.endGestureStroke(cancelled: false, on: canvasView)
 
-            if baseline != nil,
-               colorCycleState.recordCompletedStroke() {
-                applyActiveCycleColor(to: canvasView)
-            }
-
+            isFinalizingStroke = true
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + DrawingInputDebounce.livePreviewFinalization
             ) { [weak self, weak canvasView] in
-                guard let self, let canvasView, let baseline else { return }
+                guard let self, let canvasView else { return }
+                self.isFinalizingStroke = false
+                guard let baseline, !self.isUsingDrawingTool else { return }
+                if let eraseBaseline,
+                   let erased = ScribbleEraser.eraseLatestStroke(
+                        in: canvasView.drawing, since: eraseBaseline, viewScale: canvasView.zoomScale
+                   ) {
+                    let result = ScribbleEraser.finalizing(
+                        erased, originalDrawing: canvasView.drawing,
+                        since: baseline, configuration: self.penConfiguration,
+                        replacementInk: replacementInk,
+                        colorCycleConfiguration: self.colorCycleState.configuration
+                    )
+                    self.isApplyingStrokeProcessing = true
+                    canvasView.drawing = result.after
+                    self.lastVisiblePreviewDrawing = result.after
+                    self.livePreview.clear()
+                    self.onScribbleErased(result.before, result.after)
+                    self.isApplyingStrokeProcessing = false
+                    UIAccessibility.post(notification: .announcement, argument: "Ink erased")
+                    return
+                }
+                if self.colorCycleState.recordCompletedStroke() {
+                    self.applyActiveCycleColor(to: canvasView)
+                }
                 var finalDrawing = canvasView.drawing
                 if let processed = DrawingStrokeProcessor.processingLatestStroke(
                     in: canvasView.drawing,

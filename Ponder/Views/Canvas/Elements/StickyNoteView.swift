@@ -120,7 +120,15 @@ struct StickyNoteView: View {
                     canvasScale: canvasScale,
                     smartShapeSnappingEnabled: settings.smartShapeSnappingEnabled,
                     showsInlineControls: false,
-                    onDrawingChanged: saveStickyDrawing
+                    onDrawingChanged: saveStickyDrawing,
+                    onScribbleErased: { before, after in
+                        saveStickyDrawing(before)
+                        vm.updateDrawing(note: note, drawing: after, context: context,
+                                         undoManager: canvasHistory, syncRemotely: false,
+                                         isScribbleErase: true)
+                        textEditing.scheduleRemoteSync(syncStickyNote)
+                    },
+                    onUndoScribble: { canvasHistory.undo() }
                 )
                 .padding(4)
                 .clipShape(FoldedRectangle(foldSize: activeFoldSize))
