@@ -566,10 +566,14 @@ private struct FullCanvasDrawView: UIViewRepresentable {
         context.coordinator.attachPatternGesture(to: canvas)
         let coordinator = context.coordinator
         DispatchQueue.main.async { [weak canvas] in
-            guard let canvas else { return }
+            guard let canvas, canvas.window != nil else { return }
+            // UIViewRepresentable creates the canvas before it enters the window.
+            // Activate it once attached so PencilKit can receive squeeze/double-tap
+            // and present its native tool palette immediately, before the first stroke.
+            canvas.becomeFirstResponder()
+            coordinator.toolPicker?.setVisible(true, forFirstResponder: canvas)
             coordinator.syncHighlighterToolSelection(from: canvas)
         }
-        canvas.becomeFirstResponder()
         return canvas
     }
 

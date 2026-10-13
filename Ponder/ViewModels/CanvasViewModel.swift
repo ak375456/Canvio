@@ -7,8 +7,6 @@ import SwiftUI
 import Combine
 import PhotosUI
 
-let canvasMinimumZoomScale: CGFloat = 0.55
-
 @MainActor
 final class CanvasNavigationState: ObservableObject {
     @Published var offset: CGSize = .zero
@@ -41,6 +39,7 @@ class CanvasViewModel: ObservableObject {
     let selectionDrag = CanvasDragTranslationState()
     let groupDrag = CanvasDragTranslationState()
     let smartAlignment = CanvasSmartAlignmentState()
+    @Published private(set) var zoomConfiguration = CanvasZoomConfiguration()
 
     var offset: CGSize {
         get { navigation.offset }
@@ -52,11 +51,11 @@ class CanvasViewModel: ObservableObject {
     }
     var scale: CGFloat {
         get { navigation.scale }
-        set { navigation.scale = max(canvasMinimumZoomScale, newValue) }
+        set { navigation.scale = zoomConfiguration.clampedScale(newValue) }
     }
     var lastScale: CGFloat {
         get { navigation.lastScale }
-        set { navigation.lastScale = max(canvasMinimumZoomScale, newValue) }
+        set { navigation.lastScale = zoomConfiguration.clampedScale(newValue) }
     }
     @Published var showTextSheet: Bool = false
     @Published var showShapePicker: Bool = false
@@ -113,14 +112,39 @@ class CanvasViewModel: ObservableObject {
 
     func handleDragEnd() { lastOffset = offset }
 
+    func updateZoomConfiguration(
+        _ configuration: CanvasZoomConfiguration,
+        viewportSize: CGSize,
+        boundary: CGSize
+    ) {
+        guard configuration != zoomConfiguration else { return }
+        let oldScale = scale
+        let nextScale = configuration.clampedScale(oldScale)
+        zoomConfiguration = configuration
+
+        if nextScale != oldScale {
+            offset = configuration.offsetPreservingAnchor(
+                from: offset,
+                oldScale: oldScale,
+                newScale: nextScale,
+                anchor: CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+            )
+            scale = nextScale
+            if boundary != .zero {
+                clampOffset(to: boundary, viewportSize: viewportSize, scale: nextScale)
+            }
+        }
+        lastScale = scale
+        lastOffset = offset
+    }
+
     func handleMagnification(_ magnification: CGFloat, focalPoint: CGPoint) {
-        let newScale   = max(canvasMinimumZoomScale, min(lastScale * magnification, 5.0))
-        let scaleDelta = newScale / scale
-        let dx = focalPoint.x - offset.width
-        let dy = focalPoint.y - offset.height
-        offset = CGSize(
-            width:  focalPoint.x - dx * scaleDelta,
-            height: focalPoint.y - dy * scaleDelta
+        let newScale = zoomConfiguration.clampedScale(lastScale * magnification)
+        offset = zoomConfiguration.offsetPreservingAnchor(
+            from: offset,
+            oldScale: scale,
+            newScale: newScale,
+            anchor: focalPoint
         )
         scale = newScale
     }
@@ -165,7 +189,7 @@ class CanvasViewModel: ObservableObject {
         let padding: CGFloat = 40
         let scaleX   = (viewportSize.width  - padding * 2) / boundary.width
         let scaleY   = (viewportSize.height - padding * 2) / boundary.height
-        let fitScale = max(canvasMinimumZoomScale, min(scaleX, scaleY, 1.0))
+        let fitScale = zoomConfiguration.clampedScale(min(scaleX, scaleY, 1.0))
         scale      = fitScale
         lastScale  = fitScale
         let x = (viewportSize.width  - boundary.width  * fitScale) / 2

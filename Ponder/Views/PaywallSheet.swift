@@ -11,12 +11,21 @@ struct PaywallSheet: View {
 
     @ObservedObject private var pro = ProManager.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedPlan: ProManager.Plan = .yearly
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var selectedPlan: ProManager.Plan
+    @State private var hasSelectedPlan = false
+
+    init(onPurchaseCompleted: (() -> Void)? = nil) {
+        self.onPurchaseCompleted = onPurchaseCompleted
+        let highlightsLocal = LocalProSaleCampaign.isEnabled && !ProManager.shared.isPro
+        self._selectedPlan = State(initialValue: highlightsLocal ? .local : .yearly)
+    }
 
     private let plans: [PaywallPlan] = [
         .init(plan: .monthly,  title: "Monthly Cloud", badge: nil),
         .init(plan: .yearly,   title: "Yearly Cloud",  badge: "Popular"),
-        .init(plan: .local,    title: "Local Pro",     badge: "No Sync"),
+        .init(plan: .local,    title: "Local Pro",     badge: "Pay Once"),
         .init(plan: .lifetime, title: "Lifetime Pro",  badge: "Best Value")
     ]
 
@@ -24,30 +33,39 @@ struct PaywallSheet: View {
         pro.ownsLocalPro ? plans.filter { $0.plan != .local } : plans
     }
 
-    private var pricingColumns: [GridItem] {
-        let count = pro.ownsLocalPro ? 3 : 2
+    private func pricingColumns(hasSale: Bool) -> [GridItem] {
+        let count = dynamicTypeSize.isAccessibilitySize ? 1 : (pro.ownsLocalPro || hasSale ? 3 : 2)
         return Array(repeating: GridItem(.flexible(), spacing: 10), count: count)
     }
 
     var body: some View {
+        let offer = pro.localProSaleOffer
         VStack(spacing: 0) {
-            header
+            header(hasSale: offer != nil)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    featureList
-                    pricingCards
+                VStack(alignment: .leading, spacing: 20) {
+                    pricingCards(saleOffer: offer)
+                    syncFeatureRow
                     ctaSection
+                    featureList
                 }
                 .padding(24)
             }
         }
         .background(platformBackground)
         .task {
-            await pro.loadProducts()
+            await pro.loadProducts(forceRefresh: true)
             await pro.refreshStatus()
             if pro.isEligibleForLifetimeUpgrade {
                 selectedPlan = .lifetime
+            } else if pro.localProSaleOffer != nil, !hasSelectedPlan {
+                selectedPlan = .local
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await pro.loadProducts(forceRefresh: true) }
             }
         }
         .onChange(of: pro.isEligibleForLifetimeUpgrade) { _, isEligible in
@@ -59,61 +77,55 @@ struct PaywallSheet: View {
 
     // MARK: - Header
 
-    private var header: some View {
-        ZStack(alignment: .topTrailing) {
+    private func header(hasSale: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: 38, height: 38)
+                    .overlay {
+                        Image(systemName: "square.on.square.dashed")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+
+                Text("Canvio")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white.opacity(0.82))
+                        .symbolRenderingMode(.hierarchical)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close paywall")
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(pro.ownsLocalPro ? "Add Cloud Sync" : hasSale ? "Local Pro, for less." : "Unlock Canvio Pro")
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+
+                Text(pro.ownsLocalPro
+                     ? "Choose monthly, yearly or a one-time lifetime upgrade"
+                     : hasSale ? "One payment. All local Pro features, forever."
+                     : "Choose cloud sync or a one-time local upgrade")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.74))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .background {
             LinearGradient(
-                colors: [
-                    Color.accentColor,
-                    Color(red: 0.08, green: 0.12, blue: 0.26),
-                    Color(red: 0.03, green: 0.04, blue: 0.09)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                colors: [Color.accentColor, Color(red: 0.08, green: 0.12, blue: 0.26),
+                         Color(red: 0.03, green: 0.04, blue: 0.09)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
             )
-            .frame(height: 210)
-
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 48, height: 48)
-                        .overlay {
-                            Image(systemName: "square.on.square.dashed")
-                                .font(.system(size: 24, weight: .medium))
-                                .foregroundStyle(.white)
-                        }
-
-                    Text("Canvio")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(pro.ownsLocalPro ? "Add Cloud Sync" : "Unlock Canvio Pro")
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-
-                    Text(pro.ownsLocalPro
-                         ? "Choose monthly, yearly or a one-time lifetime upgrade"
-                         : "Choose cloud sync or a one-time local upgrade")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.74))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
-            .padding(.top, 18)
-
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.82))
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .buttonStyle(.plain)
-            .padding(20)
         }
     }
 
@@ -131,11 +143,11 @@ struct PaywallSheet: View {
                 featureRow(icon: "checkmark.circle.fill", title: "All grid styles — grid, lines, columns, blank")
                 featureRow(icon: "checkmark.circle.fill", title: "Premium canvas background palettes")
                 featureRow(icon: "checkmark.circle.fill", title: "Custom light and dark canvas background colors")
+                featureRow(icon: "checkmark.circle.fill", title: "Extended canvas zoom for more space and detail")
                 featureRow(icon: "checkmark.circle.fill", title: "Continuous color cycling within every stroke")
                 featureRow(icon: "checkmark.circle.fill", title: "Watermark-free PNG and PDF exports")
                 featureRow(icon: "checkmark.circle.fill", title: "Import custom .ttf fonts for text")
             }
-            syncFeatureRow
         }
     }
 
@@ -181,7 +193,7 @@ struct PaywallSheet: View {
 
     private var syncFeatureRow: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: selectedPlan.includesCloudSync ? "icloud.fill" : "icloud.slash.fill")
+            Image(systemName: selectedPlan.includesCloudSync ? "icloud.fill" : "internaldrive.fill")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(selectedPlan.includesCloudSync ? Color.accentColor : .secondary)
                 .frame(width: 24)
@@ -189,13 +201,13 @@ struct PaywallSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(selectedPlan.includesCloudSync
                      ? "Sync across iPhone, iPad and Mac"
-                     : "Cloud sync is not included")
+                     : "One-time purchase, lasting access")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.primary)
 
                 Text(selectedPlan.includesCloudSync
                      ? "Included with Cloud Pro and Lifetime Pro"
-                     : "Your canvases remain local to each device")
+                     : "Your canvases stay on your device.")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(selectedPlan.includesCloudSync ? Color.accentColor : .secondary)
             }
@@ -223,13 +235,21 @@ struct PaywallSheet: View {
 
     // MARK: - Pricing cards
 
-    private var pricingCards: some View {
-        LazyVGrid(
-            columns: pricingColumns,
-            spacing: 10
-        ) {
-            ForEach(visiblePlans) { option in
-                priceCard(option)
+    private func pricingCards(saleOffer: LocalProSaleOffer?) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let offer = saleOffer {
+                LocalProSaleCard(offer: offer, isSelected: selectedPlan == .local) {
+                    hasSelectedPlan = true
+                    withAnimation(.spring(duration: 0.22)) { selectedPlan = .local }
+                }
+                Text("Or choose a plan with cloud sync")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: pricingColumns(hasSale: saleOffer != nil), spacing: 10) {
+                ForEach(visiblePlans.filter { saleOffer == nil || $0.plan != .local }) { option in
+                    priceCard(option)
+                }
             }
         }
     }
@@ -240,6 +260,7 @@ struct PaywallSheet: View {
         let purchasePlan = purchasePlan(for: option.plan)
 
         return Button {
+            hasSelectedPlan = true
             withAnimation(.spring(duration: 0.22)) {
                 selectedPlan = option.plan
             }
@@ -307,7 +328,9 @@ struct PaywallSheet: View {
                         ProgressView()
                             .tint(.white)
                     } else {
-                        Text(ctaTitle)
+                        Text(product(for: purchasePlan(for: selectedPlan)) == nil
+                             ? (pro.isLoadingProducts ? "Loading prices…" : "Price unavailable")
+                             : ctaTitle)
                             .font(.headline.weight(.semibold))
                     }
                 }
@@ -317,7 +340,16 @@ struct PaywallSheet: View {
                 .foregroundStyle(.white)
             }
             .buttonStyle(.plain)
-            .disabled(pro.isLoading || isPlanOwned(selectedPlan))
+            .disabled(pro.isLoading || pro.isLoadingProducts || isPlanOwned(selectedPlan)
+                      || product(for: purchasePlan(for: selectedPlan)) == nil)
+
+            if product(for: purchasePlan(for: selectedPlan)) == nil, !pro.isLoadingProducts {
+                Button("Retry loading prices") {
+                    Task { await pro.loadProducts(forceRefresh: true) }
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.plain)
+            }
 
             Button {
                 Task {
@@ -337,26 +369,28 @@ struct PaywallSheet: View {
             .buttonStyle(.plain)
             .disabled(pro.isLoading)
 
-            HStack(spacing: 4) {
+            VStack(spacing: 6) {
                 Text(purchasePlan(for: selectedPlan) == .local
                      || purchasePlan(for: selectedPlan) == .lifetime
                      || purchasePlan(for: selectedPlan) == .lifetimeUpgrade
-                     ? "One-time payment · Billed by Apple ·"
-                     : "Auto-renews · Cancel anytime · Billed by Apple ·")
+                     ? "One-time payment · Billed by Apple"
+                     : "Auto-renews · Cancel anytime · Billed by Apple")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
 
-                Link("Terms", destination: URL(string: "https://ak375456.github.io/canvio-site/terms.html")!)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Link("Terms", destination: URL(string: "https://ak375456.github.io/canvio-site/terms.html")!)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
 
-                Text("&")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    Text("&")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
 
-                Link("Privacy", destination: URL(string: "https://ak375456.github.io/canvio-site/privacy.html")!)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    Link("Privacy", destination: URL(string: "https://ak375456.github.io/canvio-site/privacy.html")!)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .multilineTextAlignment(.center)
             .frame(maxWidth: .infinity)

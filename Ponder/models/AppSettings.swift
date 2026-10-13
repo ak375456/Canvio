@@ -424,6 +424,7 @@ class AppSettings: ObservableObject {
     @AppStorage("ponder.canvasTopBarVisible") private var canvasTopBarVisibleRaw: Bool = true
     @AppStorage("ponder.canvasPagesPanelVisible") private var canvasPagesPanelVisibleRaw: Bool = true
     @AppStorage("ponder.canvasMinimapVisible") private var canvasMinimapVisibleRaw: Bool = true
+    @AppStorage("ponder.canvasZoomExpansion") private var canvasZoomExpansionRaw: Double = 1
     @AppStorage("ponder.floatingYouTubePlaybackEnabled") private var floatingYouTubePlaybackEnabledRaw: Bool = true
     @AppStorage("ponder.gridStyle") private var gridStyleRaw: String = GridStyle.dotted.rawValue
     @AppStorage("ponder.gridSquareSize") private var gridSquareSizeRaw: Double = AppSettings.defaultCanvasPatternSpacing
@@ -526,6 +527,14 @@ class AppSettings: ObservableObject {
         get { clampedCanvasPatternSpacing(gridSquareSizeRaw) }
         set {
             gridSquareSizeRaw = clampedCanvasPatternSpacing(newValue)
+            objectWillChange.send()
+        }
+    }
+
+    var canvasZoomExpansion: Double {
+        get { CanvasZoomConfiguration.clampedExpansion(canvasZoomExpansionRaw) }
+        set {
+            canvasZoomExpansionRaw = CanvasZoomConfiguration.clampedExpansion(newValue)
             objectWillChange.send()
         }
     }

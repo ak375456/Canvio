@@ -56,6 +56,7 @@ struct SettingsSheet: View {
                     toolbarSection
                     defaultCanvasTextSection
                     canvasChromeSection
+                    canvasZoomSection
                     #if os(macOS)
                     macShortcutsSection
                     #endif
@@ -326,6 +327,13 @@ struct SettingsSheet: View {
             }
             .padding(12)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private var canvasZoomSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            label("CANVAS ZOOM")
+            CanvasZoomSettingsCard(settings: settings) { showPaywall = true }
         }
     }
 

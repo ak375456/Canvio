@@ -9,6 +9,7 @@ struct HomeView: View {
     @ObservedObject private var pro = ProManager.shared
     @Environment(\.modelContext) private var context
     @Environment(\.requestReview) private var requestReview
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \CanvasModel.createdAt, order: .reverse) var canvases: [CanvasModel]
 
     @State private var showSettings = false
@@ -42,6 +43,21 @@ struct HomeView: View {
 
                 // Right side — sync + new canvas
                 ToolbarItemGroup(placement: .automatic) {
+                    if let offer = pro.localProSaleOffer {
+                        Button { showPaywall = true } label: {
+                            Label("Sale", systemImage: "tag.fill")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 7)
+                                .background(Color.orange.gradient, in: Capsule())
+                                .frame(minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Local Pro sale, \(offer.badge)")
+                        .accessibilityHint("Opens the Local Pro offer in the paywall.")
+                    }
                     Button {
                         handleSyncTap()
                     } label: {
@@ -113,6 +129,12 @@ struct HomeView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(24)
+            }
+            .task { await pro.loadProducts(forceRefresh: true) }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active {
+                    Task { await pro.loadProducts(forceRefresh: true) }
+                }
             }
         }
     }

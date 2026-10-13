@@ -48,6 +48,7 @@ final class ProManager: ObservableObject {
     @Published private(set) var ownsLifetimePro: Bool
     @Published private(set) var ownsLifetimeUpgrade: Bool
     @Published private(set) var products: [Product] = []
+    @Published private(set) var isLoadingProducts = false
     @Published var isLoading = false
     @Published var errorMessage: String?
 
@@ -75,16 +76,40 @@ final class ProManager: ObservableObject {
         updatesTask?.cancel()
     }
 
-    func loadProducts() async {
-        guard products.isEmpty else { return }
+    func loadProducts(forceRefresh: Bool = false) async {
+        guard (forceRefresh || products.isEmpty), !isLoadingProducts else { return }
+        isLoadingProducts = true
+        defer { isLoadingProducts = false }
         do {
             products = try await Product.products(for: Plan.availableForPurchase.map(\.rawValue))
                 .sorted { lhs, rhs in
                     order(for: lhs.id) < order(for: rhs.id)
                 }
+            if errorMessage?.hasPrefix("Unable to load purchases:") == true {
+                errorMessage = nil
+            }
         } catch {
             errorMessage = "Unable to load purchases: \(error.localizedDescription)"
         }
+    }
+
+    var localProSaleOffer: LocalProSaleOffer? {
+        guard !ownsLocalPro,
+              let product = products.first(where: { $0.id == Plan.local.rawValue }),
+              LocalProSaleCampaign.shouldPromote(
+                isPro: isPro, price: product.price,
+                currencyCode: product.priceFormatStyle.currencyCode
+              ) else { return nil }
+
+        let isUSD = product.priceFormatStyle.currencyCode == "USD"
+        return LocalProSaleOffer(
+            price: product.displayPrice,
+            // StoreKit doesn't provide historical regional prices. Only strike
+            // through the confirmed USD regular price, never an inferred price.
+            originalPrice: isUSD
+                ? LocalProSaleCampaign.regularUSDPrice.formatted(product.priceFormatStyle) : nil,
+            badge: isUSD ? "50% OFF" : "SALE"
+        )
     }
 
     func refreshStatus() async {

@@ -1339,6 +1339,10 @@ private struct CanvasPageContentView: View {
         contentCanvasID
     }
 
+    private var canvasZoomConfiguration: CanvasZoomConfiguration {
+        CanvasZoomConfiguration(expansion: settings.canvasZoomExpansion, isPro: pro.isPro)
+    }
+
     private var drawingModePickerHeight: CGFloat {
         let modes = CanvasDrawingToolMode.availableModes(
             handwritingToTextEnabled: settings.handwritingToTextEnabled
@@ -1940,6 +1944,14 @@ private struct CanvasPageContentView: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .coordinateSpace(name: canvasViewportCoordinateSpace)
             .clipped()
+            #if os(iOS)
+            .background {
+                CanvasPencilSqueezeShortcut(
+                    isEnabled: !vm.showCanvasDrawingOverlay,
+                    onShowDrawingTools: openDrawingToolsWithPencil
+                )
+            }
+            #endif
             #if os(macOS)
             .overlay(
                 MacScrollInterceptor { deltaX, deltaY, phase, isZoom in
@@ -1955,11 +1967,13 @@ private struct CanvasPageContentView: View {
                         }
                         let zoomSensitivity: CGFloat = 0.008
                         let delta    = -deltaY * zoomSensitivity
-                        let newScale = max(canvasMinimumZoomScale, min(vm.scale * (1.0 + delta), 8.0))
-                        let scaleDelta = newScale / vm.scale
-                        let newW = focal.x - (focal.x - vm.offset.width)  * scaleDelta
-                        let newH = focal.y - (focal.y - vm.offset.height) * scaleDelta
-                        vm.offset = CGSize(width: newW, height: newH)
+                        let newScale = vm.zoomConfiguration.clampedScale(vm.scale * (1.0 + delta))
+                        vm.offset = vm.zoomConfiguration.offsetPreservingAnchor(
+                            from: vm.offset,
+                            oldScale: vm.scale,
+                            newScale: newScale,
+                            anchor: focal
+                        )
                         vm.scale = newScale; vm.lastScale = newScale; vm.lastOffset = vm.offset
                         if !canvas.isInfinite {
                             vm.clampOffset(to: canvasNavigationBoundary, viewportSize: geo.size, scale: vm.scale)
@@ -1986,6 +2000,7 @@ private struct CanvasPageContentView: View {
             )
             #endif
             .onAppear {
+                updateCanvasZoomConfiguration(viewportSize: geo.size)
                 let initialPage = ensureDefaultPage()
                 if selectedPageID == nil {
                     selectedPageID = (initialPage ?? canvasPages.first)?.id
@@ -2012,6 +2027,9 @@ private struct CanvasPageContentView: View {
                 }
             }
             .onDisappear { generateThumbnail() }
+            .onChange(of: canvasZoomConfiguration) { _, _ in
+                updateCanvasZoomConfiguration(viewportSize: geo.size)
+            }
             .onChange(of: settings.overlapStackPickerEnabled) { _, isEnabled in
                 if !isEnabled { stackPicker = nil }
             }
@@ -3136,7 +3154,7 @@ private struct CanvasPageContentView: View {
         let availableHeight = max(80, viewportSize.height - padding * 2)
         let scaleX = availableWidth / CGFloat(page.width)
         let scaleY = availableHeight / CGFloat(page.height)
-        let nextScale = max(canvasMinimumZoomScale, min(scaleX, scaleY, 1.1))
+        let nextScale = vm.zoomConfiguration.clampedScale(min(scaleX, scaleY, 1.1))
         let center = page.center
         let nextOffset = CGSize(
             width: viewportSize.width / 2 - CGFloat(center.x) * nextScale,
@@ -5242,10 +5260,16 @@ private struct CanvasPageContentView: View {
         await CanvasElementSyncRouter.upsert(element)
     }
 
-    #if os(macOS)
     private var canvasShortcutInputIsBlocked: Bool {
-        showCommandPalette ||
-        vm.showTextSheet ||
+        #if os(macOS)
+        if showCommandPalette || macTextInputIsFirstResponder { return true }
+        #elseif os(iOS)
+        if showScannerOutputPicker || showScannerSourcePicker || showScannerImagePicker {
+            return true
+        }
+        #endif
+
+        return vm.showTextSheet ||
         vm.showShapePicker ||
         vm.showSymbolPicker ||
         vm.showImagePicker ||
@@ -5254,6 +5278,7 @@ private struct CanvasPageContentView: View {
         vm.showScanner ||
         vm.showPDFPicker ||
         vm.showAudioPicker ||
+        vm.showAudioRecorder ||
         vm.showYouTubeLinkSheet ||
         vm.showTemplatePicker ||
         vm.showTableSizePicker ||
@@ -5278,10 +5303,10 @@ private struct CanvasPageContentView: View {
         vm.textVM.inlineEditingID != nil ||
         vm.stickyVM.writingID != nil ||
         vm.todoVM.editingID != nil ||
-        vm.tableVM.editingCellID != nil ||
-        macTextInputIsFirstResponder
+        vm.tableVM.editingCellID != nil
     }
 
+    #if os(macOS)
     private var macTextInputIsFirstResponder: Bool {
         guard let responder = NSApp.keyWindow?.firstResponder else { return false }
         return responder is NSTextView || responder is NSTextField || responder is NSComboBox
@@ -5718,6 +5743,18 @@ private struct CanvasPageContentView: View {
 
     // MARK: - Gestures
 
+    private func updateCanvasZoomConfiguration(viewportSize: CGSize) {
+        if isCanvasNavigationGestureInProgress {
+            endCanvasNavigationGesture(viewportSize: viewportSize)
+        }
+        vm.updateZoomConfiguration(
+            canvasZoomConfiguration,
+            viewportSize: viewportSize,
+            boundary: canvasNavigationBoundary
+        )
+        refreshViewportContent()
+    }
+
     private func canvasPanGesture(geo: GeometryProxy) -> some Gesture {
         DragGesture(minimumDistance: 5)
             .onChanged { value in
@@ -5779,14 +5816,15 @@ private struct CanvasPageContentView: View {
 
     private func applyCanvasNavigationGesture() {
         let baseScale = max(vm.lastScale, 0.0001)
-        let nextScale = max(canvasMinimumZoomScale, min(baseScale * vm.navigation.magnification, 5.0))
-        let scaleDelta = nextScale / baseScale
+        let nextScale = vm.zoomConfiguration.clampedScale(baseScale * vm.navigation.magnification)
 
         let zoomedOffset: CGSize
         if let focal = vm.navigation.focalPoint {
-            zoomedOffset = CGSize(
-                width: focal.x - (focal.x - vm.lastOffset.width) * scaleDelta,
-                height: focal.y - (focal.y - vm.lastOffset.height) * scaleDelta
+            zoomedOffset = vm.zoomConfiguration.offsetPreservingAnchor(
+                from: vm.lastOffset,
+                oldScale: baseScale,
+                newScale: nextScale,
+                anchor: focal
             )
         } else {
             zoomedOffset = vm.lastOffset
@@ -7020,6 +7058,28 @@ private struct CanvasPageContentView: View {
     }
 
     #if os(iOS)
+    private var canOpenDrawingToolsWithPencil: Bool {
+        !vm.showCanvasDrawingOverlay
+            && !vm.drawingVM.isDrawingModeActive
+            && !canvasShortcutInputIsBlocked
+            && !isCanvasGestureActive
+            && !isCanvasNavigationGestureInProgress
+            && !isProcessingScan
+            && !selection.isMultiSelectActive
+            && !isLassoModeActive
+            && !vm.connectorVM.isConnectModeActive
+            && !isAlignmentGuideActive
+            && !isAlignmentRulerActive
+    }
+
+    private func openDrawingToolsWithPencil() {
+        // Child view models publish editing changes independently of the canvas.
+        // Check their current state when the gesture arrives, not only at render time.
+        guard canOpenDrawingToolsWithPencil else { return }
+        completeDrawingCoachMark()
+        startCanvasDrawing()
+    }
+
     private func scheduleDrawingCoachMarkIfNeeded(delay: TimeInterval = 0.85) {
         guard !settings.hasSeenDrawingCoachMark,
               settings.toolbarPosition != .hidden,
